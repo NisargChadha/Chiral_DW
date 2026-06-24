@@ -173,6 +173,38 @@ class SourceInterpolationParams(BaseModel):
     include_scalar_diagnostics: bool = True
 
 
+class GatedInteractionParams(BaseModel):
+    """Dimensionless screened Coulomb interaction used by AC workflows."""
+
+    model_config = ConfigDict(frozen=True)
+
+    v0: float = Field(default=1.0, ge=0.0)
+    gate_distance: float = Field(default=2.0, gt=0.0)
+    interaction_shell: int = Field(default=2, ge=0)
+    q0_policy: Literal["omit_uniform_hartree"] = "omit_uniform_hartree"
+
+
+class M0SourceScanParams(BaseModel):
+    """Controls for one-parameter source-field projector scans."""
+
+    model_config = ConfigDict(frozen=True)
+
+    n_vec: Vector3 = (0.0, 0.0, 1.0)
+    active_band: int = Field(default=0, ge=0)
+    occupy: Literal["lowest", "highest"] = "lowest"
+    m0_min: float = Field(default=0.0, ge=0.0)
+    m0_max: float = Field(default=1.0, gt=0.0)
+    n_m0: int = Field(default=21, ge=2)
+
+    @field_validator("n_vec")
+    @classmethod
+    def _n_vec_has_nonzero_norm(cls, value: Vector3) -> Vector3:
+        norm2 = sum(float(x) * float(x) for x in value)
+        if norm2 <= 0.0:
+            raise ValueError("n_vec must have nonzero norm")
+        return float(value[0]), float(value[1]), float(value[2])
+
+
 class ACResponseWorkflowParams(BaseModel):
     """Top-level nonideal AC cG workflow parameters."""
 
@@ -185,6 +217,7 @@ class ACResponseWorkflowParams(BaseModel):
     response: ResponseParams = Field(default_factory=ResponseParams)
     domain_wall: DomainWallParams = Field(default_factory=DomainWallParams)
     source: SourceInterpolationParams = Field(default_factory=SourceInterpolationParams)
+    interaction: GatedInteractionParams = Field(default_factory=GatedInteractionParams)
     output_dir: str = "results/ac_cg"
 
 
@@ -209,6 +242,8 @@ __all__ = [
     "FirstShellACParams",
     "FourierACParams",
     "FourierCoefficient",
+    "GatedInteractionParams",
+    "M0SourceScanParams",
     "MomentumGridParams",
     "ResponseParams",
     "RunArtifact",
