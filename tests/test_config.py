@@ -8,6 +8,7 @@ from chiral_dw.config import (
     FirstShellACParams,
     FourierACParams,
     FourierCoefficient,
+    QHFMChargeBenchmarkParams,
     ResponseParams,
     TMoTe2ACParams,
     TMDHFReferenceParams,
@@ -81,6 +82,15 @@ def test_workflow_params_nest_frozen_models():
     assert params.ac.b1 == 0.1
     assert params.conventions.average_field_sign == "B0_negative"
     assert params.source.field_policy == "raw_hermitian"
+
+
+def test_qhfm_benchmark_params_record_same_chern_defaults():
+    params = QHFMChargeBenchmarkParams()
+
+    assert params.grid.n_k == 7
+    assert params.real_space.n_r == 9
+    assert params.ac.b1 == 0.2
+    assert params.skyrmion.expected_charge_relation == "rho_top=-q_sk"
 
 
 def test_run_manifest_reports_missing_required_artifacts():

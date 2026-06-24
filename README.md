@@ -157,6 +157,48 @@ The AC command writes a directory containing:
 
 Generated outputs should stay under `results/`.
 
+## QHFM Real-Space Charge Benchmark
+
+The same-Chern QHFM benchmark validates the real-space charge evaluator and
+plot normalization in a controlled limit. It uses two identical copies of the
+same Chern-1 AC band and a periodic skyrmion-lattice texture. In this
+factorized validation limit, the 4D link-variable charge map should satisfy:
+
+```text
+rho_top = -q_sk
+```
+
+with the current orientation convention. This is not the target opposite-Chern
+domain-wall physics; it is a normalization certificate for the real-space
+charge machinery.
+
+```bash
+python3 scripts/run_qhfm_charge_benchmark.py \
+  --output-dir results/qhfm_charge_benchmark \
+  --b1 0.20 \
+  --u1 0.10 \
+  --n-ll 5 \
+  --n-k 7 \
+  --n-r 9 \
+  --plots
+```
+
+The command writes:
+
+- `qhfm_charge_density.csv`: `rho_top`, `q_sk`, `-q_sk`, and their difference
+  on real-space plaquettes.
+- `qhfm_charge_summary.json`: orbital Chern, mixed-curvature residual, maximum
+  charge error, integrated charge, integrated skyrmion charge, fit slope,
+  intercept, and correlation.
+- `qhfm_curvature_components.npz`: raw 4D curvature components and charge
+  arrays.
+- `qhfm_charge_maps.png`: computed charge, target charge, and error maps.
+- `artifact_manifest.json`: generated artifact status.
+
+Expected passing diagnostics are `orbital_chern ~= 1`,
+`mixed_curvature_max` near numerical zero, `charge_error_max` small, and
+`integrated_charge ~= -integrated_skyrmion_charge`.
+
 ## Dimensionless Units
 
 `K(theta)`, `cG`, and `rho_dimless` are reported in moire units. The coefficient

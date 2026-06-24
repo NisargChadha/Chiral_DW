@@ -11,9 +11,13 @@ from chiral_dw.config import (
     FirstShellACParams,
     GatedInteractionParams,
     MomentumGridParams,
+    QHFMChargeBenchmarkParams,
+    RealSpaceGridParams,
     ResponseParams,
+    SkyrmionTextureParams,
     SourceInterpolationParams,
 )
+from chiral_dw.qhfm_benchmark import run_qhfm_charge_benchmark
 
 
 def _ac_cg_parser() -> argparse.ArgumentParser:
@@ -60,4 +64,48 @@ def run_ac_cg_console() -> None:
     )
     result = run_ac_cg_workflow(params, write_outputs=True, write_plots=args.plots)
     print(f"cG = {result.response.cG:.12g}")
+    print(f"output_dir = {params.output_dir}")
+
+
+def _qhfm_charge_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Run the same-Chern QHFM charge benchmark.")
+    parser.add_argument("--output-dir", default="results/qhfm_charge_benchmark")
+    parser.add_argument("--b1", type=float, default=0.2)
+    parser.add_argument("--u1", type=float, default=0.1)
+    parser.add_argument("--b1-c3", type=float, default=0.0)
+    parser.add_argument("--u1-c3", type=float, default=0.0)
+    parser.add_argument("--n-ll", type=int, default=5)
+    parser.add_argument("--n-k", type=int, default=7)
+    parser.add_argument("--n-r", type=int, default=9)
+    parser.add_argument("--active-band", type=int, default=0)
+    parser.add_argument("--skyrmion-mass", type=float, default=0.5)
+    parser.add_argument("--plots", action="store_true")
+    parser.add_argument("--no-curvature-npz", action="store_true")
+    return parser
+
+
+def run_qhfm_charge_console() -> None:
+    args = _qhfm_charge_parser().parse_args()
+    params = QHFMChargeBenchmarkParams(
+        grid=MomentumGridParams(n_k=args.n_k),
+        real_space=RealSpaceGridParams(n_r=args.n_r),
+        ac=FirstShellACParams(
+            b1=args.b1,
+            u1=args.u1,
+            b1_c3=args.b1_c3,
+            u1_c3=args.u1_c3,
+            n_ll=args.n_ll,
+        ),
+        skyrmion=SkyrmionTextureParams(mass=args.skyrmion_mass),
+        active_band=args.active_band,
+        output_dir=args.output_dir,
+        write_curvature_npz=not args.no_curvature_npz,
+    )
+    result = run_qhfm_charge_benchmark(params, write_outputs=True, write_plots=args.plots)
+    print(f"orbital_chern = {result.summary.orbital_chern:.12g}")
+    print(f"mixed_curvature_max = {result.summary.mixed_curvature_max:.3e}")
+    print(f"charge_error_max = {result.summary.charge_error_max:.3e}")
+    print(f"integrated_charge = {result.summary.integrated_charge:.12g}")
+    print(f"integrated_skyrmion_charge = {result.summary.integrated_skyrmion_charge:.12g}")
+    print(f"valid_charge_normalization = {result.summary.valid_charge_normalization}")
     print(f"output_dir = {params.output_dir}")

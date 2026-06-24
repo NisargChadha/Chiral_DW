@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the nonideal AC cG workflow."""
+"""Run the same-Chern QHFM real-space charge benchmark."""
 
 from pathlib import Path
 import sys
@@ -9,8 +9,8 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from chiral_dw.cli import run_ac_cg_console
+from chiral_dw.cli import run_qhfm_charge_console
 
 
 if __name__ == "__main__":
-    run_ac_cg_console()
+    run_qhfm_charge_console()

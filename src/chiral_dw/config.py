@@ -25,6 +25,18 @@ class MomentumGridParams(BaseModel):
         return self.n_k * self.n_k
 
 
+class RealSpaceGridParams(BaseModel):
+    """Uniform primitive-cell real-space mesh."""
+
+    model_config = ConfigDict(frozen=True)
+
+    n_r: int = Field(default=9, ge=1)
+
+    @property
+    def n_total(self) -> int:
+        return self.n_r * self.n_r
+
+
 class UnitsParams(BaseModel):
     """Units used for dimensionless moire-cell calculations."""
 
@@ -198,6 +210,49 @@ class GatedInteractionParams(BaseModel):
     q0_policy: Literal["omit_uniform_hartree"] = "omit_uniform_hartree"
 
 
+class SkyrmionTextureParams(BaseModel):
+    """Periodic real-space skyrmion-lattice texture controls."""
+
+    model_config = ConfigDict(frozen=True)
+
+    mass: float = 0.5
+    texture: Literal["periodic_qwz"] = "periodic_qwz"
+    expected_charge_relation: Literal["rho_top=-q_sk"] = "rho_top=-q_sk"
+
+
+class QHFMChargeBenchmarkParams(BaseModel):
+    """Same-Chern QHFM real-space charge normalization benchmark parameters."""
+
+    model_config = ConfigDict(frozen=True)
+
+    grid: MomentumGridParams = Field(default_factory=lambda: MomentumGridParams(n_k=7))
+    real_space: RealSpaceGridParams = Field(default_factory=RealSpaceGridParams)
+    ac: FirstShellACParams = Field(
+        default_factory=lambda: FirstShellACParams(b1=0.2, u1=0.1, n_ll=5)
+    )
+    skyrmion: SkyrmionTextureParams = Field(default_factory=SkyrmionTextureParams)
+    active_band: int = Field(default=0, ge=0)
+    n_form_factors: int = Field(default=1, ge=1, le=7)
+    output_dir: str = "results/qhfm_charge_benchmark"
+    write_curvature_npz: bool = True
+
+
+class QHFMChargeSummary(BaseModel):
+    """Scalar summary of the same-Chern QHFM charge benchmark."""
+
+    model_config = ConfigDict(frozen=True)
+
+    orbital_chern: float
+    mixed_curvature_max: float
+    charge_error_max: float
+    integrated_charge: float
+    integrated_skyrmion_charge: float
+    slope: float
+    intercept: float
+    correlation: float
+    valid_charge_normalization: bool
+
+
 class M0SourceScanParams(BaseModel):
     """Controls for one-parameter source-field projector scans."""
 
@@ -259,10 +314,15 @@ __all__ = [
     "GatedInteractionParams",
     "M0SourceScanParams",
     "MomentumGridParams",
+    "QHFMChargeBenchmarkParams",
+    "QHFMChargeSummary",
+    "RealSpaceGridParams",
     "ResponseParams",
     "RunArtifact",
     "RunManifest",
+    "SkyrmionTextureParams",
     "SourceInterpolationParams",
+    "TMDHFReferenceParams",
     "TMoTe2ACParams",
     "UnitsParams",
 ]
