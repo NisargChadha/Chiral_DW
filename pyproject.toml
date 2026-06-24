@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chiral-dw"
+version = "0.1.0"
+description = "Variational projector calculations for chiral domain-wall charge response"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy",
+  "pydantic>=2",
+  "scipy",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest",
+]
+plot = [
+  "matplotlib",
+]
+
+[project.scripts]
+chiral-dw-ac-cg = "chiral_dw.cli:run_ac_cg_console"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

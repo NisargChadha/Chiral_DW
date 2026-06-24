@@ -1,0 +1,219 @@
+"""Frozen Pydantic parameters and convention records."""
+
+from __future__ import annotations
+
+from math import pi
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from chiral_dw.artifacts import RunArtifact, RunManifest
+
+Vector2 = tuple[float, float]
+Vector3 = tuple[float, float, float]
+
+
+class MomentumGridParams(BaseModel):
+    """Uniform primitive-cell momentum mesh."""
+
+    model_config = ConfigDict(frozen=True)
+
+    n_k: int = Field(default=7, ge=1)
+
+    @property
+    def n_total(self) -> int:
+        return self.n_k * self.n_k
+
+
+class UnitsParams(BaseModel):
+    """Units used for dimensionless moire-cell calculations."""
+
+    model_config = ConfigDict(frozen=True)
+
+    a_m: float = Field(default=1.0, gt=0.0)
+    length_unit: Literal["moire_period"] = "moire_period"
+    charge_density_convention: Literal["dimensionless_per_a_m_squared"] = (
+        "dimensionless_per_a_m_squared"
+    )
+
+    @property
+    def physical_density_scale(self) -> float:
+        """Multiplier converting dimensionless density to charge per length^2."""
+        return 1.0 / (self.a_m * self.a_m)
+
+
+class ACConventionParams(BaseModel):
+    """Sign and unit conventions for the nonideal finite-LL AC backend."""
+
+    model_config = ConfigDict(frozen=True)
+
+    average_field_sign: Literal["B0_negative"] = "B0_negative"
+    average_field_formula: Literal["B0=-2*pi/A_M"] = "B0=-2*pi/A_M"
+    magnetic_length_formula: Literal["l2=A_M/(2*pi)"] = "l2=A_M/(2*pi)"
+    dimensionless_field: Literal["minus_B_A_M_over_2pi"] = "minus_B_A_M_over_2pi"
+    phi_rotation_sign: Literal["exp_minus_i_phi_sz_over_2"] = (
+        "exp_minus_i_phi_sz_over_2"
+    )
+    projector_basis: Literal["two_flavor_active_band"] = "two_flavor_active_band"
+
+
+class FourierCoefficient(BaseModel):
+    """JSON-friendly complex Fourier coefficient."""
+
+    model_config = ConfigDict(frozen=True)
+
+    real: float = 0.0
+    imag: float = 0.0
+
+    @classmethod
+    def from_complex(cls, value: complex) -> "FourierCoefficient":
+        z = complex(value)
+        return cls(real=float(z.real), imag=float(z.imag))
+
+    def as_complex(self) -> complex:
+        return complex(self.real, self.imag)
+
+
+class FirstShellACParams(BaseModel):
+    """First-shell nonideal AC parameters in units of omega_c."""
+
+    model_config = ConfigDict(frozen=True)
+
+    b1: float = 0.0
+    u1: float = 0.0
+    b1_c3: float = 0.0
+    u1_c3: float = 0.0
+    n_ll: int = Field(default=5, ge=1)
+    material: str = "MoTe2_TMD_HF_canonical_first_shell"
+    a_m: float = Field(default=1.0, gt=0.0)
+
+
+class FourierACParams(BaseModel):
+    """Arbitrary Fourier coefficients for the finite-LL AC backend."""
+
+    model_config = ConfigDict(frozen=True)
+
+    g_vectors: tuple[Vector2, ...]
+    u_coefficients: tuple[FourierCoefficient, ...]
+    b_coefficients: tuple[FourierCoefficient, ...]
+    n_ll: int = Field(default=5, ge=1)
+    material: str = "FourierAC"
+    a_m: float = Field(default=1.0, gt=0.0)
+
+    @model_validator(mode="after")
+    def _matching_lengths(self) -> "FourierACParams":
+        n_g = len(self.g_vectors)
+        if len(self.u_coefficients) != n_g or len(self.b_coefficients) != n_g:
+            raise ValueError("g_vectors, u_coefficients, and b_coefficients must match")
+        return self
+
+
+class TMoTe2ACParams(BaseModel):
+    """TMD_HF-canonical tMoTe2 parameters folded into the AC convention."""
+
+    model_config = ConfigDict(frozen=True)
+
+    theta_deg: float = Field(default=3.5, gt=0.0)
+    a0_angstrom: float = Field(default=3.52, gt=0.0)
+    m_eff: float = Field(default=0.6, gt=0.0)
+    V_mev: float = 20.8
+    phi_deg: float = 107.7
+    continuum_w_mev: float = -23.8
+    folded_ac_w_mev: float = 23.8
+    uD_mev: float = 0.0
+    a_m: float = Field(default=1.0, gt=0.0)
+    grid_size: int = Field(default=96, ge=8)
+    g_shell_cutoff: int = Field(default=3, ge=1)
+    coefficient_cutoff: float = Field(default=1e-10, ge=0.0)
+    n_ll: int = Field(default=5, ge=1)
+    material: str = "MoTe2_TMD_HF_canonical_folded_AC"
+
+
+class ResponseParams(BaseModel):
+    """Numerical controls for K(theta), cG, and phi reconstruction."""
+
+    model_config = ConfigDict(frozen=True)
+
+    n_theta: int = Field(default=41, ge=3)
+    n_phi: int = Field(default=5, ge=1)
+    theta_min: float = Field(default=0.0, ge=0.0)
+    theta_max: float = Field(default=pi, gt=0.0)
+    endpoint_eps: float = Field(default=1e-5, ge=0.0)
+    derivative_method: Literal["finite_difference"] = "finite_difference"
+    phi_rotation_sign: Literal["exp_minus_i_phi_sz_over_2"] = "exp_minus_i_phi_sz_over_2"
+
+    @model_validator(mode="after")
+    def _theta_window_is_valid(self) -> "ResponseParams":
+        if self.theta_max <= self.theta_min:
+            raise ValueError("theta_max must exceed theta_min")
+        if self.n_theta < 3:
+            raise ValueError("n_theta must be at least 3")
+        return self
+
+
+class DomainWallParams(BaseModel):
+    """Circular chiral domain-wall texture parameters in moire units."""
+
+    model_config = ConfigDict(frozen=True)
+
+    radius: float = Field(default=20.0, gt=0.0)
+    width: float = Field(default=3.0, gt=0.0)
+    winding: int = 1
+    profile: Literal["tanh", "logistic"] = "tanh"
+
+
+class SourceInterpolationParams(BaseModel):
+    """Controls for simple VP/IVC source-field interpolation."""
+
+    model_config = ConfigDict(frozen=True)
+
+    source_scale: float = 1.0
+    occupy: Literal["lowest", "highest"] = "lowest"
+    field_policy: Literal["raw_hermitian"] = "raw_hermitian"
+    include_scalar_diagnostics: bool = True
+
+
+class ACResponseWorkflowParams(BaseModel):
+    """Top-level nonideal AC cG workflow parameters."""
+
+    model_config = ConfigDict(frozen=True)
+
+    grid: MomentumGridParams = Field(default_factory=MomentumGridParams)
+    units: UnitsParams = Field(default_factory=UnitsParams)
+    conventions: ACConventionParams = Field(default_factory=ACConventionParams)
+    ac: FirstShellACParams = Field(default_factory=FirstShellACParams)
+    response: ResponseParams = Field(default_factory=ResponseParams)
+    domain_wall: DomainWallParams = Field(default_factory=DomainWallParams)
+    source: SourceInterpolationParams = Field(default_factory=SourceInterpolationParams)
+    output_dir: str = "results/ac_cg"
+
+
+class ChargeResponseSummary(BaseModel):
+    """Small scalar summary for response outputs."""
+
+    model_config = ConfigDict(frozen=True)
+
+    cG: float
+    cG_dimension: Literal["dimensionless"] = "dimensionless"
+    kappa_min: float
+    kappa_max: float
+    gap_min: float | None = None
+    valid_local_gap: bool = True
+
+
+__all__ = [
+    "ACConventionParams",
+    "ACResponseWorkflowParams",
+    "ChargeResponseSummary",
+    "DomainWallParams",
+    "FirstShellACParams",
+    "FourierACParams",
+    "FourierCoefficient",
+    "MomentumGridParams",
+    "ResponseParams",
+    "RunArtifact",
+    "RunManifest",
+    "SourceInterpolationParams",
+    "TMoTe2ACParams",
+    "UnitsParams",
+]
