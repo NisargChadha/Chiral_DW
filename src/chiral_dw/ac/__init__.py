@@ -18,7 +18,9 @@ from chiral_dw.ac.source import (
     FlavorSourceProjector,
     SourceProjectorResult,
     spinor_from_angles,
+    target_vector,
 )
+from chiral_dw.ac.workflow import ACCGWorkflowResult, run_ac_cg_workflow
 
 __all__ = [
     "AdiabaticMoireFields",
@@ -32,9 +34,12 @@ __all__ = [
     "SIGMA_Y",
     "SIGMA_Z",
     "SourceProjectorResult",
+    "ACCGWorkflowResult",
     "first_shell_magnetic_coefficients",
     "first_shell_potential_coefficients",
     "fourier_params_from_first_shell",
     "landau_polynomial",
     "spinor_from_angles",
+    "target_vector",
+    "run_ac_cg_workflow",
 ]

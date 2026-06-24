@@ -31,6 +31,18 @@ def spinor_from_angles(theta: float, phi: float = 0.0) -> np.ndarray:
     )
 
 
+def target_vector(theta: float, phi: float = 0.0) -> np.ndarray:
+    """Return unit vector (sin theta cos phi, sin theta sin phi, cos theta)."""
+    return np.array(
+        [
+            np.sin(float(theta)) * np.cos(float(phi)),
+            np.sin(float(theta)) * np.sin(float(phi)),
+            np.cos(float(theta)),
+        ],
+        dtype=float,
+    )
+
+
 def projector_from_spinor(z: np.ndarray) -> np.ndarray:
     spinor = np.asarray(z, dtype=complex)
     return spinor[:, None] * spinor[None, :].conj()
@@ -105,11 +117,30 @@ class FlavorSourceProjector:
         source = np.tensordot(self.n_vec, PAULI, axes=(0, 0))
         return self.h0 - float(m0) * source[None, :, :]
 
+    def trial_hamiltonian_for_direction(
+        self, direction: tuple[float, float, float] | np.ndarray, amplitude: float
+    ) -> np.ndarray:
+        source = np.tensordot(unit_vector(direction), PAULI, axes=(0, 0))
+        return self.h0 - float(amplitude) * source[None, :, :]
+
     def projector(self, m0: float) -> np.ndarray:
         vals, vecs = np.linalg.eigh(self.trial_hamiltonian(m0))
         band = 0 if self.occupy == "lowest" else 1
         spinors = vecs[:, :, band]
         return spinors[:, :, None] * spinors[:, None, :].conj()
+
+    def projector_for_direction(
+        self,
+        direction: tuple[float, float, float] | np.ndarray,
+        amplitude: float,
+    ) -> tuple[np.ndarray, float]:
+        H = self.trial_hamiltonian_for_direction(direction, amplitude)
+        vals, vecs = np.linalg.eigh(H)
+        band = 0 if self.occupy == "lowest" else 1
+        spinors = vecs[:, :, band]
+        P = spinors[:, :, None] * spinors[:, None, :].conj()
+        gap = float(np.min(vals[:, 1] - vals[:, 0])) if vals.shape[1] > 1 else np.inf
+        return P, gap
 
     def projector_and_diagnostics(self, m0: float) -> SourceProjectorResult:
         H = self.trial_hamiltonian(m0)
