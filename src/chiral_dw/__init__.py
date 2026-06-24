@@ -8,6 +8,8 @@ from chiral_dw.config import (
     FourierACParams,
     FourierCoefficient,
     GatedInteractionParams,
+    IdealConjugateLLLChargeBenchmarkParams,
+    IdealConjugateLLLChargeSummary,
     M0SourceScanParams,
     MomentumGridParams,
     QHFMChargeBenchmarkParams,
@@ -20,6 +22,7 @@ from chiral_dw.config import (
     TMoTe2ACParams,
     UnitsParams,
 )
+from chiral_dw.ideal_conjugate_lll import run_ideal_conjugate_lll_charge_benchmark
 from chiral_dw.response import KThetaResult, compute_cG, k_theta_from_projectors
 from chiral_dw.qhfm_benchmark import run_qhfm_charge_benchmark
 
@@ -31,6 +34,8 @@ __all__ = [
     "FourierACParams",
     "FourierCoefficient",
     "GatedInteractionParams",
+    "IdealConjugateLLLChargeBenchmarkParams",
+    "IdealConjugateLLLChargeSummary",
     "M0SourceScanParams",
     "MomentumGridParams",
     "QHFMChargeBenchmarkParams",
@@ -45,5 +50,6 @@ __all__ = [
     "KThetaResult",
     "compute_cG",
     "k_theta_from_projectors",
+    "run_ideal_conjugate_lll_charge_benchmark",
     "run_qhfm_charge_benchmark",
 ]

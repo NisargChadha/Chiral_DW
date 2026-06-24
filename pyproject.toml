@@ -23,6 +23,7 @@ plot = [
 
 [project.scripts]
 chiral-dw-ac-cg = "chiral_dw.cli:run_ac_cg_console"
+chiral-dw-ideal-conjugate-lll-charge = "chiral_dw.cli:run_ideal_conjugate_lll_charge_console"
 chiral-dw-qhfm-charge = "chiral_dw.cli:run_qhfm_charge_console"
 
 [tool.setuptools.packages.find]

@@ -10,6 +10,7 @@ from chiral_dw.config import (
     DomainWallParams,
     FirstShellACParams,
     GatedInteractionParams,
+    IdealConjugateLLLChargeBenchmarkParams,
     MomentumGridParams,
     QHFMChargeBenchmarkParams,
     RealSpaceGridParams,
@@ -17,6 +18,7 @@ from chiral_dw.config import (
     SkyrmionTextureParams,
     SourceInterpolationParams,
 )
+from chiral_dw.ideal_conjugate_lll import run_ideal_conjugate_lll_charge_benchmark
 from chiral_dw.qhfm_benchmark import run_qhfm_charge_benchmark
 
 
@@ -108,4 +110,49 @@ def run_qhfm_charge_console() -> None:
     print(f"integrated_charge = {result.summary.integrated_charge:.12g}")
     print(f"integrated_skyrmion_charge = {result.summary.integrated_skyrmion_charge:.12g}")
     print(f"valid_charge_normalization = {result.summary.valid_charge_normalization}")
+    print(f"output_dir = {params.output_dir}")
+
+
+def _ideal_conjugate_lll_charge_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Run the ideal conjugate LLL charge benchmark.")
+    parser.add_argument("--output-dir", default="results/ideal_conjugate_lll_charge")
+    parser.add_argument("--n-k", type=int, default=7)
+    parser.add_argument("--n-r", type=int, default=41)
+    parser.add_argument("--radius-lb", type=float, default=10.0)
+    parser.add_argument("--width-lb", type=float, default=3.5)
+    parser.add_argument("--patch-length-lb", type=float, default=56.0)
+    parser.add_argument("--winding", type=int, default=1)
+    parser.add_argument("--helicity", type=float, default=0.0)
+    parser.add_argument("--m0", type=float, default=1.0)
+    parser.add_argument("--plots", action="store_true")
+    parser.add_argument("--no-curvature-npz", action="store_true")
+    return parser
+
+
+def run_ideal_conjugate_lll_charge_console() -> None:
+    args = _ideal_conjugate_lll_charge_parser().parse_args()
+    params = IdealConjugateLLLChargeBenchmarkParams(
+        grid=MomentumGridParams(n_k=args.n_k),
+        real_space=RealSpaceGridParams(n_r=args.n_r),
+        radius_lB=args.radius_lb,
+        width_lB=args.width_lb,
+        patch_length_lB=args.patch_length_lb,
+        winding=args.winding,
+        helicity=args.helicity,
+        m0=args.m0,
+        output_dir=args.output_dir,
+        write_curvature_npz=not args.no_curvature_npz,
+    )
+    result = run_ideal_conjugate_lll_charge_benchmark(
+        params,
+        write_outputs=True,
+        write_plots=args.plots,
+    )
+    print(f"up_chern = {result.summary.up_chern:.12g}")
+    print(f"down_chern = {result.summary.down_chern:.12g}")
+    print(f"charge_error_max = {result.summary.charge_error_max:.3e}")
+    print(f"charge_error_rms = {result.summary.charge_error_rms:.3e}")
+    print(f"integrated_charge = {result.summary.integrated_charge:.12g}")
+    print(f"integrated_analytic_charge = {result.summary.integrated_analytic_charge:.12g}")
+    print(f"valid_analytic_charge = {result.summary.valid_analytic_charge}")
     print(f"output_dir = {params.output_dir}")

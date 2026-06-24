@@ -199,6 +199,56 @@ Expected passing diagnostics are `orbital_chern ~= 1`,
 `mixed_curvature_max` near numerical zero, `charge_error_max` small, and
 `integrated_charge ~= -integrated_skyrmion_charge`.
 
+## Ideal Conjugate LLL Charge Benchmark
+
+The ideal conjugate LLL benchmark is the first opposite-Chern real-space
+domain-wall check. It sets the AC backend to the exactly flat `n_ll=1`,
+`U=B'=0` limit, builds `C=+1` and time-reversed `C=-1` active bands, and uses
+the local source Hamiltonian:
+
+```text
+h_tr(k,r) = h0(k) - m0 M(r).sigma
+```
+
+The benchmark compares the centered 4D link-variable charge map against the
+discrete ideal plaquette answer:
+
+```text
+rho_analytic = -n_z(center) q_sk
+```
+
+where `q_sk` is the spinor Berry phase on the same real-space plaquettes. The
+default wall parameters are `R=10`, `w=3.5`, and lengths are in magnetic-length
+units.
+
+```bash
+python3 scripts/run_ideal_conjugate_lll_charge_benchmark.py \
+  --output-dir results/ideal_conjugate_lll_charge \
+  --n-k 7 \
+  --n-r 41 \
+  --radius-lb 10 \
+  --width-lb 3.5 \
+  --patch-length-lb 56 \
+  --m0 1.0 \
+  --plots
+```
+
+The command writes:
+
+- `ideal_conjugate_lll_charge.npz`: centered 4D charge, analytic target,
+  skyrmion plaquette charge, `n_z(center)`, charge error, and curvature
+  components.
+- `ideal_conjugate_lll_summary.json`: Chern numbers, flat-band diagnostics,
+  projector checks, charge errors, integrated charges, and `m0`.
+- `ideal_conjugate_lll_profiles.csv`: radial averages for the direct charge,
+  analytic charge, skyrmion charge, and continuum radial-shape diagnostic.
+- `ideal_conjugate_lll_charge.png`: optional charge, analytic-target, and error
+  maps when `--plots` is supplied.
+- `artifact_manifest.json`: generated artifact status.
+
+Changing positive `m0` should change only the source gap, not the projectors or
+charge map, in this exactly flat validation limit.
+
 ## Dimensionless Units
 
 `K(theta)`, `cG`, and `rho_dimless` are reported in moire units. The coefficient

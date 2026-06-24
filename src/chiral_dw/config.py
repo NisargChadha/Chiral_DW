@@ -272,6 +272,67 @@ class QHFMChargeSummary(BaseModel):
     valid_charge_normalization: bool
 
 
+class IdealConjugateLLLChargeBenchmarkParams(BaseModel):
+    """Flat opposite-Chern LLL real-space charge benchmark parameters."""
+
+    model_config = ConfigDict(frozen=True)
+
+    grid: MomentumGridParams = Field(default_factory=lambda: MomentumGridParams(n_k=7))
+    real_space: RealSpaceGridParams = Field(default_factory=lambda: RealSpaceGridParams(n_r=41))
+    ac: FirstShellACParams = Field(default_factory=lambda: FirstShellACParams(n_ll=1))
+    active_band: int = Field(default=0, ge=0)
+    radius_lB: float = Field(default=10.0, gt=0.0)
+    width_lB: float = Field(default=3.5, gt=0.0)
+    patch_length_lB: float = Field(default=56.0, gt=0.0)
+    winding: int = 1
+    helicity: float = 0.0
+    magnetic_length_convention: Literal["magnetic_length"] = "magnetic_length"
+    m0: float = Field(default=1.0, gt=0.0)
+    output_dir: str = "results/ideal_conjugate_lll_charge"
+    write_curvature_npz: bool = True
+    charge_tolerance: float = Field(default=5e-3, gt=0.0)
+
+    @model_validator(mode="after")
+    def _ideal_lll_limit_is_valid(self) -> "IdealConjugateLLLChargeBenchmarkParams":
+        if self.active_band != 0:
+            raise ValueError("the ideal conjugate LLL benchmark supports active_band=0")
+        if self.real_space.n_r < 3:
+            raise ValueError("real_space.n_r must be at least 3 for open-patch plaquettes")
+        if self.ac.n_ll != 1:
+            raise ValueError("the ideal conjugate LLL benchmark requires ac.n_ll=1")
+        harmonics = (self.ac.b1, self.ac.u1, self.ac.b1_c3, self.ac.u1_c3)
+        if any(abs(float(value)) > 1e-15 for value in harmonics):
+            raise ValueError("ideal conjugate LLL benchmark requires b1=u1=b1_c3=u1_c3=0")
+        if self.width_lB >= self.radius_lB:
+            raise ValueError("width_lB must be smaller than radius_lB")
+        if self.radius_lB + 3.0 * self.width_lB >= 0.5 * self.patch_length_lB:
+            raise ValueError("wall plus three widths must fit inside half the open patch")
+        return self
+
+
+class IdealConjugateLLLChargeSummary(BaseModel):
+    """Scalar summary for the flat opposite-Chern LLL benchmark."""
+
+    model_config = ConfigDict(frozen=True)
+
+    up_chern: float
+    down_chern: float
+    up_bandwidth: float
+    down_bandwidth: float
+    local_gap_min: float
+    spin_alignment_error: float
+    projector_hermiticity_error: float
+    projector_idempotency_error: float
+    charge_error_max: float
+    charge_error_rms: float
+    integrated_charge: float
+    integrated_analytic_charge: float
+    integrated_skyrmion_charge: float
+    dipole_moment: float
+    m0: float
+    valid_analytic_charge: bool
+
+
 class M0SourceScanParams(BaseModel):
     """Controls for one-parameter source-field projector scans."""
 
@@ -385,6 +446,8 @@ __all__ = [
     "FourierACParams",
     "FourierCoefficient",
     "GatedInteractionParams",
+    "IdealConjugateLLLChargeBenchmarkParams",
+    "IdealConjugateLLLChargeSummary",
     "M0SourceScanParams",
     "MomentumGridParams",
     "PhysicalCoulombACPreset",

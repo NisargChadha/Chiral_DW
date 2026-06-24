@@ -9,8 +9,10 @@ from chiral_dw.config import (
     FirstShellACParams,
     FourierACParams,
     FourierCoefficient,
+    IdealConjugateLLLChargeBenchmarkParams,
     PhysicalCoulombACPreset,
     QHFMChargeBenchmarkParams,
+    RealSpaceGridParams,
     ResponseParams,
     TMoTe2ACParams,
     TMDHFReferenceParams,
@@ -93,6 +95,21 @@ def test_qhfm_benchmark_params_record_same_chern_defaults():
     assert params.real_space.n_r == 9
     assert params.ac.b1 == 0.2
     assert params.skyrmion.expected_charge_relation == "rho_top=-q_sk"
+
+
+def test_ideal_conjugate_lll_params_enforce_flat_opposite_chern_limit():
+    params = IdealConjugateLLLChargeBenchmarkParams()
+
+    assert params.ac.n_ll == 1
+    assert params.ac.b1 == 0.0
+    assert params.radius_lB == 10.0
+    assert params.magnetic_length_convention == "magnetic_length"
+    with pytest.raises(ValidationError):
+        IdealConjugateLLLChargeBenchmarkParams(ac=FirstShellACParams(u1=0.1, n_ll=1))
+    with pytest.raises(ValidationError):
+        IdealConjugateLLLChargeBenchmarkParams(ac=FirstShellACParams(n_ll=2))
+    with pytest.raises(ValidationError):
+        IdealConjugateLLLChargeBenchmarkParams(real_space=RealSpaceGridParams(n_r=2))
 
 
 def test_conjugate_ac_bias_sweep_params_record_old_physical_coulomb_preset():
