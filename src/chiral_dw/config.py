@@ -210,6 +210,25 @@ class GatedInteractionParams(BaseModel):
     q0_policy: Literal["omit_uniform_hartree"] = "omit_uniform_hartree"
 
 
+class PhysicalCoulombACPreset(BaseModel):
+    """Old-reference physical-Coulomb match in AC omega_c units."""
+
+    model_config = ConfigDict(frozen=True)
+
+    units: Literal["omega_c"] = "omega_c"
+    interaction_matching: Literal["physical_coulomb"] = "physical_coulomb"
+    v0: float = Field(default=0.267, ge=0.0)
+    gate_distance: float = Field(default=5.80, gt=0.0)
+    source: str = "Variational_Calculation_tMoTe2 physical Coulomb default"
+
+    def interaction_params(self, interaction_shell: int = 2) -> GatedInteractionParams:
+        return GatedInteractionParams(
+            v0=self.v0,
+            gate_distance=self.gate_distance,
+            interaction_shell=interaction_shell,
+        )
+
+
 class SkyrmionTextureParams(BaseModel):
     """Periodic real-space skyrmion-lattice texture controls."""
 
@@ -290,6 +309,58 @@ class ACResponseWorkflowParams(BaseModel):
     output_dir: str = "results/ac_cg"
 
 
+class ConjugateACBiasSweepParams(BaseModel):
+    """Old-compatible conjugate-AC C3-bias sweep parameters."""
+
+    model_config = ConfigDict(frozen=True)
+
+    sweep_parameter: Literal["u1_c3", "b1_c3"] = "u1_c3"
+    output_dir: str = "results/conjugate_ac_bias_sweep"
+    b1: float = 0.0
+    u1: float = 0.0
+    b1_c3_fixed: float = 0.0
+    u1_c3_fixed: float = 0.0
+    bias_min: float = 0.0
+    bias_max: float = 0.2
+    n_bias: int = Field(default=11, ge=2)
+    n_ll: int = Field(default=1, ge=1)
+    active_band: int = Field(default=0, ge=0)
+    grid: MomentumGridParams = Field(default_factory=lambda: MomentumGridParams(n_k=7))
+    response: ResponseParams = Field(default_factory=ResponseParams)
+    source: SourceInterpolationParams = Field(default_factory=SourceInterpolationParams)
+    interaction: GatedInteractionParams = Field(default_factory=GatedInteractionParams)
+    domain_wall: DomainWallParams = Field(default_factory=DomainWallParams)
+    dispersion_points: int = Field(default=80, ge=1)
+    n_phi_check: int = Field(default=3, ge=1)
+    cg_phi_step: float = Field(default=0.2, gt=0.0)
+    max_iter: int = Field(default=120, ge=1)
+    energy_tol: float = Field(default=1e-9, gt=0.0)
+    projector_tol: float = Field(default=1e-7, gt=0.0)
+    min_gap_tol: float = Field(default=1e-10, ge=0.0)
+    use_physical_coulomb: bool = False
+    write_plots: bool = True
+
+    @model_validator(mode="after")
+    def _active_band_supported(self) -> "ConjugateACBiasSweepParams":
+        if self.active_band != 0:
+            raise ValueError("the current source-field AC workflow supports active_band=0")
+        return self
+
+
+class ConjugateACBiasSweepSummary(BaseModel):
+    """Scalar summary for one conjugate-AC bias sweep."""
+
+    model_config = ConfigDict(frozen=True)
+
+    sweep_parameter: Literal["u1_c3", "b1_c3"]
+    n_bias: int
+    cG_min: float
+    cG_max: float
+    max_dispersion_split: float
+    gap_min: float
+    projection: str
+
+
 class ChargeResponseSummary(BaseModel):
     """Small scalar summary for response outputs."""
 
@@ -307,6 +378,8 @@ __all__ = [
     "ACConventionParams",
     "ACResponseWorkflowParams",
     "ChargeResponseSummary",
+    "ConjugateACBiasSweepParams",
+    "ConjugateACBiasSweepSummary",
     "DomainWallParams",
     "FirstShellACParams",
     "FourierACParams",
@@ -314,6 +387,7 @@ __all__ = [
     "GatedInteractionParams",
     "M0SourceScanParams",
     "MomentumGridParams",
+    "PhysicalCoulombACPreset",
     "QHFMChargeBenchmarkParams",
     "QHFMChargeSummary",
     "RealSpaceGridParams",

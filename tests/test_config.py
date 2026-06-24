@@ -5,9 +5,11 @@ from chiral_dw.artifacts import RunArtifact, RunManifest
 from chiral_dw.config import (
     ACConventionParams,
     ACResponseWorkflowParams,
+    ConjugateACBiasSweepParams,
     FirstShellACParams,
     FourierACParams,
     FourierCoefficient,
+    PhysicalCoulombACPreset,
     QHFMChargeBenchmarkParams,
     ResponseParams,
     TMoTe2ACParams,
@@ -91,6 +93,25 @@ def test_qhfm_benchmark_params_record_same_chern_defaults():
     assert params.real_space.n_r == 9
     assert params.ac.b1 == 0.2
     assert params.skyrmion.expected_charge_relation == "rho_top=-q_sk"
+
+
+def test_conjugate_ac_bias_sweep_params_record_old_physical_coulomb_preset():
+    preset = PhysicalCoulombACPreset()
+    interaction = preset.interaction_params(interaction_shell=1)
+    params = ConjugateACBiasSweepParams(
+        sweep_parameter="b1_c3",
+        n_ll=3,
+        interaction=interaction,
+        use_physical_coulomb=True,
+    )
+
+    assert preset.units == "omega_c"
+    assert interaction.v0 == 0.267
+    assert interaction.gate_distance == 5.80
+    assert interaction.interaction_shell == 1
+    assert params.sweep_parameter == "b1_c3"
+    with pytest.raises(ValidationError):
+        ConjugateACBiasSweepParams(active_band=1)
 
 
 def test_run_manifest_reports_missing_required_artifacts():
