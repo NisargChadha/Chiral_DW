@@ -16,6 +16,39 @@ physics conventions, hole-basis conventions, density vertices, and Hartree-Fock
 machinery. `/Users/nisargchadha/Desktop/Variational_Calculation_tMoTe2` remains
 read-only reference material for variational/projector-response logic.
 
+## Progress So Far
+
+The current codebase has the core scaffolding and validation path needed before
+moving back to the nonideal conjugate AC/domain-wall calculation:
+
+- Pydantic v2 frozen models now define the AC parameters, source-interpolation
+  controls, real-space benchmark controls, run summaries, and artifact records.
+- The finite-Landau-level nonideal AC backend is ported into `chiral_dw.ac`,
+  with tests for Hermiticity, flat LLL behavior, finite-LL gaps, Fourier
+  coefficients, and time-reversed partner projectors.
+- The AC `cG` workflow computes source-field projectors, projected physical
+  energies, `K(theta)`, dimensionless `cG`, radial charge profiles, and
+  old-compatible conjugate-AC C3 bias sweeps.
+- The TMD_HF adapter is in place for simple VP/IVC source-field interpolation.
+  It keeps TMD_HF as the physics source of truth and records raw source-field
+  diagnostics without hidden scalar or traceless cleanup.
+- The same-Chern QHFM benchmark validates the real-space 4D charge evaluator
+  against `rho_top=-q_sk` in a controlled Chern-1 limit.
+- The ideal opposite-Chern conjugate LLL benchmark validates the circular
+  domain-wall charge evaluator against the discrete analytic plaquette result
+  `rho=-n_z q_sk`.
+
+The latest ideal conjugate LLL run used `R=10`, `w=3.5`, `n_k=7`, and `n_r=41`
+in magnetic-length units. It wrote artifacts under
+`results/ideal_conjugate_lll_R10_w3p5` and passed with:
+
+- `up_chern = 1`, `down_chern = -1`
+- `charge_error_max = 9.87e-05`
+- `charge_error_rms = 2.47e-05`
+- `integrated_charge = 0.00272`
+- `integrated_analytic_charge = 0.00268`
+- `valid_analytic_charge = true`
+
 ## Setup
 
 ```bash
