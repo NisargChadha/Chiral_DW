@@ -12,6 +12,7 @@ from chiral_dw.config import (
     MomentumGridParams,
     ResponseParams,
     SourceInterpolationParams,
+    TMDHFReferenceParams,
     TMoTe2ACParams,
     UnitsParams,
 )
@@ -29,6 +30,7 @@ __all__ = [
     "MomentumGridParams",
     "ResponseParams",
     "SourceInterpolationParams",
+    "TMDHFReferenceParams",
     "TMoTe2ACParams",
     "UnitsParams",
     "KThetaResult",

@@ -10,6 +10,7 @@ from chiral_dw.config import (
     FourierCoefficient,
     ResponseParams,
     TMoTe2ACParams,
+    TMDHFReferenceParams,
     UnitsParams,
 )
 
@@ -59,6 +60,14 @@ def test_tmd_hf_canonical_ac_params_record_folded_signs():
     assert params.phi_deg == 107.7
     assert params.continuum_w_mev == -23.8
     assert params.folded_ac_w_mev == 23.8
+
+
+def test_tmd_hf_reference_params_record_raw_source_convention():
+    params = TMDHFReferenceParams()
+
+    assert params.tmd_hf_path_hint == "/Users/nisargchadha/Documents/TMD_HF"
+    assert params.source_convention == "Delta=H_HF(P)-H0"
+    assert params.n_occ_per_block == 1
 
 
 def test_response_params_validate_theta_window():

@@ -169,8 +169,22 @@ class SourceInterpolationParams(BaseModel):
 
     source_scale: float = 1.0
     occupy: Literal["lowest", "highest"] = "lowest"
+    n_occ_per_block: int = Field(default=1, ge=1)
     field_policy: Literal["raw_hermitian"] = "raw_hermitian"
     include_scalar_diagnostics: bool = True
+
+
+class TMDHFReferenceParams(BaseModel):
+    """TMD_HF reference-projector defaults for VP/IVC interpolation."""
+
+    model_config = ConfigDict(frozen=True)
+
+    n_occ_per_block: int = Field(default=1, ge=1)
+    vp_valley: str = "K"
+    ivc_angle: float = 0.5 * pi
+    ivc_phase: float = 0.0
+    tmd_hf_path_hint: str = "/Users/nisargchadha/Documents/TMD_HF"
+    source_convention: Literal["Delta=H_HF(P)-H0"] = "Delta=H_HF(P)-H0"
 
 
 class GatedInteractionParams(BaseModel):
