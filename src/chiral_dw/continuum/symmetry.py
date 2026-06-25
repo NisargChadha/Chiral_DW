@@ -6,7 +6,13 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from chiral_dw.continuum.models import ContinuumActiveSpace, MomentumGrid, hermitize
+from chiral_dw.continuum.models import (
+    ContinuumActiveSpace,
+    MomentumGrid,
+    VALLEY_K,
+    VALLEY_KPRIME,
+    hermitize,
+)
 
 
 def mesh_inversion_map(grid: MomentumGrid) -> np.ndarray:
@@ -75,6 +81,46 @@ def _fixed_per_k_aufbau(H: np.ndarray, n_occ_per_k: int) -> tuple[np.ndarray, np
     return hermitize(P), evals, float(np.min(direct)), indirect
 
 
+def _fixed_valley_aufbau(
+    H: np.ndarray,
+    n_occ_per_k: int,
+    *,
+    n_active: int,
+    valley_index: int,
+) -> tuple[np.ndarray, np.ndarray, float, float]:
+    """Fill a fixed number of states from one valley block at every momentum."""
+
+    blocks = hermitize(np.asarray(H, dtype=complex))
+    n_blocks, dim, _ = blocks.shape
+    n_occ = int(n_occ_per_k)
+    n = int(n_active)
+    if n_occ < 1 or n_occ > n:
+        raise ValueError("pinned-valley Aufbau needs n_occ_per_k <= n_active")
+    start = int(valley_index) * n
+    stop = start + n
+    evals = np.empty((n_blocks, dim), dtype=float)
+    P = np.zeros_like(blocks, dtype=complex)
+    direct = np.full(n_blocks, np.inf, dtype=float)
+    for ik in range(n_blocks):
+        vals, vecs = np.linalg.eigh(blocks[ik, start:stop, start:stop])
+        full_vals = np.linalg.eigvalsh(blocks[ik])
+        evals[ik] = np.sort(full_vals)
+        occ = vecs[:, :n_occ]
+        P[ik, start:stop, start:stop] = occ @ occ.conj().T
+        if n_occ < n:
+            direct[ik] = vals[n_occ] - vals[n_occ - 1]
+    if n_occ < n:
+        selected_evals = []
+        for ik in range(n_blocks):
+            vals = np.linalg.eigvalsh(blocks[ik, start:stop, start:stop])
+            selected_evals.append(vals)
+        selected = np.asarray(selected_evals)
+        indirect = float(np.min(selected[:, n_occ]) - np.max(selected[:, n_occ - 1]))
+    else:
+        indirect = float("inf")
+    return hermitize(P), evals, float(np.min(direct)), indirect
+
+
 def _tprime_real_basis(n_active: int) -> np.ndarray:
     """Return columns whose coefficients are real under tau_x K."""
 
@@ -106,6 +152,14 @@ class ValleyU1Constraint:
 
     active: ContinuumActiveSpace
     name: str = "valley_u1"
+    pinned_valley: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.pinned_valley is None:
+            return
+        if self.pinned_valley not in {VALLEY_K, VALLEY_KPRIME}:
+            raise ValueError("pinned_valley must be None, 'K', or 'Kprime'")
+        object.__setattr__(self, "name", f"valley_u1_{self.pinned_valley}")
 
     def project_density(self, P: np.ndarray) -> np.ndarray:
         return self.project_operator(P)
@@ -127,7 +181,15 @@ class ValleyU1Constraint:
     def update_density(
         self, H: np.ndarray, n_occ_per_k: int
     ) -> tuple[np.ndarray, np.ndarray, float, float]:
-        return _fixed_per_k_aufbau(self.project_operator(H), n_occ_per_k)
+        projected = self.project_operator(H)
+        if self.pinned_valley is None:
+            return _fixed_per_k_aufbau(projected, n_occ_per_k)
+        return _fixed_valley_aufbau(
+            projected,
+            n_occ_per_k,
+            n_active=self.active.n_active,
+            valley_index=self.active.valley_index(self.pinned_valley),
+        )
 
 
 @dataclass(frozen=True)

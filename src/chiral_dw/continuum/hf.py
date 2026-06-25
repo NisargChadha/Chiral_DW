@@ -114,6 +114,14 @@ class ContinuumHFBackend:
             fock=float(fock),
         )
 
+    def interaction_energy(self, P: np.ndarray) -> float:
+        """Return the quadratic Hartree-Fock interaction energy of a density."""
+
+        Q = self.as_block_density(P)
+        Hh = self.hartree_hamiltonian(Q)
+        Hf = self.fock_hamiltonian(Q)
+        return float(0.5 * block_trace_product(Hh + Hf, Q))
+
     def update_density(
         self,
         H: np.ndarray,
@@ -128,6 +136,17 @@ class ContinuumHFBackend:
 def _commutator_norm(H: np.ndarray, P: np.ndarray) -> float:
     comm = H @ P - P @ H
     return float(np.linalg.norm(comm))
+
+
+def _choose_oda_lambda(s: float, c: float, lambda_min: float) -> tuple[float, str | None]:
+    """Choose the ODA damping lambda for E(lambda)=E0+s lambda+c lambda^2/2."""
+
+    if c <= 0.0:
+        return 1.0, "nonpositive_curvature_full_step"
+    lam = float(np.clip(-float(s) / float(c), 0.0, 1.0))
+    if lam <= float(lambda_min):
+        return 1.0, "zero_lambda_full_step"
+    return lam, None
 
 
 def compute_hf_diagnostics(
@@ -216,8 +235,14 @@ def solve_hf(
         )
         P_prev = P
         energy_before = backend.energy(P_prev).total
-        mix = float(controls.mixing)
-        P = hermitize((1.0 - mix) * P_prev + mix * P_next)
+        if controls.mixing_method == "oda":
+            delta = hermitize(P_next - P_prev)
+            s = block_trace_product(H_projected, delta)
+            c = 2.0 * backend.interaction_energy(delta)
+            mix, _fallback = _choose_oda_lambda(s, c, controls.oda_lambda_min)
+        else:
+            mix = float(controls.mixing)
+        P = hermitize(P_prev + mix * (P_next - P_prev))
         if constraint is not None:
             P = constraint.project_density(P)
         diagnostics = compute_hf_diagnostics(

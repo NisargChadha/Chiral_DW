@@ -57,6 +57,11 @@ def test_valley_u1_constraint_projects_intervalley_blocks_and_preserves_vp_seed(
     vp = valley_polarized_seed(active, "K")
     assert np.allclose(constraint.project_density(vp), vp)
 
+    pinned = ValleyU1Constraint(active, pinned_valley="K")
+    P_pinned, _evals, _direct, _indirect = pinned.update_density(blocks, 1)
+    assert np.allclose(P_pinned[:, n:, n:], 0.0)
+    assert np.allclose(np.trace(P_pinned, axis1=-2, axis2=-1), 1.0)
+
 
 def test_tprime_constraint_is_involutive_and_final_aufbau_is_idempotent():
     bundle = _small_bundle()

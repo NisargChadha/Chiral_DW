@@ -17,6 +17,8 @@ from chiral_dw.continuum.models import (
     ContinuumHFResult,
     ReferenceHamiltonianDiagnostics,
     SymmetricHFReferences,
+    VALLEY_K,
+    VALLEY_KPRIME,
     hermitize,
     projector_idempotency_errors,
 )
@@ -66,19 +68,20 @@ def build_symmetric_hf_references(
 
     hf_params = params or ContinuumHFParams()
     work_bundle = bundle or build_continuum_bundle()
-    vp_constraint = ValleyU1Constraint(work_bundle.active)
+    vp_plus_constraint = ValleyU1Constraint(work_bundle.active, pinned_valley=VALLEY_K)
+    vp_minus_constraint = ValleyU1Constraint(work_bundle.active, pinned_valley=VALLEY_KPRIME)
     tprime_constraint = TPrimeConstraint(work_bundle.active)
     vp_plus = solve_reference_hf(
         work_bundle,
         "vp_plus",
         hf_params,
-        constraint=vp_constraint,
+        constraint=vp_plus_constraint,
     )
     vp_minus = solve_reference_hf(
         work_bundle,
         "vp_minus",
         hf_params,
-        constraint=vp_constraint,
+        constraint=vp_minus_constraint,
     )
     ivc = solve_reference_hf(
         work_bundle,

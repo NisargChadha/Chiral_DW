@@ -245,7 +245,9 @@ class ContinuumHFParams(BaseModel):
     n_occ_per_k: int = Field(default=1, ge=1)
     max_iter: int = Field(default=80, ge=1)
     min_iter: int = Field(default=2, ge=0)
+    mixing_method: Literal["linear", "oda"] = "linear"
     mixing: float = Field(default=0.45, ge=0.0, le=1.0)
+    oda_lambda_min: float = Field(default=1e-4, ge=0.0)
     tolerance: float = Field(default=1e-8, gt=0.0)
     energy_tolerance: float = Field(default=1e-10, gt=0.0)
     idempotency_tolerance: float = Field(default=1e-8, gt=0.0)

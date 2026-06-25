@@ -84,6 +84,7 @@ def test_projector_like_seed_mix_preserves_trace_and_hf_snapshots_are_recorded()
     params = ContinuumHFParams(
         max_iter=3,
         min_iter=1,
+        mixing_method="oda",
         mixing=0.7,
         seed_ordered_weight=0.8,
         seed_random_weight=0.2,
@@ -106,7 +107,7 @@ def test_tiny_taige_symmetric_response_smoke():
     projectors, diagnostics = symmetric_convex_path(refs, theta)
     response = k_theta_from_projectors(projectors.reshape(5, 2, 2, 2, 2), theta)
 
-    assert refs.vp_plus.constraint_name == ValleyU1Constraint(bundle.active).name
+    assert refs.vp_plus.constraint_name == ValleyU1Constraint(bundle.active, pinned_valley="K").name
     assert refs.ivc.constraint_name == TPrimeConstraint(bundle.active).name
     assert len(diagnostics) == 5
     assert np.all(np.isfinite(response.K))
