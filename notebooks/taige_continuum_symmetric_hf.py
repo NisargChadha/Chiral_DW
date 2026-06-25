@@ -18,6 +18,13 @@
 #
 # Native Chiral_DW workflow for Taige-parameter tMoTe2: continuum bands, Chern numbers, density vertices/form factors, dual-gated smeared Coulomb HF, three constrained references, the symmetric convex trial Hamiltonian, and the post-HF chiral-domain-wall charge response.
 #
+# The notebook is organized so that parameters appear only when the next stage needs them. You should be able to change HF iteration controls without rerunning the continuum band plot, and change the domain-wall texture after HF without rerunning HF.
+#
+
+# %% [markdown]
+# ## Setup Imports
+#
+# This cell imports the numerical stack and Chiral_DW APIs used throughout the notebook. It also makes the local `src/` tree importable when the notebook is launched from either the repository root or the `notebooks/` directory.
 
 # %%
 
@@ -60,9 +67,11 @@ plt.rcParams.update({"figure.dpi": 120})
 
 
 # %% [markdown]
-# ## Parameters
+# ## Continuum Model Parameters
 #
-# Keep `theta_deg` and `u_D` as the first physics knobs. The defaults below are the requested starting point.
+# These are the only parameters needed to inspect the non-interacting continuum bands. The defaults are Taige's MoTe2 values with the requested starting point `theta_deg = 3.5` and `u_D = 0`.
+#
+# `plane_wave_shell` controls the plane-wave cutoff in the continuum diagonalization. The band plot is sensitive to this cutoff: small values can visibly break the expected K/Kprime time-reversal overlap along the path.
 #
 
 # %%
@@ -70,44 +79,13 @@ plt.rcParams.update({"figure.dpi": 120})
 # Continuum model parameters.
 theta_deg = 3.5
 u_D = 0.0
-plane_wave_shell = 2
+plane_wave_shell = 5
 n_bands = 2
-n_active_bands_per_valley = 1
 
-# Momentum/form-factor controls. Increase n_k and q_shell for production checks.
-n_k = 6
-q_mesh = "full"  # "shell" for quick scans, "full" for all mesh transfers
-q_shell = 1
-local_field_cutoff = 0
-include_q0 = True
-path_n_per_segment = 18
+# Band-plot resolution along each high-symmetry path segment.
+path_n_per_segment = 48
 
-# Zero-temperature fixed-occupation HF controls.
-hf_params = ContinuumHFParams(
-    n_occ_per_k=1,
-    max_iter=80,
-    min_iter=3,
-    mixing_method="oda",
-    mixing=0.45,
-    tolerance=1e-8,
-    energy_tolerance=1e-10,
-    seed_ordered_weight=0.8,
-    seed_random_weight=0.2,
-    random_seed=7,
-    store_projector_snapshots=True,
-    snapshot_interval=5,
-    first_iteration_snapshot=True,
-)
-
-# Convex path and charge-response controls.
-n_theta = 41
-endpoint_eps = 1e-4
-phi = 0.0
-R = 20.0
-w = 3.0
-winding = 1
-
-run_label = f"theta{theta_deg:g}_uD{u_D:g}_nk{n_k}"
+run_label = f"theta{theta_deg:g}_uD{u_D:g}_shell{plane_wave_shell}"
 result_dir = ROOT / "results" / "taige_continuum_symmetric_hf" / run_label
 result_dir.mkdir(parents=True, exist_ok=True)
 
@@ -116,24 +94,18 @@ model = taige_model_params(
     u_D=u_D,
     plane_wave_shell=plane_wave_shell,
     n_bands=n_bands,
-    n_active_bands_per_valley=n_active_bands_per_valley,
 )
-interaction = taige_interaction_params(
-    include_q0=include_q0,
-    q_mesh=q_mesh,
-    q_shell=q_shell,
-    local_field_cutoff=local_field_cutoff,
-)
-grid_params = ContinuumGridParams(n_k=n_k)
 
 print(model)
-print(interaction)
-print(hf_params)
 print("result_dir:", result_dir)
 
 
 # %% [markdown]
 # ## Continuum Band Structure
+#
+# This cell diagonalizes the non-interacting continuum Hamiltonian along the standard Taige path. The Kprime branch is generated in the same T-prime convention used for the active-space mesh: it is evaluated from the K valley at folded `-k`, rather than by comparing to a separately gauged direct Kprime Hamiltonian.
+#
+# The diagnostic printout checks the maximum K/Kprime mismatch in the plotted hole bands and whether the lowest plotted hole band has its maximum at Gamma.
 #
 
 # %%
@@ -143,6 +115,9 @@ distances = path_data["distances"]
 ticks = path_data["ticks"]
 labels = path_data["labels"]
 hole_path = path_data["hole_energies"]
+gamma_index = ticks[0]
+valley_mismatch = float(np.max(np.abs(hole_path[:, 0, :] - hole_path[:, 1, :])))
+lowest_hole_peak_index = int(np.argmax(hole_path[:, 0, 0]))
 
 fig, ax = plt.subplots(figsize=(7.5, 4.5), constrained_layout=True)
 for iv, valley in enumerate(("K", "Kprime")):
@@ -158,18 +133,48 @@ ax.legend(fontsize="small", ncols=2)
 fig.savefig(result_dir / "continuum_band_path.png", dpi=180)
 plt.show()
 
+print("max |K - Kprime| in plotted hole bands:", valley_mismatch)
+print("lowest plotted hole band peak index:", lowest_hole_peak_index)
+print("Gamma index:", gamma_index)
+print("lowest plotted hole band peak at Gamma:", lowest_hole_peak_index == gamma_index)
+
 
 # %% [markdown]
-# ## Active Space, Chern Numbers, Density Vertices, And Coulomb Weights
+# ## Active Space And Interaction Parameters
+#
+# The continuum band plot above does not require an HF mesh or Coulomb kernel. Those controls enter here, where we build the active hole basis, density vertices/form factors, and dual-gated smeared Coulomb weights used by HF.
+#
+# Increase `n_k`, `q_mesh`, `q_shell`, and `local_field_cutoff` for more faithful production runs. The default is intentionally modest so the notebook remains interactive.
 #
 
 # %%
+
+n_active_bands_per_valley = 1
+n_k = 6
+
+q_mesh = "full"  # "shell" for quick scans, "full" for all mesh transfers
+q_shell = 1
+local_field_cutoff = 0
+include_q0 = True
+
+model = model.model_copy(
+    update={"n_active_bands_per_valley": n_active_bands_per_valley}
+)
+interaction = taige_interaction_params(
+    include_q0=include_q0,
+    q_mesh=q_mesh,
+    q_shell=q_shell,
+    local_field_cutoff=local_field_cutoff,
+)
+grid_params = ContinuumGridParams(n_k=n_k)
 
 bundle = build_continuum_bundle(model=model, grid=grid_params, interaction=interaction)
 active = bundle.active
 vertices = bundle.vertices
 backend = bundle.backend
 
+print(model)
+print(interaction)
 print("grid blocks:", active.n_k)
 print("active block dimension:", active.dim)
 print("plane waves per layer:", active.n_plane_waves)
@@ -181,12 +186,24 @@ print("nonzero interaction channels:", int(np.count_nonzero(vertices.v_over_a)))
 print("T-prime sewing quality min:", float(np.min(bundle.bands.tprime_sewing_quality)))
 
 
+# %% [markdown]
+# ## Chern Numbers
+#
+# This cell computes Fukui Chern numbers for the selected active hole band and its electron counterpart on the same coarse mesh used for HF. The signs provide a quick convention check for the opposite-Chern K and Kprime active bands.
+#
+
 # %%
 
 chern_rows = chern_number_table(bundle.bands, band_indices=tuple(range(n_active_bands_per_valley)))
 for row in chern_rows:
     print(f"{row.basis:8s} {row.valley:6s} band {row.band}: C = {row.chern:+.6f}")
 
+
+# %% [markdown]
+# ## Density Vertex And Coulomb Diagnostics
+#
+# This cell inspects the projected density vertex table and the interaction weights. The `q=0` density vertex should be the identity in the active subspace; a large error here would indicate a form-factor convention problem before HF begins.
+#
 
 # %%
 
@@ -208,6 +225,8 @@ print("q=0 identity error:", float(q0_identity_error))
 
 # %% [markdown]
 # ## Projector Visualization And HF Helpers
+#
+# These helper functions are used by the HF cells below. They do not run HF or change the model; they only define common plots, seed construction, and diagnostic summaries so the three reference solves have the same presentation.
 #
 
 # %%
@@ -289,9 +308,40 @@ def summarize_result(name, result):
 
 
 # %% [markdown]
+# ## Hartree-Fock Run Parameters
+#
+# These controls are only needed once the active space and interaction backend exist. You can change iteration counts, tolerances, seed noise, and snapshot cadence here without rebuilding the continuum band plot above.
+#
+# The seed weights implement the requested 0.8 ordered / 0.2 random projector-like mixture for VP+, VP-, and IVC initial conditions.
+#
+
+# %%
+
+hf_params = ContinuumHFParams(
+    n_occ_per_k=1,
+    max_iter=80,
+    min_iter=3,
+    mixing_method="oda",
+    mixing=0.45,
+    tolerance=1e-8,
+    energy_tolerance=1e-10,
+    seed_ordered_weight=0.8,
+    seed_random_weight=0.2,
+    random_seed=7,
+    store_projector_snapshots=True,
+    snapshot_interval=5,
+    first_iteration_snapshot=True,
+)
+
+print(hf_params)
+
+
+# %% [markdown]
 # ## Initial Noisy Projectors
 #
-# Each ordered VP/IVC seed is mixed with a projector-like random Slater seed using the 0.8/0.2 weights in `hf_params`.
+# This cell constructs and displays the actual initial projectors for the three HF references. Each ordered VP/IVC seed is mixed with a projector-like random Slater seed using the weights in `hf_params`.
+#
+# The figures are meant to catch obvious seed mistakes before the self-consistency loop starts: VP seeds should be valley diagonal, while the IVC seed should show intervalley coherence.
 #
 
 # %%
@@ -308,6 +358,10 @@ for label, P0 in [("VP+ initial", P0_vp_plus), ("VP- initial", P0_vp_minus), ("I
 
 # %% [markdown]
 # ## VP+ Valley-U(1) HF
+#
+# This cell runs the K-valley polarized reference. The `ValleyU1Constraint` removes intervalley density/operator blocks, and `pinned_valley="K"` keeps the Aufbau update in the VP+ sector rather than allowing momentum-by-momentum valley flips.
+#
+# The final diagnostics report both projector idempotency and self-consistency residuals. A converged reference should have an idempotent final projector and a small Aufbau residual.
 #
 
 # %%
@@ -332,6 +386,10 @@ plt.show()
 # %% [markdown]
 # ## VP- Valley-U(1) HF
 #
+# This cell repeats the same U(1)-preserving solve in the Kprime-polarized sector. At `u_D = 0`, VP+ and VP- should become degenerate once all continuum, form-factor, and interaction conventions are sufficiently symmetric.
+#
+# If the printed energy splitting remains visible, treat it as a convention or finite-cutoff diagnostic rather than a physical displacement-field effect.
+#
 
 # %%
 
@@ -354,6 +412,10 @@ plt.show()
 
 # %% [markdown]
 # ## Q=0 IVC T-Prime HF
+#
+# This cell runs the Q=0 intervalley-coherent reference with the non-Kramers T-prime constraint. The seed carries explicit K/Kprime coherence, and the constraint relates the projector at `k` to the valley-swapped complex conjugate at `-k`.
+#
+# The final idempotent projector is always reported, even when the residual says the idempotent projector is not yet a fully self-consistent HF fixed point.
 #
 
 # %%
@@ -400,6 +462,23 @@ for name, diag in reference_diagnostics(refs).items():
 # %% [markdown]
 # ## Symmetric Convex Trial Hamiltonian Path
 #
+# The HF references are now fixed, so this is the first place where the `theta` path and global IVC phase are needed. Changing these values recomputes the trial Hamiltonian path and `K(theta)` without rerunning the three HF solves.
+#
+
+# %%
+
+n_theta = 41
+endpoint_eps = 1e-4
+phi = 0.0
+
+print("n_theta:", n_theta)
+print("endpoint_eps:", endpoint_eps)
+print("phi:", phi)
+
+
+# %% [markdown]
+# This cell builds the convex Hamiltonian path from the three raw HF Hamiltonians, diagonalizes each point into a fixed-occupation projector, and computes the dimensionless response kernel `K(theta)` and coefficient `c_G`.
+#
 
 # %%
 
@@ -428,7 +507,9 @@ print("cG:", response.cG)
 # %% [markdown]
 # ## Post-HF Texture Controls
 #
-# Edit only `R` and `w` below to recompute the real-space charge profile from the already computed HF references and convex path.
+# The domain-wall texture parameters enter only after `K(theta)` is known. Edit `R` and `w` here to recompute the radial texture and charge density from the already computed HF references and convex path.
+#
+# This cell does not rerun continuum bands, density vertices, or HF.
 #
 
 # %%
@@ -462,6 +543,8 @@ print("integrated radial charge:", integrated_charge)
 # %% [markdown]
 # ## Save Arrays
 #
+# This cell writes the converged reference projectors, convex-path projectors, `K(theta)`, `c_G`, and the current post-HF charge profile into a compressed NumPy artifact under `results/`.
+#
 
 # %%
 
@@ -479,4 +562,3 @@ np.savez_compressed(
     charge_rho_dimless=profile.rho_dimless,
 )
 print("saved:", result_dir / "taige_symmetric_hf_references_and_response.npz")
-

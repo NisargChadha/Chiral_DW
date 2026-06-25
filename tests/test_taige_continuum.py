@@ -7,6 +7,7 @@ from chiral_dw.continuum import (
     build_continuum_bundle,
     build_symmetric_hf_references,
     chern_number_table,
+    compute_taige_path_spectrum,
     random_projector_like_seed,
     symmetric_convex_path,
     taige_interaction_params,
@@ -54,6 +55,15 @@ def test_taige_chern_table_returns_finite_values_on_tiny_grid():
 
     assert len(rows) == 4
     assert all(np.isfinite(row.chern) for row in rows)
+
+
+def test_taige_path_spectrum_uses_tprime_kprime_convention():
+    model = taige_model_params(theta_deg=3.5, u_D=0.0, plane_wave_shell=3, n_bands=2)
+    data = compute_taige_path_spectrum(model, n_per_segment=6)
+    hole = data["hole_energies"]
+
+    assert np.max(np.abs(hole[:, 0, :] - hole[:, 1, :])) < 1e-2
+    assert int(np.argmax(hole[:, 0, 0])) == data["ticks"][0]
 
 
 def test_taige_density_vertices_have_q0_identity_and_smeared_dual_gate_weights():

@@ -789,17 +789,32 @@ def compute_taige_path_spectrum(
     model: ContinuumModelParams,
     *,
     n_per_segment: int = 24,
+    track_bands: bool = True,
 ) -> dict[str, np.ndarray | list[int] | list[str]]:
-    """Evaluate non-interacting Taige bands along the standard path."""
+    """Evaluate non-interacting Taige bands along the standard path.
+
+    The Kprime path is generated from the K valley at folded ``-k``. This is
+    the same non-Kramers T-prime convention used for the coarse active-space
+    bandstructure and avoids comparing two different continuum gauges.
+    """
 
     continuum = TaigeContinuumModel(model)
     path, distances, ticks, labels = taige_momentum_path(n_per_segment=n_per_segment, model=model)
     n_bands = int(model.n_bands)
     electron = np.empty((path.shape[0], 2, n_bands), dtype=float)
+    vectors = np.empty((path.shape[0], 2, continuum.dim, n_bands), dtype=complex)
     for ip, k_frac in enumerate(path):
         for iv, valley in enumerate(VALLEY_ORDER):
-            evals = np.linalg.eigvalsh(continuum.hamiltonian(k_frac, valley))
-            electron[ip, iv] = np.sort(evals)[::-1][:n_bands]
+            if valley == VALLEY_K:
+                physical_k = np.asarray(k_frac, dtype=float)
+            else:
+                physical_k = _fold_fractional(-np.asarray(k_frac, dtype=float))
+            evals, evecs = np.linalg.eigh(continuum.hamiltonian(physical_k, VALLEY_K))
+            order = np.argsort(evals)[::-1][:n_bands]
+            electron[ip, iv] = evals[order]
+            vectors[ip, iv] = evecs[:, order]
+    if track_bands and path.shape[0] > 1 and n_bands > 1:
+        electron, vectors = _track_continuous_path_bands(electron, vectors)
     return {
         "k_path": path,
         "distances": distances,
@@ -808,3 +823,42 @@ def compute_taige_path_spectrum(
         "electron_energies": electron,
         "hole_energies": -electron,
     }
+
+
+def _fold_fractional(k_frac: np.ndarray) -> np.ndarray:
+    """Fold a fractional reciprocal coordinate into the unit parallelogram."""
+
+    k = np.asarray(k_frac, dtype=float)
+    return k - np.floor(k)
+
+
+def _track_continuous_path_bands(
+    energies: np.ndarray,
+    vectors: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Track nearby path bands by energy continuity and wavefunction overlap."""
+
+    from itertools import permutations
+
+    tracked_energies = np.asarray(energies, dtype=float).copy()
+    tracked_vectors = np.asarray(vectors, dtype=complex).copy()
+    n_bands = tracked_energies.shape[-1]
+    for iv in range(tracked_energies.shape[1]):
+        previous_energies = tracked_energies[0, iv]
+        previous = tracked_vectors[0, iv]
+        for ip in range(1, tracked_energies.shape[0]):
+            energy_cost = np.abs(previous_energies[:, None] - energies[ip, iv][None, :])
+            overlaps = np.abs(previous.conj().T @ vectors[ip, iv]) ** 2
+            best_perm = min(
+                permutations(range(n_bands)),
+                key=lambda perm: (
+                    sum(energy_cost[i, perm[i]] for i in range(n_bands)),
+                    -sum(overlaps[i, perm[i]] for i in range(n_bands)),
+                ),
+            )
+            perm = np.asarray(best_perm, dtype=int)
+            tracked_energies[ip, iv] = energies[ip, iv, perm]
+            tracked_vectors[ip, iv] = vectors[ip, iv][:, perm]
+            previous_energies = tracked_energies[ip, iv]
+            previous = tracked_vectors[ip, iv]
+    return tracked_energies, tracked_vectors
