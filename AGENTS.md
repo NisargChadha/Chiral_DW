@@ -49,6 +49,19 @@ and resolve that mismatch before committing and moving on.
 - Keep generated outputs under `results/` unless a test intentionally writes to
   a temporary directory.
 
+## Paired Notebook Workflow
+
+- Use Jupytext percent-format `.py` companions for substantial notebooks, e.g.
+  `notebooks/foo.ipynb` paired with `notebooks/foo.py`.
+- Treat the `.ipynb` as the live user-editable source. Before answering
+  questions about, inspecting, or editing a paired `.py` file, first sync the
+  notebook into the script with Jupytext so the `.py` is not stale.
+- After editing a paired `.py` file, sync it back into the `.ipynb` before
+  running tests or reporting completion.
+- Prefer `python3 -m jupytext --set-formats ipynb,py:percent <notebook> --sync`
+  when creating a pair, and use explicit Jupytext sync commands whenever one
+  side may have changed.
+
 ## Commit Discipline
 
 - Commit regular working slices after tests pass.
