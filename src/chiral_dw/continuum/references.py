@@ -20,7 +20,7 @@ from chiral_dw.continuum.models import (
     hermitize,
     projector_idempotency_errors,
 )
-from chiral_dw.continuum.seeds import build_seed
+from chiral_dw.continuum.seeds import build_seed, mix_projector_seeds, random_projector_like_seed
 from chiral_dw.continuum.symmetry import (
     TPrimeConstraint,
     ValleyU1Constraint,
@@ -47,6 +47,14 @@ def solve_reference_hf(
         ivc_phase=controls.ivc_phase,
         random_seed_value=controls.random_seed,
     )
+    if controls.seed_random_weight > 0.0:
+        P_noise = random_projector_like_seed(P0, seed=controls.random_seed)
+        P0 = mix_projector_seeds(
+            P0,
+            P_noise,
+            ordered_weight=controls.seed_ordered_weight,
+            random_weight=controls.seed_random_weight,
+        )
     return solve_hf(bundle.backend, P0, controls, constraint=constraint, seed=seed_name)
 
 

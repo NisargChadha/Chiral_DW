@@ -79,6 +79,59 @@ def random_seed(
     return P
 
 
+def _haar_unitary(dim: int, rng: np.random.Generator) -> np.ndarray:
+    z = rng.normal(size=(dim, dim)) + 1j * rng.normal(size=(dim, dim))
+    q, r = np.linalg.qr(z)
+    phases = np.diag(r)
+    phases = np.where(np.abs(phases) > 1e-15, phases / np.abs(phases), 1.0)
+    return q * phases.conj()
+
+
+def random_projector_like_seed(
+    reference: np.ndarray,
+    *,
+    seed: int | None = None,
+    rng: np.random.Generator | None = None,
+) -> np.ndarray:
+    """Randomly rotate a projector while preserving each block spectrum."""
+
+    generator = np.random.default_rng(seed) if rng is None else rng
+    P_ref = np.asarray(reference, dtype=complex)
+    if P_ref.ndim != 3 or P_ref.shape[-1] != P_ref.shape[-2]:
+        raise ValueError("reference projector must have shape (n_k, dim, dim)")
+    n_k, dim, _ = P_ref.shape
+    out = np.empty_like(P_ref)
+    for ik in range(n_k):
+        U = _haar_unitary(dim, generator)
+        out[ik] = U @ P_ref[ik] @ U.conj().T
+    return hermitize(out)
+
+
+def mix_projector_seeds(
+    ordered: np.ndarray,
+    random: np.ndarray,
+    *,
+    ordered_weight: float = 1.0,
+    random_weight: float = 0.0,
+    atol: float = 1e-12,
+) -> np.ndarray:
+    """Convexly mix two seed density matrices and Hermitian-symmetrize."""
+
+    P_ordered = np.asarray(ordered, dtype=complex)
+    P_random = np.asarray(random, dtype=complex)
+    if P_ordered.shape != P_random.shape:
+        raise ValueError("seed projectors must have the same shape")
+    w_ordered = float(ordered_weight)
+    w_random = float(random_weight)
+    if not (np.isfinite(w_ordered) and np.isfinite(w_random)):
+        raise ValueError("seed weights must be finite")
+    if w_ordered < -atol or w_random < -atol:
+        raise ValueError("seed weights must be nonnegative")
+    if not np.isclose(w_ordered + w_random, 1.0, atol=atol):
+        raise ValueError("seed weights must sum to one")
+    return hermitize(w_ordered * P_ordered + w_random * P_random)
+
+
 def build_seed(
     name: str,
     active: ContinuumActiveSpace,

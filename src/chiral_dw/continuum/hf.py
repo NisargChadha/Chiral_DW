@@ -10,6 +10,7 @@ import numpy as np
 from chiral_dw.config import ContinuumHFParams, ContinuumInteractionParams
 from chiral_dw.continuum.models import (
     ContinuumHFDiagnostics,
+    ContinuumHFIterationSnapshot,
     ContinuumHFResult,
     DensityVertices,
     ReferenceHamiltonianDiagnostics,
@@ -193,6 +194,7 @@ def solve_hf(
     if constraint is not None:
         P = constraint.project_density(P)
     history: list[ContinuumHFDiagnostics] = []
+    snapshots: list[ContinuumHFIterationSnapshot] = []
     converged = False
     energy_prev: float | None = None
     diagnostics = compute_hf_diagnostics(
@@ -228,6 +230,19 @@ def solve_hf(
             iteration=iteration,
         )
         history.append(diagnostics)
+        should_snapshot = controls.store_projector_snapshots and (
+            (controls.first_iteration_snapshot and iteration == 1)
+            or (iteration % controls.snapshot_interval == 0)
+        )
+        if should_snapshot:
+            snapshots.append(
+                ContinuumHFIterationSnapshot(
+                    iteration=iteration,
+                    P=P.copy(),
+                    energy=float(diagnostics.energy),
+                    diagnostics=diagnostics,
+                )
+            )
         delta_e = abs(diagnostics.energy - energy_before)
         energy_prev = diagnostics.energy
         if (
@@ -269,6 +284,7 @@ def solve_hf(
         n_iter=n_iter,
         diagnostics=final_diagnostics,
         history=tuple(history),
+        snapshots=tuple(snapshots),
         seed=seed,
         constraint_name=getattr(constraint, "name", None) if constraint is not None else None,
     )

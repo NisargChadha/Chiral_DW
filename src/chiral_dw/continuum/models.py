@@ -57,6 +57,14 @@ class MomentumGrid:
     def size(self) -> int:
         return self.n_k * self.n_k
 
+    @property
+    def n1(self) -> int:
+        return self.n_k
+
+    @property
+    def n2(self) -> int:
+        return self.n_k
+
     def coord_of(self, index: int) -> tuple[int, int]:
         idx = int(index)
         return idx // self.n_k, idx % self.n_k
@@ -64,6 +72,18 @@ class MomentumGrid:
     def index_of(self, coord: tuple[int, int]) -> int:
         i, j = int(coord[0]) % self.n_k, int(coord[1]) % self.n_k
         return i * self.n_k + j
+
+    def fold_grid_coord(self, coord: tuple[int, int]) -> tuple[tuple[int, int], tuple[int, int]]:
+        i, j = int(coord[0]), int(coord[1])
+        fi = i % self.n_k
+        fj = j % self.n_k
+        return (fi, fj), ((i - fi) // self.n_k, (j - fj) // self.n_k)
+
+    def shift_plus_q(self, coord: tuple[int, int], q_coord: tuple[int, int]) -> tuple[tuple[int, int], tuple[int, int]]:
+        return self.fold_grid_coord((int(coord[0]) + int(q_coord[0]), int(coord[1]) + int(q_coord[1])))
+
+    def shift_minus_q(self, coord: tuple[int, int], q_coord: tuple[int, int]) -> tuple[tuple[int, int], tuple[int, int]]:
+        return self.fold_grid_coord((int(coord[0]) - int(q_coord[0]), int(coord[1]) - int(q_coord[1])))
 
     def fractional_coords(self) -> np.ndarray:
         coords = np.zeros((self.size, 2), dtype=float)
@@ -87,6 +107,14 @@ class ContinuumActiveSpace:
     hole_energies: np.ndarray
     band_vectors: np.ndarray
     model: ContinuumModelParams
+    shell: tuple[tuple[int, int], ...] = ()
+    n_plane_waves: int = 0
+    electron_energies: np.ndarray | None = None
+    electron_vectors: np.ndarray | None = None
+    source_index: np.ndarray | None = None
+    source_shift: np.ndarray | None = None
+    geometry: object | None = None
+    bands: object | None = None
 
     @property
     def n_k(self) -> int:
@@ -113,6 +141,11 @@ class DensityVertices:
     q_is_zero: np.ndarray
     lambda_blocks: np.ndarray
     v_over_a: np.ndarray
+    g_channels: tuple[tuple[int, int], ...] = ((0, 0),)
+    channel_in_disk: np.ndarray | None = None
+    q_vectors_nm_inv: np.ndarray | None = None
+    q_norm_nm_inv: np.ndarray | None = None
+    v_q: np.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -125,6 +158,9 @@ class ContinuumBundle:
     backend: object
     params: ContinuumModelParams
     interaction: ContinuumInteractionParams
+    bands: object | None = None
+    geometry: object | None = None
+    form_factors: object | None = None
 
 
 class ContinuumHFDiagnostics(BaseModel):
@@ -172,8 +208,19 @@ class ContinuumHFResult:
     n_iter: int
     diagnostics: ContinuumHFDiagnostics
     history: tuple[ContinuumHFDiagnostics, ...] = field(default_factory=tuple)
+    snapshots: tuple["ContinuumHFIterationSnapshot", ...] = field(default_factory=tuple)
     seed: str = ""
     constraint_name: str | None = None
+
+
+@dataclass(frozen=True)
+class ContinuumHFIterationSnapshot:
+    """Stored projector state from one HF iteration."""
+
+    iteration: int
+    P: np.ndarray
+    energy: float
+    diagnostics: ContinuumHFDiagnostics
 
 
 @dataclass(frozen=True)

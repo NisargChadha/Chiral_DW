@@ -54,6 +54,13 @@ def build_active_space(
     grid_controls = grid_params or ContinuumGridParams()
     model = model_params or ContinuumModelParams()
     grid = MomentumGrid(grid_controls.n_k)
+    if model.active_model == "taige":
+        from chiral_dw.continuum.taige import build_taige_active_space
+
+        active, _bands = build_taige_active_space(grid, model)
+        return active
+    if model.active_model != "qiwuzhang":
+        raise ValueError(f"unknown active_model {model.active_model!r}")
     n_active = int(model.n_active_bands_per_valley)
     if n_active != 1:
         raise NotImplementedError("native continuum v1 supports one active band per valley")
@@ -102,6 +109,10 @@ def build_density_vertices(
     """Build a simple screened-Coulomb projected density vertex table."""
 
     controls = interaction or ContinuumInteractionParams()
+    if active.model.active_model == "taige":
+        from chiral_dw.continuum.taige import build_taige_density_vertices
+
+        return build_taige_density_vertices(active, controls)
     shifts = q_shifts_for_shell(controls.q_shell)
     n_q = len(shifts)
     n_g = 1
@@ -151,4 +162,7 @@ def build_continuum_bundle(
         backend=backend,
         params=model_params,
         interaction=interaction_params,
+        bands=active.bands,
+        geometry=active.geometry,
+        form_factors=None,
     )

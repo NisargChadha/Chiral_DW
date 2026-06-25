@@ -199,19 +199,21 @@ class ContinuumGridParams(BaseModel):
 
 
 class ContinuumModelParams(BaseModel):
-    """Minimal native tMoTe2-like continuum active-band parameters."""
+    """Native continuum active-band parameters."""
 
     model_config = ConfigDict(frozen=True)
 
-    theta_deg: float = Field(default=3.9, gt=0.0)
-    a0_angstrom: float = Field(default=3.52, gt=0.0)
-    m_eff: float = Field(default=0.6, gt=0.0)
-    moire_potential_mev: float = 8.0
-    tunneling_mev: float = -10.0
+    theta_deg: float = Field(default=3.5, gt=0.0)
+    a0_angstrom: float = Field(default=3.47, gt=0.0)
+    m_eff: float = Field(default=0.62, gt=0.0)
+    moire_potential_mev: float = 11.2
+    phi_deg: float = 91.0
+    tunneling_mev: float = -13.3
     displacement_mev: float = 0.0
     plane_wave_shell: int = Field(default=1, ge=0)
+    n_bands: int = Field(default=2, ge=1)
     n_active_bands_per_valley: int = Field(default=1, ge=1)
-    active_model: Literal["qiwuzhang"] = "qiwuzhang"
+    active_model: Literal["qiwuzhang", "taige"] = "qiwuzhang"
 
 
 class ContinuumInteractionParams(BaseModel):
@@ -223,6 +225,13 @@ class ContinuumInteractionParams(BaseModel):
     gate_distance: float = Field(default=2.0, gt=0.0)
     q0_hartree: Literal["omit_uniform"] = "omit_uniform"
     q_shell: int = Field(default=1, ge=0)
+    q_mesh: Literal["shell", "full"] = "shell"
+    local_field_cutoff: int = Field(default=0, ge=0)
+    coulomb_kind: Literal["dimensionless_screened", "dual_gate"] = "dimensionless_screened"
+    epsilon: float = Field(default=16.7, gt=0.0)
+    gate_distance_nm: float = Field(default=30.0, gt=0.0)
+    include_q0: bool = True
+    smear_length_nm: float = Field(default=0.347, ge=0.0)
     exchange_scale: float = Field(default=1.0, ge=0.0)
     hartree_scale: float = Field(default=1.0, ge=0.0)
     reference_density: Literal["zero"] = "zero"
@@ -244,6 +253,18 @@ class ContinuumHFParams(BaseModel):
     ivc_angle: float = 0.5 * pi
     ivc_phase: float = 0.0
     random_seed: int = 1
+    seed_ordered_weight: float = Field(default=1.0, ge=0.0)
+    seed_random_weight: float = Field(default=0.0, ge=0.0)
+    store_projector_snapshots: bool = False
+    snapshot_interval: int = Field(default=10, ge=1)
+    first_iteration_snapshot: bool = True
+
+    @model_validator(mode="after")
+    def _seed_weights_sum_to_one(self) -> "ContinuumHFParams":
+        total = self.seed_ordered_weight + self.seed_random_weight
+        if abs(total - 1.0) > 1e-12:
+            raise ValueError("seed_ordered_weight and seed_random_weight must sum to one")
+        return self
 
 
 class ContinuumWorkflowParams(BaseModel):
