@@ -35,6 +35,15 @@ import sys
 
 import numpy as np
 import matplotlib.pyplot as plt
+import pandas as pd
+
+try:
+    from IPython.display import clear_output, display
+except ImportError:  # pragma: no cover - only used outside notebooks
+    clear_output = None
+
+    def display(obj):
+        print(obj)
 
 ROOT = Path.cwd().resolve()
 if not (ROOT / "src").exists() and (ROOT.parent / "src").exists():
@@ -50,6 +59,7 @@ from chiral_dw.continuum import (
     build_continuum_bundle,
     build_seed,
     chern_number_table,
+    compute_hf_diagnostics,
     compute_taige_path_spectrum,
     mix_projector_seeds,
     projector_maps,
@@ -133,11 +143,6 @@ ax.legend(fontsize="small", ncols=2)
 fig.savefig(result_dir / "continuum_band_path.png", dpi=180)
 plt.show()
 
-print("max |K - Kprime| in plotted hole bands:", valley_mismatch)
-print("lowest plotted hole band peak index:", lowest_hole_peak_index)
-print("Gamma index:", gamma_index)
-print("lowest plotted hole band peak at Gamma:", lowest_hole_peak_index == gamma_index)
-
 
 # %% [markdown]
 # ## Active Space And Interaction Parameters
@@ -150,11 +155,11 @@ print("lowest plotted hole band peak at Gamma:", lowest_hole_peak_index == gamma
 # %%
 
 n_active_bands_per_valley = 1
-n_k = 6
+n_k = 18
 
 q_mesh = "full"  # "shell" for quick scans, "full" for all mesh transfers
-q_shell = 1
-local_field_cutoff = 0
+q_shell = 0
+local_field_cutoff = 4
 include_q0 = True
 
 model = model.model_copy(
@@ -226,12 +231,23 @@ print("q=0 identity error:", float(q0_identity_error))
 # %% [markdown]
 # ## Projector Visualization And HF Helpers
 #
-# These helper functions are used by the HF cells below. They do not run HF or change the model; they only define common plots, seed construction, and diagnostic summaries so the three reference solves have the same presentation.
+# These helper functions are used by the HF cells below. They do not run HF or change the model; they only define common plots, seed construction, live iteration tables, and diagnostic summaries so the three reference solves have the same presentation.
+#
+# The projector is shown in two complementary ways: a literal valley-space matrix view (`P_KK`, `|P_KKprime|`, `|P_KprimeK|`, `P_KprimeKprime`) and the compact occupation/order-parameter view (`K`, `Kprime`, `VP`, `|IVC|`).
 #
 
 # %%
 
-def plot_projector(P, title):
+def _figure_path(prefix, suffix):
+    return result_dir / f"{prefix}_{suffix}.png"
+
+
+def _display_and_close(fig):
+    display(fig)
+    plt.close(fig)
+
+
+def plot_projector_summary(P, title):
     maps = projector_maps(P, active)
     fig, axes = plt.subplots(1, 4, figsize=(12, 3.2), constrained_layout=True)
     specs = [
@@ -242,6 +258,31 @@ def plot_projector(P, title):
     ]
     for ax, (label, values, cmap) in zip(axes, specs):
         image = ax.imshow(values, origin="lower", cmap=cmap)
+        ax.set_title(label)
+        ax.set_xlabel("k2")
+        ax.set_ylabel("k1")
+        fig.colorbar(image, ax=ax, shrink=0.78)
+    fig.suptitle(title)
+    return fig
+
+
+def plot_projector_matrix(P, title):
+    maps = projector_maps(P, active)
+    fig, axes = plt.subplots(2, 2, figsize=(7.8, 6.8), constrained_layout=True)
+    diag_vmax = max(1.0, float(np.nanmax(maps["P_KK"])), float(np.nanmax(maps["P_KprimeKprime"])))
+    offdiag_vmax = max(
+        1e-12,
+        float(np.nanmax(maps["P_KKprime_abs"])),
+        float(np.nanmax(maps["P_KprimeK_abs"])),
+    )
+    specs = [
+        ("P_KK", maps["P_KK"], "viridis", diag_vmax),
+        ("|P_KKprime|", maps["P_KKprime_abs"], "magma", offdiag_vmax),
+        ("|P_KprimeK|", maps["P_KprimeK_abs"], "magma", offdiag_vmax),
+        ("P_KprimeKprime", maps["P_KprimeKprime"], "viridis", diag_vmax),
+    ]
+    for ax, (label, values, cmap, vmax) in zip(axes.ravel(), specs):
+        image = ax.imshow(values, origin="lower", cmap=cmap, vmin=0.0, vmax=vmax)
         ax.set_title(label)
         ax.set_xlabel("k2")
         ax.set_ylabel("k1")
@@ -269,30 +310,92 @@ def noisy_initial_projector(seed_name, rng_seed):
     return mixed, ordered, noise
 
 
-def diagnostics_rows(result):
-    rows = [diag.model_dump(mode="json") for diag in result.history]
-    rows.append(result.diagnostics.model_dump(mode="json"))
-    return rows
+def projector_order_parameters(P):
+    maps = projector_maps(P, active)
+    return {
+        "mean_VP": float(np.mean(maps["VP"])),
+        "mean_abs_IVC": float(np.mean(maps["IVC_abs"])),
+        "max_abs_IVC": float(np.max(maps["IVC_abs"])),
+    }
 
 
-def plot_hf_history(result, title):
-    rows = diagnostics_rows(result)
-    iterations = [row["iteration"] for row in rows]
-    energies = [row["energy"] for row in rows]
-    residual = [row["aufbau_residual_norm"] for row in rows]
-    commutator = [row["commutator_norm"] for row in rows]
-    idem = [row["idempotency_error_fro"] for row in rows]
+def hf_history_row(iteration, P, energy, diagnostics):
+    order = projector_order_parameters(P)
+    return {
+        "iteration": int(iteration),
+        "energy": float(energy),
+        "delta_energy": float(diagnostics.delta_energy),
+        "delta_P": float(diagnostics.delta_P),
+        "idempotency_fro": float(diagnostics.idempotency_error_fro),
+        "idempotency_max": float(diagnostics.idempotency_error_max),
+        "aufbau_residual": float(diagnostics.aufbau_residual_norm),
+        "commutator": float(diagnostics.commutator_norm),
+        "trace_error": float(diagnostics.trace_error),
+        "constraint_error": float(diagnostics.constraint_error),
+        "direct_gap": float(diagnostics.direct_gap_min),
+        "indirect_gap": float(diagnostics.indirect_gap),
+        "density_kind": diagnostics.density_kind,
+        **order,
+    }
 
-    fig, axes = plt.subplots(1, 2, figsize=(9.5, 3.6), constrained_layout=True)
-    axes[0].plot(iterations, energies, marker="o", ms=3)
-    axes[0].set_xlabel("iteration")
-    axes[0].set_ylabel("HF energy")
-    axes[0].set_title(title)
-    axes[1].semilogy(iterations, np.maximum(residual, 1e-16), label="Aufbau")
-    axes[1].semilogy(iterations, np.maximum(commutator, 1e-16), label="commutator")
-    axes[1].semilogy(iterations, np.maximum(idem, 1e-16), label="idempotency")
-    axes[1].set_xlabel("iteration")
-    axes[1].legend(fontsize="small")
+
+def _positive(values):
+    arr = np.nan_to_num(np.abs(np.asarray(values, dtype=float)), nan=0.0)
+    return np.maximum(arr, 1e-16)
+
+
+def plot_hf_history(history_df, title):
+    fig, axes = plt.subplots(2, 3, figsize=(14, 7), constrained_layout=True)
+    x = history_df["iteration"]
+
+    axes[0, 0].plot(x, history_df["energy"], marker="o", ms=2.5)
+    axes[0, 0].set_title("energy")
+    axes[0, 0].set_xlabel("iteration")
+
+    axes[0, 1].plot(x, history_df["mean_VP"], marker="o", ms=2.5, label="mean VP")
+    axes[0, 1].plot(x, history_df["mean_abs_IVC"], marker="o", ms=2.5, label="mean |IVC|")
+    axes[0, 1].plot(x, history_df["max_abs_IVC"], marker="o", ms=2.5, label="max |IVC|")
+    axes[0, 1].set_title("order parameters")
+    axes[0, 1].set_xlabel("iteration")
+    axes[0, 1].legend(fontsize="small")
+
+    axes[0, 2].plot(x, history_df["direct_gap"], marker="o", ms=2.5, label="direct")
+    axes[0, 2].plot(x, history_df["indirect_gap"], marker="o", ms=2.5, label="indirect")
+    axes[0, 2].set_title("gaps")
+    axes[0, 2].set_xlabel("iteration")
+    axes[0, 2].legend(fontsize="small")
+
+    for col in ("aufbau_residual", "commutator", "idempotency_fro"):
+        axes[1, 0].semilogy(x, _positive(history_df[col]), marker="o", ms=2.5, label=col)
+    axes[1, 0].set_title("self-consistency")
+    axes[1, 0].set_xlabel("iteration")
+    axes[1, 0].legend(fontsize="small")
+
+    axes[1, 1].semilogy(x, _positive(history_df["delta_P"]), marker="o", ms=2.5, label="delta P")
+    axes[1, 1].semilogy(
+        x,
+        _positive(history_df["delta_energy"]),
+        marker="o",
+        ms=2.5,
+        label="delta energy",
+    )
+    axes[1, 1].set_title("updates")
+    axes[1, 1].set_xlabel("iteration")
+    axes[1, 1].legend(fontsize="small")
+
+    axes[1, 2].semilogy(x, _positive(history_df["trace_error"]), marker="o", ms=2.5, label="trace")
+    axes[1, 2].semilogy(
+        x,
+        _positive(history_df["constraint_error"]),
+        marker="o",
+        ms=2.5,
+        label="constraint",
+    )
+    axes[1, 2].set_title("constraints")
+    axes[1, 2].set_xlabel("iteration")
+    axes[1, 2].legend(fontsize="small")
+
+    fig.suptitle(title)
     return fig
 
 
@@ -306,17 +409,76 @@ def summarize_result(name, result):
     print("  snapshots:", [snapshot.iteration for snapshot in result.snapshots])
 
 
+def run_live_hf(label, P0, constraint, seed, filename_prefix):
+    P_start = backend.as_block_density(P0)
+    if constraint is not None:
+        P_start = constraint.project_density(P_start)
+    initial_diagnostics = compute_hf_diagnostics(
+        backend,
+        P_start,
+        hf_params,
+        constraint=constraint,
+        iteration=0,
+    )
+    history = [hf_history_row(0, P_start, initial_diagnostics.energy, initial_diagnostics)]
+
+    def record_iteration(iteration, P_iter, energy_iter, diagnostics_iter, is_snapshot):
+        history.append(hf_history_row(iteration, P_iter, energy_iter, diagnostics_iter))
+        if is_snapshot:
+            if clear_output is not None:
+                clear_output(wait=True)
+            history_df = pd.DataFrame(history)
+            display(history_df.tail(12))
+
+            fig = plot_projector_matrix(P_iter, f"{label} projector matrix after iteration {iteration}")
+            fig.savefig(_figure_path(filename_prefix, f"projector_matrix_iter_{iteration:04d}"), dpi=180)
+            _display_and_close(fig)
+
+            fig = plot_projector_summary(P_iter, f"{label} VP/IVC maps after iteration {iteration}")
+            fig.savefig(_figure_path(filename_prefix, f"order_maps_iter_{iteration:04d}"), dpi=180)
+            _display_and_close(fig)
+
+    result = solve_hf(
+        backend,
+        P_start,
+        hf_params,
+        constraint=constraint,
+        seed=seed,
+        on_iteration=record_iteration,
+    )
+    history.append(hf_history_row(result.diagnostics.iteration, result.P, result.energy, result.diagnostics))
+    history_df = pd.DataFrame(history)
+    history_df.to_csv(result_dir / f"{filename_prefix}_hf_history.csv", index=False)
+
+    display(history_df.tail(15))
+    summarize_result(label, result)
+
+    fig = plot_hf_history(history_df, f"{label} constrained HF")
+    fig.savefig(_figure_path(filename_prefix, "hf_history"), dpi=180)
+    _display_and_close(fig)
+
+    fig = plot_projector_matrix(result.P, f"{label} final projector matrix")
+    fig.savefig(_figure_path(filename_prefix, "final_projector_matrix"), dpi=180)
+    _display_and_close(fig)
+
+    fig = plot_projector_summary(result.P, f"{label} final VP/IVC maps")
+    fig.savefig(_figure_path(filename_prefix, "final_projector"), dpi=180)
+    _display_and_close(fig)
+    return result, history_df
+
+
 
 # %% [markdown]
 # ## Hartree-Fock Run Parameters
 #
 # These controls are only needed once the active space and interaction backend exist. You can change iteration counts, tolerances, seed noise, and snapshot cadence here without rebuilding the continuum band plot above.
 #
-# The seed weights implement the requested 0.8 ordered / 0.2 random projector-like mixture for VP+, VP-, and IVC initial conditions.
+# The seed weights implement the requested 0.8 ordered / 0.2 random projector-like mixture for VP+, VP-, and IVC initial conditions. The live display cadence controls how often the notebook refreshes the history table and projector plots during each HF solve.
 #
 
 # %%
 
+hf_update_every = 10
 hf_params = ContinuumHFParams(
     n_occ_per_k=1,
     max_iter=80,
@@ -329,11 +491,12 @@ hf_params = ContinuumHFParams(
     seed_random_weight=0.2,
     random_seed=7,
     store_projector_snapshots=True,
-    snapshot_interval=5,
+    snapshot_interval=hf_update_every,
     first_iteration_snapshot=True,
 )
 
 print(hf_params)
+print("hf_update_every:", hf_update_every)
 
 
 # %% [markdown]
@@ -341,7 +504,7 @@ print(hf_params)
 #
 # This cell constructs and displays the actual initial projectors for the three HF references. Each ordered VP/IVC seed is mixed with a projector-like random Slater seed using the weights in `hf_params`.
 #
-# The figures are meant to catch obvious seed mistakes before the self-consistency loop starts: VP seeds should be valley diagonal, while the IVC seed should show intervalley coherence.
+# The figures are meant to catch obvious seed mistakes before the self-consistency loop starts: VP seeds should be valley diagonal in the matrix view, while the IVC seed should show intervalley coherence in the off-diagonal panels and finite `|IVC|`.
 #
 
 # %%
@@ -351,9 +514,13 @@ P0_vp_minus, P_ordered_vp_minus, P_noise_vp_minus = noisy_initial_projector("vp_
 P0_ivc, P_ordered_ivc, P_noise_ivc = noisy_initial_projector("ivc", hf_params.random_seed + 3)
 
 for label, P0 in [("VP+ initial", P0_vp_plus), ("VP- initial", P0_vp_minus), ("IVC initial", P0_ivc)]:
-    fig = plot_projector(P0, label)
-    fig.savefig(result_dir / f"{label.lower().replace(' ', '_').replace('+', 'plus').replace('-', 'minus')}.png", dpi=180)
-    plt.show()
+    prefix = label.lower().replace(" ", "_").replace("+", "plus").replace("-", "minus")
+    fig = plot_projector_matrix(P0, f"{label} projector matrix")
+    fig.savefig(result_dir / f"{prefix}_matrix.png", dpi=180)
+    _display_and_close(fig)
+    fig = plot_projector_summary(P0, f"{label} VP/IVC maps")
+    fig.savefig(result_dir / f"{prefix}.png", dpi=180)
+    _display_and_close(fig)
 
 
 # %% [markdown]
@@ -361,26 +528,19 @@ for label, P0 in [("VP+ initial", P0_vp_plus), ("VP- initial", P0_vp_minus), ("I
 #
 # This cell runs the K-valley polarized reference. The `ValleyU1Constraint` removes intervalley density/operator blocks, and `pinned_valley="K"` keeps the Aufbau update in the VP+ sector rather than allowing momentum-by-momentum valley flips.
 #
-# The final diagnostics report both projector idempotency and self-consistency residuals. A converged reference should have an idempotent final projector and a small Aufbau residual.
+# The live callback refreshes this cell every `hf_update_every` iterations with a history tail, the 2x2 valley projector matrix, and the VP/IVC maps. The final diagnostics report both projector idempotency and self-consistency residuals.
 #
 
 # %%
 
 vp_plus_constraint = ValleyU1Constraint(active, pinned_valley="K")
-vp_plus = solve_hf(
-    backend,
+vp_plus, vp_plus_history = run_live_hf(
+    "VP+",
     P0_vp_plus,
-    hf_params,
-    constraint=vp_plus_constraint,
-    seed="vp_plus_0p8_ordered_0p2_random",
+    vp_plus_constraint,
+    "vp_plus_0p8_ordered_0p2_random",
+    "vp_plus",
 )
-summarize_result("VP+", vp_plus)
-fig = plot_hf_history(vp_plus, "VP+ constrained HF")
-fig.savefig(result_dir / "vp_plus_hf_history.png", dpi=180)
-plt.show()
-fig = plot_projector(vp_plus.P, "VP+ final projector")
-fig.savefig(result_dir / "vp_plus_final_projector.png", dpi=180)
-plt.show()
 
 
 # %% [markdown]
@@ -388,26 +548,19 @@ plt.show()
 #
 # This cell repeats the same U(1)-preserving solve in the Kprime-polarized sector. At `u_D = 0`, VP+ and VP- should become degenerate once all continuum, form-factor, and interaction conventions are sufficiently symmetric.
 #
-# If the printed energy splitting remains visible, treat it as a convention or finite-cutoff diagnostic rather than a physical displacement-field effect.
+# If the printed energy splitting remains visible, treat it as a convention or finite-cutoff diagnostic rather than a physical displacement-field effect. The live table and projector maps follow the same format as VP+.
 #
 
 # %%
 
 vp_minus_constraint = ValleyU1Constraint(active, pinned_valley="Kprime")
-vp_minus = solve_hf(
-    backend,
+vp_minus, vp_minus_history = run_live_hf(
+    "VP-",
     P0_vp_minus,
-    hf_params,
-    constraint=vp_minus_constraint,
-    seed="vp_minus_0p8_ordered_0p2_random",
+    vp_minus_constraint,
+    "vp_minus_0p8_ordered_0p2_random",
+    "vp_minus",
 )
-summarize_result("VP-", vp_minus)
-fig = plot_hf_history(vp_minus, "VP- constrained HF")
-fig.savefig(result_dir / "vp_minus_hf_history.png", dpi=180)
-plt.show()
-fig = plot_projector(vp_minus.P, "VP- final projector")
-fig.savefig(result_dir / "vp_minus_final_projector.png", dpi=180)
-plt.show()
 
 
 # %% [markdown]
@@ -415,26 +568,19 @@ plt.show()
 #
 # This cell runs the Q=0 intervalley-coherent reference with the non-Kramers T-prime constraint. The seed carries explicit K/Kprime coherence, and the constraint relates the projector at `k` to the valley-swapped complex conjugate at `-k`.
 #
-# The final idempotent projector is always reported, even when the residual says the idempotent projector is not yet a fully self-consistent HF fixed point.
+# The off-diagonal projector panels and `|IVC|` map are the main diagnostic for this run. The final idempotent projector is always reported, even when the residual says the idempotent projector is not yet a fully self-consistent HF fixed point.
 #
 
 # %%
 
 ivc_constraint = TPrimeConstraint(active)
-ivc = solve_hf(
-    backend,
+ivc, ivc_history = run_live_hf(
+    "IVC",
     P0_ivc,
-    hf_params,
-    constraint=ivc_constraint,
-    seed="ivc_0p8_ordered_0p2_random",
+    ivc_constraint,
+    "ivc_0p8_ordered_0p2_random",
+    "ivc",
 )
-summarize_result("IVC", ivc)
-fig = plot_hf_history(ivc, "IVC T-prime constrained HF")
-fig.savefig(result_dir / "ivc_hf_history.png", dpi=180)
-plt.show()
-fig = plot_projector(ivc.P, "IVC final projector")
-fig.savefig(result_dir / "ivc_final_projector.png", dpi=180)
-plt.show()
 
 
 # %% [markdown]

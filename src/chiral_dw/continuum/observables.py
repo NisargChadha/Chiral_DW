@@ -32,24 +32,43 @@ def ivc_order_parameter(P: np.ndarray, active: ContinuumActiveSpace) -> np.ndarr
     return np.trace(arr[:, :n, n:], axis1=-2, axis2=-1)
 
 
+def valley_projector_matrix(P: np.ndarray, active: ContinuumActiveSpace) -> np.ndarray:
+    """Return the traced 2x2 valley projector matrix at every momentum."""
+
+    arr = np.asarray(P, dtype=complex)
+    n = active.n_active
+    matrix = np.empty((arr.shape[0], 2, 2), dtype=complex)
+    matrix[:, 0, 0] = np.trace(arr[:, :n, :n], axis1=-2, axis2=-1)
+    matrix[:, 0, 1] = np.trace(arr[:, :n, n:], axis1=-2, axis2=-1)
+    matrix[:, 1, 0] = np.trace(arr[:, n:, :n], axis1=-2, axis2=-1)
+    matrix[:, 1, 1] = np.trace(arr[:, n:, n:], axis1=-2, axis2=-1)
+    return matrix
+
+
 def projector_maps(P: np.ndarray, active: ContinuumActiveSpace) -> dict[str, np.ndarray]:
     """Return square-grid maps used to visualize continuum HF projectors."""
 
     n_k = active.grid.n_k
     occ_k, occ_kp = valley_occupations(P, active)
     ivc = ivc_order_parameter(P, active)
+    valley_matrix = valley_projector_matrix(P, active)
     return {
         "K": occ_k.reshape(n_k, n_k),
         "Kprime": occ_kp.reshape(n_k, n_k),
         "VP": (occ_k - occ_kp).reshape(n_k, n_k),
         "IVC_abs": np.abs(ivc).reshape(n_k, n_k),
         "IVC_phase": np.angle(ivc).reshape(n_k, n_k),
+        "P_KK": np.real(valley_matrix[:, 0, 0]).reshape(n_k, n_k),
+        "P_KKprime_abs": np.abs(valley_matrix[:, 0, 1]).reshape(n_k, n_k),
+        "P_KprimeK_abs": np.abs(valley_matrix[:, 1, 0]).reshape(n_k, n_k),
+        "P_KprimeKprime": np.real(valley_matrix[:, 1, 1]).reshape(n_k, n_k),
     }
 
 
 __all__ = [
     "ivc_order_parameter",
     "projector_maps",
+    "valley_projector_matrix",
     "valley_occupations",
     "valley_polarization",
 ]

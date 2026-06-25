@@ -26,6 +26,7 @@ from chiral_dw.continuum.models import (
 from chiral_dw.continuum.observables import (
     ivc_order_parameter,
     projector_maps,
+    valley_projector_matrix,
     valley_occupations,
     valley_polarization,
 )
@@ -117,6 +118,7 @@ __all__ = [
     "taige_interaction_params",
     "taige_model_params",
     "valley_polarized_seed",
+    "valley_projector_matrix",
     "valley_occupations",
     "valley_polarization",
     "valley_swap_matrix",

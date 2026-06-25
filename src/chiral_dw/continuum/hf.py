@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
@@ -19,6 +20,8 @@ from chiral_dw.continuum.models import (
     projector_idempotency_errors,
 )
 from chiral_dw.continuum.symmetry import _fixed_per_k_aufbau
+
+HFIterationCallback = Callable[[int, np.ndarray, float, ContinuumHFDiagnostics, bool], None]
 
 
 @dataclass(frozen=True)
@@ -205,6 +208,7 @@ def solve_hf(
     *,
     constraint=None,
     seed: str = "",
+    on_iteration: HFIterationCallback | None = None,
 ) -> ContinuumHFResult:
     """Run fixed-per-k zero-temperature HF with linear density mixing."""
 
@@ -223,6 +227,7 @@ def solve_hf(
         constraint=constraint,
         iteration=0,
     )
+    energy_prev = diagnostics.energy
     n_iter = 0
     for iteration in range(1, controls.max_iter + 1):
         n_iter = iteration
@@ -267,6 +272,14 @@ def solve_hf(
                     energy=float(diagnostics.energy),
                     diagnostics=diagnostics,
                 )
+            )
+        if on_iteration is not None:
+            on_iteration(
+                iteration,
+                P.copy(),
+                float(diagnostics.energy),
+                diagnostics,
+                bool(should_snapshot),
             )
         delta_e = abs(diagnostics.energy - energy_before)
         energy_prev = diagnostics.energy

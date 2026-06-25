@@ -16,15 +16,17 @@ from chiral_dw.continuum import (
     build_symmetric_hf_references,
     convex_weights,
     mesh_inversion_map,
+    projector_maps,
     reference_diagnostics,
     rotate_valley_u1,
+    solve_hf,
     solve_reference_hf,
     symmetric_convex_hamiltonian,
     symmetric_convex_path,
     symmetric_convex_projector,
 )
 from chiral_dw.continuum.models import SymmetricHFReferences, hermitize
-from chiral_dw.continuum.seeds import valley_polarized_seed
+from chiral_dw.continuum.seeds import ivc_seed, valley_polarized_seed
 from chiral_dw.response import compute_cG, k_theta_from_projectors
 
 
@@ -119,6 +121,69 @@ def test_hf_solver_reports_idempotent_final_projectors_for_reference_states():
     assert np.real(np.trace(vp_plus.P[:, 0:1, 0:1], axis1=-2, axis2=-1).sum()) > 0.9 * bundle.active.n_k
     assert np.real(np.trace(vp_minus.P[:, 1:2, 1:2], axis1=-2, axis2=-1).sum()) > 0.9 * bundle.active.n_k
     assert ivc.diagnostics.constraint_name == "tprime"
+
+
+def test_hf_solver_iteration_callback_receives_copies_and_snapshot_flags():
+    bundle = _small_bundle()
+    active = bundle.active
+    params = ContinuumHFParams(
+        max_iter=4,
+        min_iter=4,
+        mixing_method="linear",
+        mixing=0.5,
+        tolerance=1e-30,
+        store_projector_snapshots=True,
+        first_iteration_snapshot=True,
+        snapshot_interval=2,
+    )
+    rows = []
+
+    def callback(iteration, P_iter, energy, diagnostics, is_snapshot):
+        rows.append(
+            {
+                "iteration": int(iteration),
+                "energy": float(energy),
+                "diagnostics_iteration": int(diagnostics.iteration),
+                "is_snapshot": bool(is_snapshot),
+                "trace_before_mutation": float(np.real(np.trace(P_iter, axis1=-2, axis2=-1).sum())),
+            }
+        )
+        P_iter[:] = np.nan
+
+    result = solve_hf(
+        bundle.backend,
+        valley_polarized_seed(active, "K"),
+        params,
+        constraint=ValleyU1Constraint(active, pinned_valley="K"),
+        on_iteration=callback,
+    )
+
+    assert [row["iteration"] for row in rows] == [diag.iteration for diag in result.history]
+    assert [row["diagnostics_iteration"] for row in rows] == [1, 2, 3, 4]
+    assert [row["is_snapshot"] for row in rows] == [True, True, False, True]
+    assert [snapshot.iteration for snapshot in result.snapshots] == [1, 2, 4]
+    assert all(np.isfinite(row["energy"]) for row in rows)
+    assert np.all(np.isfinite(result.P))
+
+
+def test_projector_maps_include_valley_matrix_entries_and_preserve_existing_maps():
+    bundle = _small_bundle()
+    active = bundle.active
+    vp = valley_polarized_seed(active, "K")
+    vp_maps = projector_maps(vp, active)
+
+    assert np.allclose(vp_maps["P_KK"], vp_maps["K"])
+    assert np.allclose(vp_maps["P_KprimeKprime"], vp_maps["Kprime"])
+    assert np.allclose(vp_maps["P_KK"], 1.0)
+    assert np.allclose(vp_maps["P_KprimeKprime"], 0.0)
+    assert np.allclose(vp_maps["P_KKprime_abs"], 0.0)
+    assert np.allclose(vp_maps["P_KprimeK_abs"], 0.0)
+
+    ivc = ivc_seed(active, n_occ_per_k=1)
+    ivc_maps = projector_maps(ivc, active)
+    assert np.allclose(ivc_maps["P_KKprime_abs"], ivc_maps["IVC_abs"])
+    assert np.allclose(ivc_maps["P_KprimeK_abs"], ivc_maps["IVC_abs"])
+    assert np.max(ivc_maps["P_KKprime_abs"]) > 0.0
 
 
 def _toy_refs_with_scalar_terms(n_blocks: int = 4) -> SymmetricHFReferences:
