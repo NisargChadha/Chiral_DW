@@ -4,6 +4,7 @@ from chiral_dw.config import ContinuumGridParams, ContinuumHFParams, ContinuumIn
 from chiral_dw.continuum import (
     TPrimeConstraint,
     ValleyU1Constraint,
+    active_basis_frames,
     build_continuum_bundle,
     build_symmetric_hf_references,
     chern_number_table,
@@ -15,7 +16,7 @@ from chiral_dw.continuum import (
 )
 from chiral_dw.continuum.seeds import build_seed, mix_projector_seeds
 from chiral_dw.continuum.taige import TaigeContinuumModel, coulomb_potential_mev_nm2
-from chiral_dw.response import compute_cG, k_theta_from_projectors
+from chiral_dw.response import compute_cG, k_theta_from_projectors_with_basis
 
 
 def _tiny_taige_bundle(interaction=None):
@@ -45,6 +46,9 @@ def test_taige_continuum_hamiltonian_and_active_space_are_well_formed():
     active = bundle.active
     assert active.h0.shape == (4, 2, 2)
     assert active.band_vectors.shape == (4, 2, 14, 1)
+    frames = active_basis_frames(active)
+    assert frames.shape == (4, 28, 2)
+    assert np.allclose(frames.conj().swapaxes(-1, -2) @ frames, np.eye(active.dim), atol=1e-10)
     assert bundle.bands is not None
     assert bundle.geometry is not None
 
@@ -85,11 +89,20 @@ def test_projector_like_seed_mix_preserves_trace_and_hf_snapshots_are_recorded()
     bundle = _tiny_taige_bundle()
     active = bundle.active
     ordered = build_seed("vp_plus", active)
-    noise = random_projector_like_seed(ordered, seed=4)
+    vp_constraint = ValleyU1Constraint(active)
+    noise = vp_constraint.project_density(random_projector_like_seed(ordered, seed=4))
     mixed = mix_projector_seeds(ordered, noise, ordered_weight=0.8, random_weight=0.2)
+    mixed = vp_constraint.project_density(mixed)
 
     assert np.allclose(mixed, mixed.conj().swapaxes(-1, -2))
     assert np.allclose(np.trace(mixed, axis1=-2, axis2=-1), 1.0)
+    assert np.allclose(mixed[:, : active.n_active, active.n_active :], 0.0)
+    assert np.real(np.trace(noise[:, active.n_active :, active.n_active :], axis1=-2, axis2=-1).sum()) > 0.0
+
+    ivc_constraint = TPrimeConstraint(active)
+    ivc_noise = ivc_constraint.project_density(random_projector_like_seed(build_seed("ivc", active), seed=5))
+    assert ivc_constraint.symmetry_error(ivc_noise) < 1e-12
+    assert np.allclose(np.trace(ivc_noise, axis1=-2, axis2=-1), 1.0)
 
     params = ContinuumHFParams(
         max_iter=3,
@@ -115,9 +128,11 @@ def test_tiny_taige_symmetric_response_smoke():
     refs = build_symmetric_hf_references(bundle, params)
     theta = np.linspace(0.0, np.pi, 5)
     projectors, diagnostics = symmetric_convex_path(refs, theta)
-    response = k_theta_from_projectors(projectors.reshape(5, 2, 2, 2, 2), theta)
+    response_projectors = projectors.reshape(5, 2, 2, 2, 2)
+    basis = active_basis_frames(bundle.active).reshape(2, 2, -1, bundle.active.dim)
+    response = k_theta_from_projectors_with_basis(response_projectors, theta, basis)
 
-    assert refs.vp_plus.constraint_name == ValleyU1Constraint(bundle.active, pinned_valley="K").name
+    assert refs.vp_plus.constraint_name == ValleyU1Constraint(bundle.active).name
     assert refs.ivc.constraint_name == TPrimeConstraint(bundle.active).name
     assert len(diagnostics) == 5
     assert np.all(np.isfinite(response.K))

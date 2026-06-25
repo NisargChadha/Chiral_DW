@@ -181,6 +181,8 @@ class ContinuumHFDiagnostics(BaseModel):
     indirect_gap: float
     iteration: int
     constraint_name: str | None = None
+    lambda_value: float | None = None
+    fallback_reason: str | None = None
     density_kind: Literal["mixed", "final_idempotent"] = "mixed"
     self_consistency_warning: bool = False
 
@@ -231,6 +233,10 @@ class SymmetricHFReferences:
     vp_minus: ContinuumHFResult
     ivc: ContinuumHFResult
     n_occ_per_k: int = 1
+
+    @property
+    def n_particles(self) -> float:
+        return float(self.n_occ_per_k * self.n_blocks)
 
     @property
     def H_vp_plus(self) -> np.ndarray:

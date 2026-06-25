@@ -1,10 +1,12 @@
 import numpy as np
+import pytest
 
 from chiral_dw.config import DomainWallParams, UnitsParams
 from chiral_dw.domain_wall import charge_density_radial, dtheta_dr, theta_profile
 from chiral_dw.response import (
     compute_cG,
     k_theta_from_projectors,
+    k_theta_from_projectors_with_basis,
     projector_errors,
     projector_grid_from_theta,
     rotate_projector_phi,
@@ -43,6 +45,29 @@ def test_trivial_projector_has_zero_response():
 
     assert np.allclose(result.K, 0.0, atol=1e-12)
     assert abs(result.cG) < 1e-12
+
+
+def test_embedded_response_matches_active_response_for_constant_basis():
+    n_theta = 7
+    n_k = 4
+    theta = np.linspace(0.1, np.pi - 0.1, n_theta)
+    P = np.zeros((n_theta, n_k, n_k, 2, 2), dtype=complex)
+    for it, th in enumerate(theta):
+        for i in range(n_k):
+            for j in range(n_k):
+                phase = 2.0 * np.pi * (i + 2 * j) / n_k
+                spinor = np.array(
+                    [np.cos(0.5 * th), np.exp(1j * phase) * np.sin(0.5 * th)],
+                    dtype=complex,
+                )
+                P[it, i, j] = spinor[:, None] * spinor.conj()[None, :]
+
+    basis = np.broadcast_to(np.eye(2, dtype=complex), (n_k, n_k, 2, 2)).copy()
+    active = k_theta_from_projectors(P, theta)
+    embedded = k_theta_from_projectors_with_basis(P, theta, basis)
+
+    assert np.allclose(embedded.K, active.K, atol=1e-12)
+    assert embedded.cG == pytest.approx(active.cG, abs=1e-12)
 
 
 def test_odd_k_theta_input_has_finite_cg_and_midpoint_zero():

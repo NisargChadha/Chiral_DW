@@ -10,8 +10,11 @@ from chiral_dw.config import (
     ContinuumModelParams,
 )
 from chiral_dw.continuum import (
+    ContinuumHFBackend,
+    DensityVertices,
     TPrimeConstraint,
     ValleyU1Constraint,
+    active_basis_frames,
     build_continuum_bundle,
     build_symmetric_hf_references,
     convex_weights,
@@ -25,9 +28,9 @@ from chiral_dw.continuum import (
     symmetric_convex_path,
     symmetric_convex_projector,
 )
-from chiral_dw.continuum.models import SymmetricHFReferences, hermitize
+from chiral_dw.continuum.models import SymmetricHFReferences, block_trace_product, hermitize
 from chiral_dw.continuum.seeds import ivc_seed, valley_polarized_seed
-from chiral_dw.response import compute_cG, k_theta_from_projectors
+from chiral_dw.response import compute_cG, k_theta_from_projectors_with_basis
 
 
 def _small_bundle():
@@ -36,6 +39,74 @@ def _small_bundle():
         grid=ContinuumGridParams(n_k=3),
         interaction=ContinuumInteractionParams(v0=0.2, q_shell=0, gate_distance=1.0),
     )
+
+
+def _slow_hartree(backend: ContinuumHFBackend, Q: np.ndarray) -> np.ndarray:
+    out = np.zeros_like(Q, dtype=complex)
+    for iq, ig, v in backend.hartree_channels:
+        lam = backend.lambda_blocks[iq, ig]
+        density = np.einsum("kab,kba->", lam, Q, optimize=True)
+        out += 0.5 * v * (
+            np.conj(density) * lam + density * np.swapaxes(lam.conj(), -1, -2)
+        )
+    return hermitize(out)
+
+
+def _slow_fock(backend: ContinuumHFBackend, Q: np.ndarray) -> np.ndarray:
+    out = np.zeros_like(Q, dtype=complex)
+    scale = float(backend.interaction.exchange_scale)
+    for iq in range(backend.n_q):
+        targets = backend.target_minus_q[iq]
+        for ig in range(backend.n_g):
+            v = scale * float(backend.v_over_a[iq, ig])
+            if v == 0.0:
+                continue
+            lam = backend.lambda_blocks[iq, ig]
+            for ik in range(backend.n_blocks):
+                jk = int(targets[ik])
+                out[ik] -= 0.5 * v * lam[ik] @ Q[jk] @ lam[ik].conj().T
+                out[jk] -= 0.5 * v * lam[ik].conj().T @ Q[ik] @ lam[ik]
+    return hermitize(out)
+
+
+def test_optimized_backend_matches_slow_hartree_fock_reference():
+    rng = np.random.default_rng(11)
+    h0 = np.stack(
+        [
+            np.diag([-0.3, 0.4]),
+            np.array([[0.1, 0.03], [0.03, 0.7]], dtype=complex),
+            np.diag([0.2, 0.8]),
+        ]
+    )
+    lambdas = rng.normal(size=(2, 2, 3, 2, 2)) + 1j * rng.normal(size=(2, 2, 3, 2, 2))
+    lambdas[0, 0] = np.eye(2)
+    target_minus_q = np.asarray([[0, 1, 2], [2, 0, 1]], dtype=int)
+    vertices = DensityVertices(
+        q_shifts=((0, 0), (1, 0)),
+        target_minus_q=target_minus_q,
+        q_is_zero=np.asarray([True, False]),
+        lambda_blocks=lambdas,
+        v_over_a=np.asarray([[0.2, 0.05], [0.07, 0.03]], dtype=float),
+        g_channels=((0, 0), (1, 0)),
+    )
+    backend = ContinuumHFBackend(h0, vertices, ContinuumInteractionParams())
+    raw = rng.normal(size=h0.shape) + 1j * rng.normal(size=h0.shape)
+    Q = hermitize(raw)
+
+    assert backend.tVE.shape == (backend.n_blocks * backend.dim**2, backend.n_blocks * backend.dim**2)
+    assert np.allclose(backend.hartree_hamiltonian(Q), _slow_hartree(backend, Q))
+    assert np.allclose(backend.fock_hamiltonian(Q), _slow_fock(backend, Q))
+    assert np.allclose(
+        backend.hf_hamiltonian(Q),
+        hermitize(backend.h0 + _slow_hartree(backend, Q) + _slow_fock(backend, Q)),
+    )
+    slow_hartree = 0.5 * block_trace_product(_slow_hartree(backend, Q), Q)
+    slow_fock = 0.5 * block_trace_product(_slow_fock(backend, Q), Q)
+    assert backend.energy(Q).hartree == pytest.approx(slow_hartree)
+    assert backend.energy(Q).fock == pytest.approx(slow_fock)
+
+    P, _evals, _direct, _indirect = backend.update_density(backend.h0, 3)
+    assert np.real(np.trace(P, axis1=-2, axis2=-1).sum()) == pytest.approx(3.0)
 
 
 def test_valley_u1_constraint_projects_intervalley_blocks_and_preserves_vp_seed():
@@ -118,8 +189,12 @@ def test_hf_solver_reports_idempotent_final_projectors_for_reference_states():
         assert result.diagnostics.trace_error < 1e-8
         assert np.isfinite(result.diagnostics.aufbau_residual_norm)
 
-    assert np.real(np.trace(vp_plus.P[:, 0:1, 0:1], axis1=-2, axis2=-1).sum()) > 0.9 * bundle.active.n_k
-    assert np.real(np.trace(vp_minus.P[:, 1:2, 1:2], axis1=-2, axis2=-1).sum()) > 0.9 * bundle.active.n_k
+    vp_plus_k = np.real(np.trace(vp_plus.P[:, 0:1, 0:1], axis1=-2, axis2=-1).sum())
+    vp_plus_kp = np.real(np.trace(vp_plus.P[:, 1:2, 1:2], axis1=-2, axis2=-1).sum())
+    vp_minus_k = np.real(np.trace(vp_minus.P[:, 0:1, 0:1], axis1=-2, axis2=-1).sum())
+    vp_minus_kp = np.real(np.trace(vp_minus.P[:, 1:2, 1:2], axis1=-2, axis2=-1).sum())
+    assert vp_plus_k > vp_plus_kp
+    assert vp_minus_kp > vp_minus_k
     assert ivc.diagnostics.constraint_name == "tprime"
 
 
@@ -163,6 +238,7 @@ def test_hf_solver_iteration_callback_receives_copies_and_snapshot_flags():
     assert [row["is_snapshot"] for row in rows] == [True, True, False, True]
     assert [snapshot.iteration for snapshot in result.snapshots] == [1, 2, 4]
     assert all(np.isfinite(row["energy"]) for row in rows)
+    assert all(diag.lambda_value == pytest.approx(0.5) for diag in result.history)
     assert np.all(np.isfinite(result.P))
 
 
@@ -184,6 +260,16 @@ def test_projector_maps_include_valley_matrix_entries_and_preserve_existing_maps
     assert np.allclose(ivc_maps["P_KKprime_abs"], ivc_maps["IVC_abs"])
     assert np.allclose(ivc_maps["P_KprimeK_abs"], ivc_maps["IVC_abs"])
     assert np.max(ivc_maps["P_KKprime_abs"]) > 0.0
+
+
+def test_active_basis_frames_are_orthonormal_direct_sum_frames():
+    bundle = _small_bundle()
+    active = bundle.active
+    frames = active_basis_frames(active)
+
+    assert frames.shape == (active.n_k, 4, 2)
+    overlap = frames.conj().swapaxes(-1, -2) @ frames
+    assert np.allclose(overlap, np.eye(active.dim), atol=1e-12)
 
 
 def _toy_refs_with_scalar_terms(n_blocks: int = 4) -> SymmetricHFReferences:
@@ -237,7 +323,8 @@ def test_tiny_end_to_end_continuum_response_smoke():
     theta = np.linspace(0.0, np.pi, 5)
     projectors, diagnostics = symmetric_convex_path(refs, theta)
     response_projectors = projectors.reshape(5, 3, 3, 2, 2)
-    response = k_theta_from_projectors(response_projectors, theta)
+    basis = active_basis_frames(bundle.active).reshape(3, 3, -1, bundle.active.dim)
+    response = k_theta_from_projectors_with_basis(response_projectors, theta, basis)
 
     assert projectors.shape == (5, bundle.active.n_k, 2, 2)
     assert len(diagnostics) == 5

@@ -35,7 +35,12 @@ from chiral_dw.continuum import (
     symmetric_convex_projector,
 )
 from chiral_dw.ideal_conjugate_lll import run_ideal_conjugate_lll_charge_benchmark
-from chiral_dw.response import KThetaResult, compute_cG, k_theta_from_projectors
+from chiral_dw.response import (
+    KThetaResult,
+    compute_cG,
+    k_theta_from_projectors,
+    k_theta_from_projectors_with_basis,
+)
 from chiral_dw.qhfm_benchmark import run_qhfm_charge_benchmark
 
 __all__ = [
@@ -68,6 +73,7 @@ __all__ = [
     "build_symmetric_hf_references",
     "compute_cG",
     "k_theta_from_projectors",
+    "k_theta_from_projectors_with_basis",
     "run_ideal_conjugate_lll_charge_benchmark",
     "run_continuum_symmetric_hf_workflow",
     "run_qhfm_charge_benchmark",

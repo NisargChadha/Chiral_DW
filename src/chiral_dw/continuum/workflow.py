@@ -12,13 +12,14 @@ import numpy as np
 from chiral_dw.artifacts import RunArtifact, RunManifest
 from chiral_dw.config import ChargeResponseSummary, ContinuumWorkflowParams
 from chiral_dw.continuum.builder import build_continuum_bundle
+from chiral_dw.continuum.observables import active_basis_frames
 from chiral_dw.continuum.references import (
     build_symmetric_hf_references,
     reference_diagnostics,
     symmetric_convex_path,
 )
 from chiral_dw.domain_wall import DomainWallChargeProfile, charge_density_radial
-from chiral_dw.response import KThetaResult, k_theta_from_projectors, projector_errors
+from chiral_dw.response import KThetaResult, k_theta_from_projectors_with_basis, projector_errors
 
 
 @dataclass(frozen=True)
@@ -59,7 +60,13 @@ def run_continuum_symmetric_hf_workflow(
     if bundle.grid.n_k * bundle.grid.n_k != projectors_flat.shape[1] or projectors_flat.shape[-1] != 2:
         raise ValueError("response workflow currently requires one active band per valley")
     projectors = projectors_flat.reshape(theta.size, bundle.grid.n_k, bundle.grid.n_k, 2, 2)
-    response = k_theta_from_projectors(projectors, theta)
+    basis = active_basis_frames(bundle.active).reshape(
+        bundle.grid.n_k,
+        bundle.grid.n_k,
+        -1,
+        bundle.active.dim,
+    )
+    response = k_theta_from_projectors_with_basis(projectors, theta, basis)
     r_max = max(
         2.0 * controls.domain_wall.radius,
         controls.domain_wall.radius + 8.0 * controls.domain_wall.width,

@@ -17,8 +17,6 @@ from chiral_dw.continuum.models import (
     ContinuumHFResult,
     ReferenceHamiltonianDiagnostics,
     SymmetricHFReferences,
-    VALLEY_K,
-    VALLEY_KPRIME,
     hermitize,
     projector_idempotency_errors,
 )
@@ -51,12 +49,16 @@ def solve_reference_hf(
     )
     if controls.seed_random_weight > 0.0:
         P_noise = random_projector_like_seed(P0, seed=controls.random_seed)
+        if constraint is not None:
+            P_noise = constraint.project_density(P_noise)
         P0 = mix_projector_seeds(
             P0,
             P_noise,
             ordered_weight=controls.seed_ordered_weight,
             random_weight=controls.seed_random_weight,
         )
+        if constraint is not None:
+            P0 = constraint.project_density(P0)
     return solve_hf(bundle.backend, P0, controls, constraint=constraint, seed=seed_name)
 
 
@@ -68,8 +70,8 @@ def build_symmetric_hf_references(
 
     hf_params = params or ContinuumHFParams()
     work_bundle = bundle or build_continuum_bundle()
-    vp_plus_constraint = ValleyU1Constraint(work_bundle.active, pinned_valley=VALLEY_K)
-    vp_minus_constraint = ValleyU1Constraint(work_bundle.active, pinned_valley=VALLEY_KPRIME)
+    vp_plus_constraint = ValleyU1Constraint(work_bundle.active)
+    vp_minus_constraint = ValleyU1Constraint(work_bundle.active)
     tprime_constraint = TPrimeConstraint(work_bundle.active)
     vp_plus = solve_reference_hf(
         work_bundle,

@@ -24,6 +24,7 @@ from chiral_dw.continuum.models import (
     SymmetricHFReferences,
 )
 from chiral_dw.continuum.observables import (
+    active_basis_frames,
     ivc_order_parameter,
     projector_maps,
     valley_projector_matrix,
@@ -89,6 +90,7 @@ __all__ = [
     "TaigeBandStructure",
     "TaigeContinuumModel",
     "ValleyU1Constraint",
+    "active_basis_frames",
     "build_active_space",
     "build_continuum_bundle",
     "build_density_vertices",

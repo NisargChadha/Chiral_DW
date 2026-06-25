@@ -1,4 +1,4 @@
-"""Native zero-temperature fixed-occupation continuum Hartree-Fock."""
+"""Native optimized continuum Hartree-Fock backend and solver."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from chiral_dw.continuum.models import (
     hermitize,
     projector_idempotency_errors,
 )
-from chiral_dw.continuum.symmetry import _fixed_per_k_aufbau
+from chiral_dw.continuum.symmetry import _fixed_per_k_aufbau, _global_aufbau
 
 HFIterationCallback = Callable[[int, np.ndarray, float, ContinuumHFDiagnostics, bool], None]
 
@@ -35,7 +35,7 @@ class EnergyComponents:
 
 
 class ContinuumHFBackend:
-    """Small block HF backend using native projected density vertices."""
+    """TMD_HF-style optimized block HF backend for native continuum vertices."""
 
     def __init__(
         self,
@@ -47,69 +47,139 @@ class ContinuumHFBackend:
         if self.h0.ndim != 3 or self.h0.shape[-1] != self.h0.shape[-2]:
             raise ValueError("h0 must have shape (n_blocks, dim, dim)")
         self.n_blocks, self.dim, _ = self.h0.shape
+        self.n_total = self.n_blocks * self.dim
         self.vertices = vertices
         self.interaction = interaction or ContinuumInteractionParams()
         self.lambda_blocks = np.asarray(vertices.lambda_blocks, dtype=complex)
-        self.target_minus_q = np.asarray(vertices.target_minus_q, dtype=int)
-        self.q_is_zero = np.asarray(vertices.q_is_zero, dtype=bool)
-        self.v_over_a = np.asarray(vertices.v_over_a, dtype=float)
+        if self.lambda_blocks.ndim != 5:
+            raise ValueError("lambda_blocks must have shape (n_q, n_g, n_blocks, dim, dim)")
         if self.lambda_blocks.shape[2:] != self.h0.shape:
             raise ValueError("density vertices and h0 have incompatible shapes")
         self.n_q, self.n_g = self.lambda_blocks.shape[:2]
+        self.target_minus_q = np.asarray(vertices.target_minus_q, dtype=int)
+        if self.target_minus_q.shape != (self.n_q, self.n_blocks):
+            raise ValueError("target_minus_q must have shape (n_q, n_blocks)")
+        self.q_is_zero = np.asarray(vertices.q_is_zero, dtype=bool)
+        if self.q_is_zero.shape != (self.n_q,):
+            raise ValueError("q_is_zero must have shape (n_q,)")
+        self.v_over_a = np.asarray(vertices.v_over_a, dtype=float)
+        if self.v_over_a.shape != (self.n_q, self.n_g):
+            raise ValueError("v_over_a must have shape (n_q, n_g)")
+        self.p_ref = np.zeros_like(self.h0, dtype=complex)
+        self.hartree_channels = self._find_hartree_channels()
+        self.tVE = self._build_exchange_tve()
 
     def as_block_density(self, P: np.ndarray) -> np.ndarray:
         arr = np.asarray(P, dtype=complex)
-        if arr.shape != self.h0.shape:
-            raise ValueError(f"density must have shape {self.h0.shape}, got {arr.shape}")
-        return hermitize(arr)
+        if arr.shape == self.h0.shape:
+            return hermitize(arr)
+        if arr.shape == (self.n_total, self.n_total):
+            out = np.empty_like(self.h0)
+            for ik in range(self.n_blocks):
+                start = ik * self.dim
+                out[ik] = arr[start : start + self.dim, start : start + self.dim]
+            return hermitize(out)
+        raise ValueError(
+            f"density must have shape {self.h0.shape} or {(self.n_total, self.n_total)}; "
+            f"got {arr.shape}"
+        )
 
-    def hartree_hamiltonian(self, P: np.ndarray) -> np.ndarray:
-        Q = self.as_block_density(P)
-        out = np.zeros_like(Q, dtype=complex)
-        if self.interaction.hartree_scale == 0.0:
-            return out
+    def _find_hartree_channels(self) -> list[tuple[int, int, float]]:
+        channels: list[tuple[int, int, float]] = []
+        scale = float(self.interaction.hartree_scale)
+        if scale == 0.0:
+            return channels
         for iq in range(self.n_q):
-            if self.q_is_zero[iq] and self.interaction.q0_hartree == "omit_uniform":
+            if not bool(self.q_is_zero[iq]):
                 continue
             for ig in range(self.n_g):
-                v = float(self.v_over_a[iq, ig]) * float(self.interaction.hartree_scale)
-                if v == 0.0:
+                if (
+                    self.interaction.q0_hartree == "omit_uniform"
+                    and self._is_uniform_channel(iq, ig)
+                ):
                     continue
-                lam = self.lambda_blocks[iq, ig]
-                density = np.einsum("kab,kba->", lam, Q, optimize=True)
-                out += 0.5 * v * (
-                    np.conj(density) * lam + density * np.swapaxes(lam.conj(), -1, -2)
-                )
+                v = scale * float(self.v_over_a[iq, ig])
+                if v != 0.0:
+                    channels.append((iq, ig, v))
+        return channels
+
+    def _is_uniform_channel(self, iq: int, ig: int) -> bool:
+        if self.vertices.q_norm_nm_inv is not None:
+            return bool(float(self.vertices.q_norm_nm_inv[int(iq), int(ig)]) < 1e-12)
+        q = self.vertices.q_shifts[int(iq)]
+        g = self.vertices.g_channels[int(ig)]
+        return int(q[0]) + int(g[0]) == 0 and int(q[1]) + int(g[1]) == 0
+
+    def _build_exchange_tve(self) -> np.ndarray:
+        block_dim = self.dim * self.dim
+        size = self.n_blocks * block_dim
+        tVE = np.zeros((size, size), dtype=complex)
+        scale = float(self.interaction.exchange_scale)
+        if scale == 0.0:
+            return tVE
+        local = np.arange(block_dim)
+        block_rows = np.arange(self.n_blocks)[:, None] * block_dim + local[None, :]
+        for iq in range(self.n_q):
+            target_rows = self.target_minus_q[iq, :, None] * block_dim + local[None, :]
+            v = 0.5 * scale * self.v_over_a[iq]
+            if not np.any(v):
+                continue
+            lam_q = self.lambda_blocks[iq]
+            forward = np.einsum(
+                "g,gkac,gkbd->kabcd",
+                v,
+                lam_q,
+                np.conj(lam_q),
+                optimize=True,
+            ).reshape(self.n_blocks, block_dim, block_dim)
+            reverse = np.einsum(
+                "g,gkca,gkdb->kabcd",
+                v,
+                np.conj(lam_q),
+                lam_q,
+                optimize=True,
+            ).reshape(self.n_blocks, block_dim, block_dim)
+            tVE[block_rows[:, :, None], target_rows[:, None, :]] += forward
+            tVE[target_rows[:, :, None], block_rows[:, None, :]] += reverse
+        return 0.5 * (tVE + tVE.conj().T)
+
+    def hartree_hamiltonian(self, Q: np.ndarray) -> np.ndarray:
+        density = self.as_block_density(Q)
+        out = np.zeros_like(density, dtype=complex)
+        for iq, ig, v in self.hartree_channels:
+            lam = self.lambda_blocks[iq, ig]
+            rho = np.einsum("kab,kba->", lam, density, optimize=True)
+            out += 0.5 * v * (np.conj(rho) * lam + rho * np.swapaxes(lam.conj(), -1, -2))
         return hermitize(out)
 
-    def fock_hamiltonian(self, P: np.ndarray) -> np.ndarray:
-        Q = self.as_block_density(P)
-        out = np.zeros_like(Q, dtype=complex)
-        if self.interaction.exchange_scale == 0.0:
-            return out
-        for iq in range(self.n_q):
-            targets = self.target_minus_q[iq]
-            for ig in range(self.n_g):
-                v = float(self.v_over_a[iq, ig]) * float(self.interaction.exchange_scale)
-                if v == 0.0:
-                    continue
-                lam = self.lambda_blocks[iq, ig]
-                for ik in range(self.n_blocks):
-                    jk = int(targets[ik])
-                    out[ik] -= v * lam[ik] @ Q[jk] @ lam[ik].conj().T
+    def fock_hamiltonian(self, Q: np.ndarray) -> np.ndarray:
+        density = self.as_block_density(Q)
+        out = -np.reshape(self.tVE @ np.reshape(density, (-1,)), density.shape)
         return hermitize(out)
 
     def hf_hamiltonian(self, P: np.ndarray) -> np.ndarray:
-        Q = self.as_block_density(P)
+        density = self.as_block_density(P)
+        Q = density - self.p_ref
         return hermitize(self.h0 + self.hartree_hamiltonian(Q) + self.fock_hamiltonian(Q))
 
+    def interaction_components(self, Q: np.ndarray) -> tuple[float, float]:
+        density = self.as_block_density(Q)
+        hartree = 0.0
+        for iq, ig, v in self.hartree_channels:
+            lam = self.lambda_blocks[iq, ig]
+            rho = np.einsum("kab,kba->", lam, density, optimize=True)
+            hartree += 0.5 * v * float(np.real(rho * np.conj(rho)))
+        fock = 0.5 * block_trace_product(self.fock_hamiltonian(density), density)
+        return hartree, fock
+
+    def interaction_energy(self, Q: np.ndarray) -> float:
+        hartree, fock = self.interaction_components(Q)
+        return float(hartree + fock)
+
     def energy(self, P: np.ndarray) -> EnergyComponents:
-        Q = self.as_block_density(P)
-        one_body = block_trace_product(self.h0, Q)
-        Hh = self.hartree_hamiltonian(Q)
-        Hf = self.fock_hamiltonian(Q)
-        hartree = 0.5 * block_trace_product(Hh, Q)
-        fock = 0.5 * block_trace_product(Hf, Q)
+        density = self.as_block_density(P)
+        one_body = block_trace_product(self.h0, density)
+        hartree, fock = self.interaction_components(density - self.p_ref)
         return EnergyComponents(
             total=float(one_body + hartree + fock),
             one_body=float(one_body),
@@ -117,28 +187,52 @@ class ContinuumHFBackend:
             fock=float(fock),
         )
 
-    def interaction_energy(self, P: np.ndarray) -> float:
-        """Return the quadratic Hartree-Fock interaction energy of a density."""
-
-        Q = self.as_block_density(P)
-        Hh = self.hartree_hamiltonian(Q)
-        Hf = self.fock_hamiltonian(Q)
-        return float(0.5 * block_trace_product(Hh + Hf, Q))
+    def total_energy(self, P: np.ndarray) -> float:
+        return self.energy(P).total
 
     def update_density(
+        self,
+        H: np.ndarray,
+        n_particles: float,
+        constraint=None,
+    ) -> tuple[np.ndarray, np.ndarray, float, float]:
+        blocks = hermitize(np.asarray(H, dtype=complex))
+        if blocks.shape != self.h0.shape:
+            raise ValueError("H has the wrong shape")
+        if constraint is not None and hasattr(constraint, "update_density_global"):
+            return constraint.update_density_global(blocks, n_particles)
+        if constraint is not None:
+            blocks = constraint.project_operator(blocks)
+        P, evals, direct, indirect = _global_aufbau(blocks, n_particles)
+        if constraint is not None:
+            P = constraint.project_density(P)
+        return P, evals, direct, indirect
+
+    def update_density_per_k(
         self,
         H: np.ndarray,
         n_occ_per_k: int,
         constraint=None,
     ) -> tuple[np.ndarray, np.ndarray, float, float]:
+        blocks = hermitize(np.asarray(H, dtype=complex))
+        if blocks.shape != self.h0.shape:
+            raise ValueError("H has the wrong shape")
         if constraint is not None and hasattr(constraint, "update_density"):
-            return constraint.update_density(H, n_occ_per_k)
-        return _fixed_per_k_aufbau(H, n_occ_per_k)
+            return constraint.update_density(blocks, n_occ_per_k)
+        if constraint is not None:
+            blocks = constraint.project_operator(blocks)
+        return _fixed_per_k_aufbau(blocks, n_occ_per_k)
 
 
 def _commutator_norm(H: np.ndarray, P: np.ndarray) -> float:
-    comm = H @ P - P @ H
+    comm = np.einsum("kab,kbc->kac", H, P, optimize=True) - np.einsum(
+        "kab,kbc->kac", P, H, optimize=True
+    )
     return float(np.linalg.norm(comm))
+
+
+def _expected_trace(backend: ContinuumHFBackend, params: ContinuumHFParams) -> float:
+    return float(backend.n_blocks * params.n_occ_per_k)
 
 
 def _choose_oda_lambda(s: float, c: float, lambda_min: float) -> tuple[float, str | None]:
@@ -162,40 +256,45 @@ def compute_hf_diagnostics(
     energy_prev: float | None = None,
     iteration: int = 0,
     density_kind: Literal["mixed", "final_idempotent"] = "mixed",
+    lambda_value: float | None = None,
+    fallback_reason: str | None = None,
 ) -> ContinuumHFDiagnostics:
     """Compute scalar diagnostics for one density."""
 
-    H = backend.hf_hamiltonian(P)
+    density = backend.as_block_density(P)
+    H = backend.hf_hamiltonian(density)
     H_projected = constraint.project_operator(H) if constraint is not None else H
-    P_aufbau, _evals, direct, indirect = backend.update_density(
+    expected_trace = _expected_trace(backend, params)
+    P_aufbau, _evals, direct, indirect = backend.update_density_per_k(
         H_projected,
         params.n_occ_per_k,
         constraint,
     )
-    energy = backend.energy(P).total
-    idem_fro, idem_max = projector_idempotency_errors(P)
-    trace = np.trace(P, axis1=-2, axis2=-1)
-    expected_trace = backend.n_blocks * params.n_occ_per_k
-    residual = float(np.linalg.norm(P - P_aufbau))
+    energy = backend.energy(density).total
+    idem_fro, idem_max = projector_idempotency_errors(density)
+    trace = np.trace(density, axis1=-2, axis2=-1)
+    residual = float(np.linalg.norm(density - P_aufbau))
     constraint_error = (
-        float(constraint.symmetry_error(P)) if constraint is not None else 0.0
+        float(constraint.symmetry_error(density)) if constraint is not None else 0.0
     )
     return ContinuumHFDiagnostics(
         energy=float(energy),
         delta_energy=float("nan") if energy_prev is None else float(energy - energy_prev),
         delta_P=float("nan")
         if P_prev is None
-        else float(np.linalg.norm(P - backend.as_block_density(P_prev))),
+        else float(np.linalg.norm(density - backend.as_block_density(P_prev))),
         idempotency_error_fro=idem_fro,
         idempotency_error_max=idem_max,
         constraint_error=constraint_error,
         aufbau_residual_norm=residual,
-        commutator_norm=_commutator_norm(H_projected, P),
+        commutator_norm=_commutator_norm(H_projected, density),
         trace_error=float(abs(np.real(np.sum(trace)) - expected_trace)),
         direct_gap_min=float(direct),
         indirect_gap=float(indirect),
         iteration=int(iteration),
         constraint_name=getattr(constraint, "name", None) if constraint is not None else None,
+        lambda_value=lambda_value,
+        fallback_reason=fallback_reason,
         density_kind=density_kind,
         self_consistency_warning=bool(residual > params.final_residual_tolerance),
     )
@@ -210,16 +309,16 @@ def solve_hf(
     seed: str = "",
     on_iteration: HFIterationCallback | None = None,
 ) -> ContinuumHFResult:
-    """Run fixed-per-k zero-temperature HF with linear density mixing."""
+    """Run zero-temperature fixed-per-k HF with TMD_HF-style ODA mixing."""
 
     controls = params or ContinuumHFParams()
+    energy_tol = controls.energy_tolerance
     P = backend.as_block_density(P_init)
     if constraint is not None:
         P = constraint.project_density(P)
     history: list[ContinuumHFDiagnostics] = []
     snapshots: list[ContinuumHFIterationSnapshot] = []
     converged = False
-    energy_prev: float | None = None
     diagnostics = compute_hf_diagnostics(
         backend,
         P,
@@ -227,29 +326,31 @@ def solve_hf(
         constraint=constraint,
         iteration=0,
     )
-    energy_prev = diagnostics.energy
+    energy = diagnostics.energy
     n_iter = 0
     for iteration in range(1, controls.max_iter + 1):
         n_iter = iteration
-        H = backend.hf_hamiltonian(P)
-        H_projected = constraint.project_operator(H) if constraint is not None else H
-        P_next, _evals, _direct, _indirect = backend.update_density(
+        P_prev = P
+        energy_prev = energy
+        H_prev = backend.hf_hamiltonian(P_prev)
+        H_projected = constraint.project_operator(H_prev) if constraint is not None else H_prev
+        P_aufbau, _evals, _direct, _indirect = backend.update_density_per_k(
             H_projected,
             controls.n_occ_per_k,
             constraint,
         )
-        P_prev = P
-        energy_before = backend.energy(P_prev).total
+        delta = hermitize(P_aufbau - P_prev)
+        fallback_reason = None
         if controls.mixing_method == "oda":
-            delta = hermitize(P_next - P_prev)
             s = block_trace_product(H_projected, delta)
             c = 2.0 * backend.interaction_energy(delta)
-            mix, _fallback = _choose_oda_lambda(s, c, controls.oda_lambda_min)
+            mix, fallback_reason = _choose_oda_lambda(s, c, controls.oda_lambda_min)
         else:
             mix = float(controls.mixing)
-        P = hermitize(P_prev + mix * (P_next - P_prev))
+        P = hermitize(P_prev + mix * delta)
         if constraint is not None:
             P = constraint.project_density(P)
+        energy = backend.energy(P).total
         diagnostics = compute_hf_diagnostics(
             backend,
             P,
@@ -258,6 +359,8 @@ def solve_hf(
             P_prev=P_prev,
             energy_prev=energy_prev,
             iteration=iteration,
+            lambda_value=float(mix),
+            fallback_reason=fallback_reason,
         )
         history.append(diagnostics)
         should_snapshot = controls.store_projector_snapshots and (
@@ -281,21 +384,20 @@ def solve_hf(
                 diagnostics,
                 bool(should_snapshot),
             )
-        delta_e = abs(diagnostics.energy - energy_before)
-        energy_prev = diagnostics.energy
         if (
             iteration >= controls.min_iter
+            and diagnostics.commutator_norm < controls.tolerance
             and diagnostics.aufbau_residual_norm < controls.tolerance
             and diagnostics.constraint_error < controls.tolerance
             and diagnostics.trace_error < controls.tolerance
-            and delta_e < controls.energy_tolerance
+            and abs(diagnostics.delta_energy) < energy_tol
         ):
             converged = True
             break
 
     H_mixed = backend.hf_hamiltonian(P)
     H_projected = constraint.project_operator(H_mixed) if constraint is not None else H_mixed
-    P_final, _evals, _direct, _indirect = backend.update_density(
+    P_final, _evals, _direct, _indirect = backend.update_density_per_k(
         H_projected,
         controls.n_occ_per_k,
         constraint,

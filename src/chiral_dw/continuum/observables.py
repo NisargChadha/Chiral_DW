@@ -7,6 +7,20 @@ import numpy as np
 from chiral_dw.continuum.models import ContinuumActiveSpace
 
 
+def active_basis_frames(active: ContinuumActiveSpace) -> np.ndarray:
+    """Return direct-sum Bloch basis frames for embedded response calculations."""
+
+    vectors = np.asarray(active.band_vectors, dtype=complex)
+    if vectors.ndim != 4 or vectors.shape[0] != active.n_k or vectors.shape[1] != 2:
+        raise ValueError("active.band_vectors must have shape (n_k,2,full_valley_dim,n_active)")
+    valley_dim = vectors.shape[2]
+    frames = np.zeros((active.n_k, 2 * valley_dim, active.dim), dtype=complex)
+    n = active.n_active
+    frames[:, :valley_dim, :n] = vectors[:, 0]
+    frames[:, valley_dim:, n:] = vectors[:, 1]
+    return frames
+
+
 def valley_occupations(P: np.ndarray, active: ContinuumActiveSpace) -> tuple[np.ndarray, np.ndarray]:
     """Return per-k K and Kprime occupations."""
 
@@ -66,6 +80,7 @@ def projector_maps(P: np.ndarray, active: ContinuumActiveSpace) -> dict[str, np.
 
 
 __all__ = [
+    "active_basis_frames",
     "ivc_order_parameter",
     "projector_maps",
     "valley_projector_matrix",

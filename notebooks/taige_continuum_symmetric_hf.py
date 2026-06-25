@@ -56,6 +56,7 @@ from chiral_dw.continuum import (
     SymmetricHFReferences,
     TPrimeConstraint,
     ValleyU1Constraint,
+    active_basis_frames,
     build_continuum_bundle,
     build_seed,
     chern_number_table,
@@ -71,7 +72,7 @@ from chiral_dw.continuum import (
     taige_model_params,
 )
 from chiral_dw.domain_wall import charge_density_radial
-from chiral_dw.response import k_theta_from_projectors
+from chiral_dw.response import k_theta_from_projectors_with_basis
 
 plt.rcParams.update({"figure.dpi": 120})
 
@@ -233,7 +234,7 @@ print("q=0 identity error:", float(q0_identity_error))
 #
 # These helper functions are used by the HF cells below. They do not run HF or change the model; they only define common plots, seed construction, live iteration tables, and diagnostic summaries so the three reference solves have the same presentation.
 #
-# The projector is shown in two complementary ways: a literal valley-space matrix view (`P_KK`, `|P_KKprime|`, `|P_KprimeK|`, `P_KprimeKprime`) and the compact occupation/order-parameter view (`K`, `Kprime`, `VP`, `|IVC|`).
+# The projector diagnostic combines a literal valley-space matrix view (`P_KK`, `|P_KKprime|`, `|P_KprimeK|`, `P_KprimeKprime`) with the two order-parameter maps that are most useful while HF is running. Fixed color limits make iteration-to-iteration comparisons meaningful.
 #
 
 # %%
@@ -247,17 +248,19 @@ def _display_and_close(fig):
     plt.close(fig)
 
 
-def plot_projector_summary(P, title):
+def plot_projector_diagnostics(P, title):
     maps = projector_maps(P, active)
-    fig, axes = plt.subplots(1, 4, figsize=(12, 3.2), constrained_layout=True)
+    fig, axes = plt.subplots(3, 2, figsize=(9.2, 10.2), constrained_layout=True)
     specs = [
-        ("K occupation", maps["K"], "viridis"),
-        ("Kprime occupation", maps["Kprime"], "viridis"),
-        ("valley polarization", maps["VP"], "coolwarm"),
-        ("|IVC|", maps["IVC_abs"], "magma"),
+        (axes[0, 0], "P_KK", maps["P_KK"], "viridis", 0.0, 1.0),
+        (axes[0, 1], "|P_KKprime|", maps["P_KKprime_abs"], "viridis", 0.0, 1.0),
+        (axes[1, 0], "|P_KprimeK|", maps["P_KprimeK_abs"], "viridis", 0.0, 1.0),
+        (axes[1, 1], "P_KprimeKprime", maps["P_KprimeKprime"], "viridis", 0.0, 1.0),
+        (axes[2, 0], "valley polarization", maps["VP"], "coolwarm", -1.0, 1.0),
+        (axes[2, 1], "|IVC|", maps["IVC_abs"], "viridis", 0.0, 0.5 * active.n_active),
     ]
-    for ax, (label, values, cmap) in zip(axes, specs):
-        image = ax.imshow(values, origin="lower", cmap=cmap)
+    for ax, label, values, cmap, vmin, vmax in specs:
+        image = ax.imshow(values, origin="lower", cmap=cmap, vmin=vmin, vmax=vmax)
         ax.set_title(label)
         ax.set_xlabel("k2")
         ax.set_ylabel("k1")
@@ -266,32 +269,7 @@ def plot_projector_summary(P, title):
     return fig
 
 
-def plot_projector_matrix(P, title):
-    maps = projector_maps(P, active)
-    fig, axes = plt.subplots(2, 2, figsize=(7.8, 6.8), constrained_layout=True)
-    diag_vmax = max(1.0, float(np.nanmax(maps["P_KK"])), float(np.nanmax(maps["P_KprimeKprime"])))
-    offdiag_vmax = max(
-        1e-12,
-        float(np.nanmax(maps["P_KKprime_abs"])),
-        float(np.nanmax(maps["P_KprimeK_abs"])),
-    )
-    specs = [
-        ("P_KK", maps["P_KK"], "viridis", diag_vmax),
-        ("|P_KKprime|", maps["P_KKprime_abs"], "magma", offdiag_vmax),
-        ("|P_KprimeK|", maps["P_KprimeK_abs"], "magma", offdiag_vmax),
-        ("P_KprimeKprime", maps["P_KprimeKprime"], "viridis", diag_vmax),
-    ]
-    for ax, (label, values, cmap, vmax) in zip(axes.ravel(), specs):
-        image = ax.imshow(values, origin="lower", cmap=cmap, vmin=0.0, vmax=vmax)
-        ax.set_title(label)
-        ax.set_xlabel("k2")
-        ax.set_ylabel("k1")
-        fig.colorbar(image, ax=ax, shrink=0.78)
-    fig.suptitle(title)
-    return fig
-
-
-def noisy_initial_projector(seed_name, rng_seed):
+def noisy_initial_projector(seed_name, rng_seed, constraint):
     ordered = build_seed(
         seed_name,
         active,
@@ -300,19 +278,39 @@ def noisy_initial_projector(seed_name, rng_seed):
         ivc_phase=hf_params.ivc_phase,
         random_seed_value=rng_seed,
     )
+    if constraint is not None:
+        ordered = constraint.project_density(ordered)
     noise = random_projector_like_seed(ordered, seed=rng_seed)
+    if constraint is not None:
+        noise = constraint.project_density(noise)
     mixed = mix_projector_seeds(
         ordered,
         noise,
         ordered_weight=hf_params.seed_ordered_weight,
         random_weight=hf_params.seed_random_weight,
     )
+    if constraint is not None:
+        mixed = constraint.project_density(mixed)
     return mixed, ordered, noise
 
 
 def projector_order_parameters(P):
     maps = projector_maps(P, active)
     return {
+        "mean_VP": float(np.mean(maps["VP"])),
+        "mean_abs_IVC": float(np.mean(maps["IVC_abs"])),
+        "max_abs_IVC": float(np.max(maps["IVC_abs"])),
+    }
+
+
+def seed_diagnostics_row(label, P, constraint):
+    maps = projector_maps(P, active)
+    return {
+        "seed": label,
+        "trace": float(np.real(np.trace(P, axis1=-2, axis2=-1).sum())),
+        "constraint_error": 0.0 if constraint is None else float(constraint.symmetry_error(P)),
+        "mean_K": float(np.mean(maps["K"])),
+        "mean_Kprime": float(np.mean(maps["Kprime"])),
         "mean_VP": float(np.mean(maps["VP"])),
         "mean_abs_IVC": float(np.mean(maps["IVC_abs"])),
         "max_abs_IVC": float(np.max(maps["IVC_abs"])),
@@ -334,6 +332,8 @@ def hf_history_row(iteration, P, energy, diagnostics):
         "constraint_error": float(diagnostics.constraint_error),
         "direct_gap": float(diagnostics.direct_gap_min),
         "indirect_gap": float(diagnostics.indirect_gap),
+        "lambda": np.nan if diagnostics.lambda_value is None else float(diagnostics.lambda_value),
+        "fallback": "" if diagnostics.fallback_reason is None else diagnostics.fallback_reason,
         "density_kind": diagnostics.density_kind,
         **order,
     }
@@ -430,12 +430,8 @@ def run_live_hf(label, P0, constraint, seed, filename_prefix):
             history_df = pd.DataFrame(history)
             display(history_df.tail(12))
 
-            fig = plot_projector_matrix(P_iter, f"{label} projector matrix after iteration {iteration}")
-            fig.savefig(_figure_path(filename_prefix, f"projector_matrix_iter_{iteration:04d}"), dpi=180)
-            _display_and_close(fig)
-
-            fig = plot_projector_summary(P_iter, f"{label} VP/IVC maps after iteration {iteration}")
-            fig.savefig(_figure_path(filename_prefix, f"order_maps_iter_{iteration:04d}"), dpi=180)
+            fig = plot_projector_diagnostics(P_iter, f"{label} projector after iteration {iteration}")
+            fig.savefig(_figure_path(filename_prefix, f"projector_iter_{iteration:04d}"), dpi=180)
             _display_and_close(fig)
 
     result = solve_hf(
@@ -457,11 +453,7 @@ def run_live_hf(label, P0, constraint, seed, filename_prefix):
     fig.savefig(_figure_path(filename_prefix, "hf_history"), dpi=180)
     _display_and_close(fig)
 
-    fig = plot_projector_matrix(result.P, f"{label} final projector matrix")
-    fig.savefig(_figure_path(filename_prefix, "final_projector_matrix"), dpi=180)
-    _display_and_close(fig)
-
-    fig = plot_projector_summary(result.P, f"{label} final VP/IVC maps")
+    fig = plot_projector_diagnostics(result.P, f"{label} final projector")
     fig.savefig(_figure_path(filename_prefix, "final_projector"), dpi=180)
     _display_and_close(fig)
     return result, history_df
@@ -481,7 +473,7 @@ def run_live_hf(label, P0, constraint, seed, filename_prefix):
 hf_update_every = 10
 hf_params = ContinuumHFParams(
     n_occ_per_k=1,
-    max_iter=80,
+    max_iter=100,
     min_iter=3,
     mixing_method="oda",
     mixing=0.45,
@@ -502,23 +494,43 @@ print("hf_update_every:", hf_update_every)
 # %% [markdown]
 # ## Initial Noisy Projectors
 #
-# This cell constructs and displays the actual initial projectors for the three HF references. Each ordered VP/IVC seed is mixed with a projector-like random Slater seed using the weights in `hf_params`.
+# This cell constructs and displays the actual initial projectors for the three HF references. Each ordered VP/IVC seed is mixed with a projector-like random Slater seed using the weights in `hf_params`, then projected into the same symmetry channel used by the corresponding HF solve.
 #
-# The figures are meant to catch obvious seed mistakes before the self-consistency loop starts: VP seeds should be valley diagonal in the matrix view, while the IVC seed should show intervalley coherence in the off-diagonal panels and finite `|IVC|`.
+# The figures and table are meant to catch obvious seed mistakes before the self-consistency loop starts: VP seeds should have zero intervalley blocks but may have diagonal occupation in both valleys, while the IVC seed should show intervalley coherence in the off-diagonal panels and finite `|IVC|`.
 #
 
 # %%
 
-P0_vp_plus, P_ordered_vp_plus, P_noise_vp_plus = noisy_initial_projector("vp_plus", hf_params.random_seed + 1)
-P0_vp_minus, P_ordered_vp_minus, P_noise_vp_minus = noisy_initial_projector("vp_minus", hf_params.random_seed + 2)
-P0_ivc, P_ordered_ivc, P_noise_ivc = noisy_initial_projector("ivc", hf_params.random_seed + 3)
+vp_plus_constraint = ValleyU1Constraint(active)
+vp_minus_constraint = ValleyU1Constraint(active)
+ivc_constraint = TPrimeConstraint(active)
+
+P0_vp_plus, P_ordered_vp_plus, P_noise_vp_plus = noisy_initial_projector(
+    "vp_plus",
+    hf_params.random_seed + 1,
+    vp_plus_constraint,
+)
+P0_vp_minus, P_ordered_vp_minus, P_noise_vp_minus = noisy_initial_projector(
+    "vp_minus",
+    hf_params.random_seed + 2,
+    vp_minus_constraint,
+)
+P0_ivc, P_ordered_ivc, P_noise_ivc = noisy_initial_projector(
+    "ivc",
+    hf_params.random_seed + 3,
+    ivc_constraint,
+)
+
+seed_rows = [
+    seed_diagnostics_row("VP+ initial", P0_vp_plus, vp_plus_constraint),
+    seed_diagnostics_row("VP- initial", P0_vp_minus, vp_minus_constraint),
+    seed_diagnostics_row("IVC initial", P0_ivc, ivc_constraint),
+]
+display(pd.DataFrame(seed_rows))
 
 for label, P0 in [("VP+ initial", P0_vp_plus), ("VP- initial", P0_vp_minus), ("IVC initial", P0_ivc)]:
     prefix = label.lower().replace(" ", "_").replace("+", "plus").replace("-", "minus")
-    fig = plot_projector_matrix(P0, f"{label} projector matrix")
-    fig.savefig(result_dir / f"{prefix}_matrix.png", dpi=180)
-    _display_and_close(fig)
-    fig = plot_projector_summary(P0, f"{label} VP/IVC maps")
+    fig = plot_projector_diagnostics(P0, f"{label} projector")
     fig.savefig(result_dir / f"{prefix}.png", dpi=180)
     _display_and_close(fig)
 
@@ -526,14 +538,13 @@ for label, P0 in [("VP+ initial", P0_vp_plus), ("VP- initial", P0_vp_minus), ("I
 # %% [markdown]
 # ## VP+ Valley-U(1) HF
 #
-# This cell runs the K-valley polarized reference. The `ValleyU1Constraint` removes intervalley density/operator blocks, and `pinned_valley="K"` keeps the Aufbau update in the VP+ sector rather than allowing momentum-by-momentum valley flips.
+# This cell runs the K-biased valley-polarized reference. The `ValleyU1Constraint` removes intervalley density/operator blocks, but the fixed-per-k Aufbau update is not pinned to one valley; the biased noisy seed tests the basin of attraction.
 #
-# The live callback refreshes this cell every `hf_update_every` iterations with a history tail, the 2x2 valley projector matrix, and the VP/IVC maps. The final diagnostics report both projector idempotency and self-consistency residuals.
+# The live callback refreshes this cell every `hf_update_every` iterations with a history tail and the combined 3x2 projector/order-parameter diagnostic. The final diagnostics report both projector idempotency and self-consistency residuals.
 #
 
 # %%
 
-vp_plus_constraint = ValleyU1Constraint(active, pinned_valley="K")
 vp_plus, vp_plus_history = run_live_hf(
     "VP+",
     P0_vp_plus,
@@ -553,7 +564,6 @@ vp_plus, vp_plus_history = run_live_hf(
 
 # %%
 
-vp_minus_constraint = ValleyU1Constraint(active, pinned_valley="Kprime")
 vp_minus, vp_minus_history = run_live_hf(
     "VP-",
     P0_vp_minus,
@@ -573,7 +583,6 @@ vp_minus, vp_minus_history = run_live_hf(
 
 # %%
 
-ivc_constraint = TPrimeConstraint(active)
 ivc, ivc_history = run_live_hf(
     "IVC",
     P0_ivc,
@@ -623,7 +632,7 @@ print("phi:", phi)
 
 
 # %% [markdown]
-# This cell builds the convex Hamiltonian path from the three raw HF Hamiltonians, diagonalizes each point into a fixed-occupation projector, and computes the dimensionless response kernel `K(theta)` and coefficient `c_G`.
+# This cell builds the convex Hamiltonian path from the three raw HF Hamiltonians, diagonalizes each point into a fixed-occupation projector, embeds the active projector back into the continuum Bloch basis, and computes the dimensionless response kernel `K(theta)` and coefficient `c_G`.
 #
 
 # %%
@@ -633,7 +642,8 @@ projectors_flat, path_diagnostics = symmetric_convex_path(refs, theta_nodes, phi
 projectors = projectors_flat.reshape(n_theta, n_k, n_k, active.dim, active.dim)
 if active.dim != 2:
     raise ValueError("charge-response cell currently expects one active band per valley")
-response = k_theta_from_projectors(projectors, theta_nodes)
+basis_frames = active_basis_frames(active).reshape(n_k, n_k, -1, active.dim)
+response = k_theta_from_projectors_with_basis(projectors, theta_nodes, basis_frames)
 
 gaps = np.array([row.direct_gap_min for row in path_diagnostics])
 fig, axes = plt.subplots(1, 2, figsize=(9.5, 3.6), constrained_layout=True)
@@ -648,6 +658,55 @@ axes[1].set_title("trial Hamiltonian gap")
 fig.savefig(result_dir / "convex_path_response.png", dpi=180)
 plt.show()
 print("cG:", response.cG)
+
+
+# %% [markdown]
+# This cell evaluates the physical projected interacting Hamiltonian in each trial Slater determinant along the convex path. The energy is computed with the HF backend energy functional, `E[P] = Tr(h0 P) + E_H[P] + E_F[P]`, using the trial projector `P(theta)` as the density; no trial source-field or penalty energy is included. The plotted values are divided by the number of moire momentum blocks, so the units are energy per moire unit cell.
+#
+
+# %%
+
+trial_energy_components = [bundle.backend.energy(P_theta) for P_theta in projectors_flat]
+energy_norm = float(bundle.backend.n_blocks)
+trial_energy_total_per_cell = np.array([item.total for item in trial_energy_components]) / energy_norm
+trial_energy_one_body_per_cell = np.array([item.one_body for item in trial_energy_components]) / energy_norm
+trial_energy_hartree_per_cell = np.array([item.hartree for item in trial_energy_components]) / energy_norm
+trial_energy_fock_per_cell = np.array([item.fock for item in trial_energy_components]) / energy_norm
+trial_energy_relative_per_cell = trial_energy_total_per_cell - float(np.min(trial_energy_total_per_cell))
+
+trial_energy_df = pd.DataFrame(
+    {
+        "theta": theta_nodes,
+        "theta_over_pi": theta_nodes / np.pi,
+        "energy_total_per_cell": trial_energy_total_per_cell,
+        "energy_relative_per_cell": trial_energy_relative_per_cell,
+        "energy_one_body_per_cell": trial_energy_one_body_per_cell,
+        "energy_hartree_per_cell": trial_energy_hartree_per_cell,
+        "energy_fock_per_cell": trial_energy_fock_per_cell,
+    }
+)
+trial_energy_df.to_csv(result_dir / "trial_physical_energy_theta.csv", index=False)
+display(trial_energy_df.head())
+
+fig, axes = plt.subplots(1, 2, figsize=(10.2, 3.8), constrained_layout=True)
+axes[0].plot(theta_nodes / np.pi, trial_energy_total_per_cell, marker="o", ms=3)
+axes[0].set_xlabel(r"$\theta/\pi$")
+axes[0].set_ylabel("energy per cell")
+axes[0].set_title("physical energy expectation")
+axes[1].plot(theta_nodes / np.pi, trial_energy_relative_per_cell, marker="o", ms=3, label="total - min")
+axes[1].plot(theta_nodes / np.pi, trial_energy_one_body_per_cell - trial_energy_one_body_per_cell[0], linewidth=1.1, label="one-body shift")
+axes[1].plot(theta_nodes / np.pi, trial_energy_hartree_per_cell - trial_energy_hartree_per_cell[0], linewidth=1.1, label="Hartree shift")
+axes[1].plot(theta_nodes / np.pi, trial_energy_fock_per_cell - trial_energy_fock_per_cell[0], linewidth=1.1, label="Fock shift")
+axes[1].set_xlabel(r"$\theta/\pi$")
+axes[1].set_ylabel("energy shift per cell")
+axes[1].set_title("component shifts")
+axes[1].legend(frameon=False, fontsize=8)
+fig.savefig(result_dir / "trial_physical_energy_theta.png", dpi=180)
+plt.show()
+
+print("energy per cell min:", float(np.min(trial_energy_total_per_cell)))
+print("energy per cell max:", float(np.max(trial_energy_total_per_cell)))
+print("energy per cell range:", float(np.ptp(trial_energy_total_per_cell)))
 
 
 # %% [markdown]
@@ -687,9 +746,61 @@ print("integrated radial charge:", integrated_charge)
 
 
 # %% [markdown]
+# This cell maps the same circular domain-wall profile onto a two-dimensional real-space grid. The charge density is still reported in dimensionless moire units, so the plotted value is `rho * a_M^2`; changing `R`, `w`, or `winding` in the previous cell changes this plot without rerunning HF.
+#
+
+# %%
+
+charge_grid_size = 301
+charge_plot_r_max = r_max
+
+x = np.linspace(-charge_plot_r_max, charge_plot_r_max, charge_grid_size)
+y = np.linspace(-charge_plot_r_max, charge_plot_r_max, charge_grid_size)
+xx, yy = np.meshgrid(x, y, indexing="xy")
+rr = np.sqrt(xx**2 + yy**2)
+grid_profile = charge_density_radial(
+    rr,
+    response.theta,
+    response.K,
+    domain_wall,
+    r_min=charge_plot_r_max / max(charge_grid_size, 1),
+)
+rho_xy = grid_profile.rho_dimless
+
+rho_vmax = float(np.nanpercentile(np.abs(rho_xy), 99.0))
+if not np.isfinite(rho_vmax) or rho_vmax <= 0.0:
+    rho_vmax = 1.0
+
+fig, ax = plt.subplots(figsize=(6.2, 5.4), constrained_layout=True)
+im = ax.imshow(
+    rho_xy,
+    origin="lower",
+    extent=(float(x[0]), float(x[-1]), float(y[0]), float(y[-1])),
+    cmap="RdBu_r",
+    vmin=-rho_vmax,
+    vmax=rho_vmax,
+    interpolation="nearest",
+    aspect="equal",
+)
+ax.contour(xx, yy, rr, levels=[R], colors="black", linewidths=0.8, alpha=0.85)
+fig.colorbar(im, ax=ax, label=r"$\rho a_M^2$")
+ax.set_xlabel("x / a_M")
+ax.set_ylabel("y / a_M")
+ax.set_title("real-space charge density")
+fig.savefig(result_dir / "charge_density_2d.png", dpi=180)
+plt.show()
+
+dx = float(x[1] - x[0]) if len(x) > 1 else 0.0
+dy = float(y[1] - y[0]) if len(y) > 1 else 0.0
+integrated_charge_2d = float(np.sum(rho_xy) * dx * dy)
+print("charge density 2D grid:", rho_xy.shape)
+print("integrated 2D charge:", integrated_charge_2d)
+
+
+# %% [markdown]
 # ## Save Arrays
 #
-# This cell writes the converged reference projectors, convex-path projectors, `K(theta)`, `c_G`, and the current post-HF charge profile into a compressed NumPy artifact under `results/`.
+# This cell writes the converged reference projectors, convex-path projectors, `K(theta)`, `c_G`, and the current post-HF charge profile and real-space charge-density map into a compressed NumPy artifact under `results/`.
 #
 
 # %%
@@ -703,8 +814,20 @@ np.savez_compressed(
     vp_minus_P=vp_minus.P,
     ivc_P=ivc.P,
     convex_projectors=projectors,
+    trial_energy_total_per_cell=trial_energy_total_per_cell,
+    trial_energy_relative_per_cell=trial_energy_relative_per_cell,
+    trial_energy_one_body_per_cell=trial_energy_one_body_per_cell,
+    trial_energy_hartree_per_cell=trial_energy_hartree_per_cell,
+    trial_energy_fock_per_cell=trial_energy_fock_per_cell,
     charge_r=profile.r,
     charge_theta=profile.theta,
     charge_rho_dimless=profile.rho_dimless,
+    charge_x=x,
+    charge_y=y,
+    charge_theta_xy=grid_profile.theta,
+    charge_K_xy=grid_profile.K_theta,
+    charge_rho_xy_dimless=rho_xy,
 )
 print("saved:", result_dir / "taige_symmetric_hf_references_and_response.npz")
+
+# %%

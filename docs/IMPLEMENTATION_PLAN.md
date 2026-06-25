@@ -36,7 +36,7 @@ optional physical conversion divides charge density by `a_M^2`.
 - Add `src/chiral_dw/continuum/` as the native continuum/HF package:
   grid/active-space construction, density vertices, screened-Coulomb HF
   backend, symmetry constraints, seeds, reference solves, convex Hamiltonians,
-  and end-to-end workflow.
+  embedded Bloch-basis charge response, and end-to-end workflow.
 - Store raw Hermitian HF Hamiltonians by default. Do not silently subtract
   scalar, identity, or traceless channels; instead report channel diagnostics.
 - Generated outputs stay under `results/` unless tests intentionally write to a
@@ -90,7 +90,7 @@ optional physical conversion divides charge density by `a_M^2`.
 
 ## Assumptions And Defaults
 
-- Hole filling one uses one occupied active band per momentum block.
+- Hole filling one uses one occupied active state per momentum block.
 - Primary AC backend: nonideal finite-LL AC.
 - Continuum path: self-contained native HF references plus convex full-HF
   Hamiltonian interpolation.
