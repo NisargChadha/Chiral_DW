@@ -167,6 +167,34 @@ print(refs.ivc.diagnostics.aufbau_residual_norm)
 print(reference_diagnostics(refs)["ivc"].model_dump())
 ```
 
+### Taige Continuum Cluster Sweep
+
+The cluster sweep wrapper runs one `(u_D, theta_deg)` point per SLURM array
+task and writes every point under `results/`:
+
+```bash
+sbatch jobs/scan_taige_continuum_cg_array.sh
+```
+
+Useful overrides follow the same style as the old TMD_HF job scripts:
+
+```bash
+sbatch --export=ALL,N_U_D=13,N_TWIST=9,N_K=18,OUTPUT_ROOT=results/taige_cg_grid \
+  jobs/scan_taige_continuum_cg_array.sh
+```
+
+After the array finishes, merge per-point summaries into `sweep.csv` and
+`sweep.json`:
+
+```bash
+python3 scripts/scan_taige_continuum_cg.py \
+  --output-root results/taige_cg_grid \
+  --merge-only
+```
+
+For a cheap launch sanity check, use `--dry-run`; it writes only
+`sweep_plan.csv/json` and does not run HF.
+
 ## Artifacts
 
 The AC command writes a directory containing:
