@@ -5,7 +5,7 @@ twisted MoTe2 and related Aharonov-Casher models.
 
 ## Source Of Truth
 
-- Use `/Users/nisargchadha/Documents/TMD_HF` as the canonical source for
+- Use `/Users/nisargchadha/Documents/TMD_HF` as read-only reference material for
   continuum-model, Hartree-Fock, hole-basis, density-vertex, and T' symmetry
   conventions.
 - Use `/Users/nisargchadha/Desktop/Variational_Calculation_tMoTe2` as
@@ -14,8 +14,10 @@ twisted MoTe2 and related Aharonov-Casher models.
 - Do not import old `Variational_Calculation_tMoTe2` modules at runtime.
   Borrow logic deliberately and rewrite it into this package with explicit
   tests and conventions.
-- In v1, use simple VP/IVC source-field interpolation. Do not implement
-  penalty-constrained Hartree-Fock.
+- Do not import `ttmd` or `hartree_fock` from TMD_HF at runtime. Rewrite needed
+  continuum/HF logic into this package with explicit tests and conventions.
+- In v1, use symmetry-constrained reference HF states and convex full-HF
+  Hamiltonian interpolation. Do not implement penalty-constrained Hartree-Fock.
 
 ## Required Step Loop
 

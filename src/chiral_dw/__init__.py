@@ -3,6 +3,11 @@
 from chiral_dw.config import (
     ACConventionParams,
     ACResponseWorkflowParams,
+    ContinuumGridParams,
+    ContinuumHFParams,
+    ContinuumInteractionParams,
+    ContinuumModelParams,
+    ContinuumWorkflowParams,
     DomainWallParams,
     FirstShellACParams,
     FourierACParams,
@@ -18,9 +23,16 @@ from chiral_dw.config import (
     ResponseParams,
     SkyrmionTextureParams,
     SourceInterpolationParams,
-    TMDHFReferenceParams,
     TMoTe2ACParams,
     UnitsParams,
+)
+from chiral_dw.continuum import (
+    build_continuum_bundle,
+    build_symmetric_hf_references,
+    run_continuum_symmetric_hf_workflow,
+    symmetric_convex_hamiltonian,
+    symmetric_convex_path,
+    symmetric_convex_projector,
 )
 from chiral_dw.ideal_conjugate_lll import run_ideal_conjugate_lll_charge_benchmark
 from chiral_dw.response import KThetaResult, compute_cG, k_theta_from_projectors
@@ -29,6 +41,11 @@ from chiral_dw.qhfm_benchmark import run_qhfm_charge_benchmark
 __all__ = [
     "ACConventionParams",
     "ACResponseWorkflowParams",
+    "ContinuumGridParams",
+    "ContinuumHFParams",
+    "ContinuumInteractionParams",
+    "ContinuumModelParams",
+    "ContinuumWorkflowParams",
     "DomainWallParams",
     "FirstShellACParams",
     "FourierACParams",
@@ -44,12 +61,17 @@ __all__ = [
     "ResponseParams",
     "SkyrmionTextureParams",
     "SourceInterpolationParams",
-    "TMDHFReferenceParams",
     "TMoTe2ACParams",
     "UnitsParams",
     "KThetaResult",
+    "build_continuum_bundle",
+    "build_symmetric_hf_references",
     "compute_cG",
     "k_theta_from_projectors",
     "run_ideal_conjugate_lll_charge_benchmark",
+    "run_continuum_symmetric_hf_workflow",
     "run_qhfm_charge_benchmark",
+    "symmetric_convex_hamiltonian",
+    "symmetric_convex_path",
+    "symmetric_convex_projector",
 ]

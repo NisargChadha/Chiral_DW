@@ -186,17 +186,78 @@ class SourceInterpolationParams(BaseModel):
     include_scalar_diagnostics: bool = True
 
 
-class TMDHFReferenceParams(BaseModel):
-    """TMD_HF reference-projector defaults for VP/IVC interpolation."""
+class ContinuumGridParams(BaseModel):
+    """Square momentum grid for native continuum/HF workflows."""
 
     model_config = ConfigDict(frozen=True)
 
-    n_occ_per_block: int = Field(default=1, ge=1)
-    vp_valley: str = "K"
+    n_k: int = Field(default=5, ge=1)
+
+    @property
+    def n_total(self) -> int:
+        return self.n_k * self.n_k
+
+
+class ContinuumModelParams(BaseModel):
+    """Minimal native tMoTe2-like continuum active-band parameters."""
+
+    model_config = ConfigDict(frozen=True)
+
+    theta_deg: float = Field(default=3.9, gt=0.0)
+    a0_angstrom: float = Field(default=3.52, gt=0.0)
+    m_eff: float = Field(default=0.6, gt=0.0)
+    moire_potential_mev: float = 8.0
+    tunneling_mev: float = -10.0
+    displacement_mev: float = 0.0
+    plane_wave_shell: int = Field(default=1, ge=0)
+    n_active_bands_per_valley: int = Field(default=1, ge=1)
+    active_model: Literal["qiwuzhang"] = "qiwuzhang"
+
+
+class ContinuumInteractionParams(BaseModel):
+    """Screened Coulomb controls for the native continuum HF backend."""
+
+    model_config = ConfigDict(frozen=True)
+
+    v0: float = Field(default=1.0, ge=0.0)
+    gate_distance: float = Field(default=2.0, gt=0.0)
+    q0_hartree: Literal["omit_uniform"] = "omit_uniform"
+    q_shell: int = Field(default=1, ge=0)
+    exchange_scale: float = Field(default=1.0, ge=0.0)
+    hartree_scale: float = Field(default=1.0, ge=0.0)
+    reference_density: Literal["zero"] = "zero"
+
+
+class ContinuumHFParams(BaseModel):
+    """Zero-temperature fixed-per-k native continuum HF controls."""
+
+    model_config = ConfigDict(frozen=True)
+
+    n_occ_per_k: int = Field(default=1, ge=1)
+    max_iter: int = Field(default=80, ge=1)
+    min_iter: int = Field(default=2, ge=0)
+    mixing: float = Field(default=0.45, ge=0.0, le=1.0)
+    tolerance: float = Field(default=1e-8, gt=0.0)
+    energy_tolerance: float = Field(default=1e-10, gt=0.0)
+    idempotency_tolerance: float = Field(default=1e-8, gt=0.0)
+    final_residual_tolerance: float = Field(default=1e-7, gt=0.0)
     ivc_angle: float = 0.5 * pi
     ivc_phase: float = 0.0
-    tmd_hf_path_hint: str = "/Users/nisargchadha/Documents/TMD_HF"
-    source_convention: Literal["Delta=H_HF(P)-H0"] = "Delta=H_HF(P)-H0"
+    random_seed: int = 1
+
+
+class ContinuumWorkflowParams(BaseModel):
+    """Top-level native continuum symmetric-HF response controls."""
+
+    model_config = ConfigDict(frozen=True)
+
+    grid: ContinuumGridParams = Field(default_factory=ContinuumGridParams)
+    model: ContinuumModelParams = Field(default_factory=ContinuumModelParams)
+    interaction: ContinuumInteractionParams = Field(default_factory=ContinuumInteractionParams)
+    hf: ContinuumHFParams = Field(default_factory=ContinuumHFParams)
+    response: ResponseParams = Field(default_factory=ResponseParams)
+    domain_wall: DomainWallParams = Field(default_factory=DomainWallParams)
+    output_dir: str = "results/continuum_symmetric_hf"
 
 
 class GatedInteractionParams(BaseModel):
@@ -441,6 +502,11 @@ __all__ = [
     "ChargeResponseSummary",
     "ConjugateACBiasSweepParams",
     "ConjugateACBiasSweepSummary",
+    "ContinuumGridParams",
+    "ContinuumHFParams",
+    "ContinuumInteractionParams",
+    "ContinuumModelParams",
+    "ContinuumWorkflowParams",
     "DomainWallParams",
     "FirstShellACParams",
     "FourierACParams",
@@ -459,7 +525,6 @@ __all__ = [
     "RunManifest",
     "SkyrmionTextureParams",
     "SourceInterpolationParams",
-    "TMDHFReferenceParams",
     "TMoTe2ACParams",
     "UnitsParams",
 ]

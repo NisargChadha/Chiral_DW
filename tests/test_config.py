@@ -6,6 +6,11 @@ from chiral_dw.config import (
     ACConventionParams,
     ACResponseWorkflowParams,
     ConjugateACBiasSweepParams,
+    ContinuumGridParams,
+    ContinuumHFParams,
+    ContinuumInteractionParams,
+    ContinuumModelParams,
+    ContinuumWorkflowParams,
     FirstShellACParams,
     FourierACParams,
     FourierCoefficient,
@@ -15,7 +20,6 @@ from chiral_dw.config import (
     RealSpaceGridParams,
     ResponseParams,
     TMoTe2ACParams,
-    TMDHFReferenceParams,
     UnitsParams,
 )
 
@@ -67,12 +71,18 @@ def test_tmd_hf_canonical_ac_params_record_folded_signs():
     assert params.folded_ac_w_mev == 23.8
 
 
-def test_tmd_hf_reference_params_record_raw_source_convention():
-    params = TMDHFReferenceParams()
+def test_native_continuum_params_record_self_contained_hf_defaults():
+    params = ContinuumWorkflowParams(
+        grid=ContinuumGridParams(n_k=3),
+        model=ContinuumModelParams(n_active_bands_per_valley=1),
+        interaction=ContinuumInteractionParams(v0=0.2),
+        hf=ContinuumHFParams(n_occ_per_k=1),
+    )
 
-    assert params.tmd_hf_path_hint == "/Users/nisargchadha/Documents/TMD_HF"
-    assert params.source_convention == "Delta=H_HF(P)-H0"
-    assert params.n_occ_per_block == 1
+    assert params.grid.n_total == 9
+    assert params.model.active_model == "qiwuzhang"
+    assert params.interaction.q0_hartree == "omit_uniform"
+    assert params.hf.n_occ_per_k == 1
 
 
 def test_response_params_validate_theta_window():

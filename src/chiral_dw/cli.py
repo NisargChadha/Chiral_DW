@@ -7,6 +7,11 @@ import argparse
 from chiral_dw.ac.workflow import run_ac_cg_workflow
 from chiral_dw.config import (
     ACResponseWorkflowParams,
+    ContinuumGridParams,
+    ContinuumHFParams,
+    ContinuumInteractionParams,
+    ContinuumModelParams,
+    ContinuumWorkflowParams,
     DomainWallParams,
     FirstShellACParams,
     GatedInteractionParams,
@@ -18,6 +23,7 @@ from chiral_dw.config import (
     SkyrmionTextureParams,
     SourceInterpolationParams,
 )
+from chiral_dw.continuum.workflow import run_continuum_symmetric_hf_workflow
 from chiral_dw.ideal_conjugate_lll import run_ideal_conjugate_lll_charge_benchmark
 from chiral_dw.qhfm_benchmark import run_qhfm_charge_benchmark
 
@@ -66,6 +72,51 @@ def run_ac_cg_console() -> None:
     )
     result = run_ac_cg_workflow(params, write_outputs=True, write_plots=args.plots)
     print(f"cG = {result.response.cG:.12g}")
+    print(f"output_dir = {params.output_dir}")
+
+
+def _continuum_symmetric_hf_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Run the native continuum symmetric-HF workflow.")
+    parser.add_argument("--output-dir", default="results/continuum_symmetric_hf")
+    parser.add_argument("--n-k", type=int, default=5)
+    parser.add_argument("--n-theta", type=int, default=21)
+    parser.add_argument("--v0", type=float, default=1.0)
+    parser.add_argument("--gate-distance", type=float, default=2.0)
+    parser.add_argument("--q-shell", type=int, default=1)
+    parser.add_argument("--max-iter", type=int, default=80)
+    parser.add_argument("--mixing", type=float, default=0.45)
+    parser.add_argument("--tolerance", type=float, default=1e-8)
+    parser.add_argument("--displacement-mev", type=float, default=0.0)
+    parser.add_argument("--radius", type=float, default=20.0)
+    parser.add_argument("--width", type=float, default=3.0)
+    parser.add_argument("--winding", type=int, default=1)
+    return parser
+
+
+def run_continuum_symmetric_hf_console() -> None:
+    args = _continuum_symmetric_hf_parser().parse_args()
+    params = ContinuumWorkflowParams(
+        grid=ContinuumGridParams(n_k=args.n_k),
+        model=ContinuumModelParams(displacement_mev=args.displacement_mev),
+        interaction=ContinuumInteractionParams(
+            v0=args.v0,
+            gate_distance=args.gate_distance,
+            q_shell=args.q_shell,
+        ),
+        hf=ContinuumHFParams(
+            max_iter=args.max_iter,
+            mixing=args.mixing,
+            tolerance=args.tolerance,
+        ),
+        response=ResponseParams(n_theta=args.n_theta),
+        domain_wall=DomainWallParams(radius=args.radius, width=args.width, winding=args.winding),
+        output_dir=args.output_dir,
+    )
+    result = run_continuum_symmetric_hf_workflow(params, write_outputs=True)
+    print(f"cG = {result.response.cG:.12g}")
+    print(f"vp_plus_idempotency = {result.reference_summary['vp_plus']['idempotency_error_fro']:.3e}")
+    print(f"vp_minus_idempotency = {result.reference_summary['vp_minus']['idempotency_error_fro']:.3e}")
+    print(f"ivc_idempotency = {result.reference_summary['ivc']['idempotency_error_fro']:.3e}")
     print(f"output_dir = {params.output_dir}")
 
 

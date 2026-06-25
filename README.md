@@ -7,21 +7,21 @@ has two paths:
 - a production nonideal finite-Landau-level Aharonov-Casher workflow for
   studying dimensionless `cG` and charge profiles versus periodic `U(r)` and
   `B'(r)`;
-- a TMD_HF adapter that consumes continuum Hartree-Fock VP/IVC reference
-  projectors and builds the simple source-field interpolation used by the
-  variational workflow.
+- a native continuum/Hartree-Fock workflow that solves symmetry-constrained
+  VP+/VP-/IVC reference states and builds the symmetric convex variational
+  Hamiltonian path.
 
-`/Users/nisargchadha/Documents/TMD_HF` is the canonical source for continuum
+`/Users/nisargchadha/Documents/TMD_HF` remains reference material for continuum
 physics conventions, hole-basis conventions, density vertices, and Hartree-Fock
-machinery. `/Users/nisargchadha/Desktop/Variational_Calculation_tMoTe2` remains
-read-only reference material for variational/projector-response logic.
+machinery. It is not a runtime dependency. Everything runnable in this repo is
+self-contained inside Chiral_DW.
 
 ## Progress So Far
 
 The current codebase has the core scaffolding and validation path needed before
 moving back to the nonideal conjugate AC/domain-wall calculation:
 
-- Pydantic v2 frozen models now define the AC parameters, source-interpolation
+- Pydantic v2 frozen models now define the AC parameters, native continuum/HF
   controls, real-space benchmark controls, run summaries, and artifact records.
 - The finite-Landau-level nonideal AC backend is ported into `chiral_dw.ac`,
   with tests for Hermiticity, flat LLL behavior, finite-LL gaps, Fourier
@@ -29,9 +29,9 @@ moving back to the nonideal conjugate AC/domain-wall calculation:
 - The AC `cG` workflow computes source-field projectors, projected physical
   energies, `K(theta)`, dimensionless `cG`, radial charge profiles, and
   old-compatible conjugate-AC C3 bias sweeps.
-- The TMD_HF adapter is in place for simple VP/IVC source-field interpolation.
-  It keeps TMD_HF as the physics source of truth and records raw source-field
-  diagnostics without hidden scalar or traceless cleanup.
+- The native continuum/HF workflow builds self-contained VP+, VP-, and IVC
+  reference Hamiltonians, reports final projector idempotency, and constructs a
+  convex full-HF variational path.
 - The same-Chern QHFM benchmark validates the real-space 4D charge evaluator
   against `rho_top=-q_sk` in a controlled Chern-1 limit.
 - The ideal opposite-Chern conjugate LLL benchmark validates the circular
@@ -54,18 +54,6 @@ in magnetic-length units. It wrote artifacts under
 ```bash
 python3 -m pip install -e ".[dev]"
 python3 -m pytest -q
-```
-
-For continuum TMD_HF-backed workflows, also install the local TMD_HF repo:
-
-```bash
-python3 -m pip install -e /Users/nisargchadha/Documents/TMD_HF
-```
-
-or set:
-
-```bash
-export PYTHONPATH=/Users/nisargchadha/Documents/TMD_HF/src:$PYTHONPATH
 ```
 
 ## Nonideal AC Workflow
@@ -115,61 +103,69 @@ The AC workflow uses source fields only to generate projectors. Reported
 physical energies come from the projected band, Hartree, and Fock terms and do
 not include the trial source field.
 
-## TMD_HF Source Interpolation
+## Native Continuum Symmetric HF
 
-The TMD_HF adapter is deliberately thin. TMD_HF builds the continuum/HF problem
-and supplies either converged VP/IVC projectors or seed projectors; this package
-extracts raw contracted fields and builds:
+The continuum path is self-contained in `chiral_dw.continuum`. It solves three
+reference HF states:
+
+- VP+ from a `K`-polarized seed with a continuous valley-U(1) constraint;
+- VP- from a `Kprime`-polarized seed with the same constraint;
+- IVC from an intervalley-coherent seed with the non-Kramers `T'` constraint.
+
+The variational Hamiltonian is a convex combination of the full raw HF
+Hamiltonians:
 
 ```text
-H_var(k; theta, phi) =
-    H0(k) + source_scale * [
-        cos(theta) Delta_VP(k)
-      + sin(theta) U_phi Delta_IVC(k) U_phi^dagger
-    ]
+H_var(theta, phi) =
+    max(cos(theta), 0)^2 H_VP+
+  + max(-cos(theta), 0)^2 H_VP-
+  + sin(theta)^2 U_phi H_IVC U_phi^dagger
 ```
 
-No scalar, identity, or traceless channel is subtracted silently. Diagnostics
-report those channels so the run can be audited.
+Because the weights sum to one, scalar and kinetic pieces common to the HF
+Hamiltonians are not artificially sign-flipped. The HF solver records
+idempotency during iteration and finishes with an idempotent fixed-per-k Aufbau
+projector; the summary also reports the residual that measures whether that
+final projector is a true self-consistent fixed point.
+
+Command-line example:
+
+```bash
+chiral-dw-continuum-symmetric-hf \
+  --output-dir results/continuum_symmetric_hf_smoke \
+  --n-k 5 \
+  --n-theta 21 \
+  --v0 0.5 \
+  --q-shell 1
+```
+
+Python example:
 
 ```python
 import numpy as np
 
-from chiral_dw.config import SourceInterpolationParams, TMDHFReferenceParams
-from chiral_dw.ttmd_adapter import (
-    diagnose_reference_projectors,
-    endpoint_diagnostics,
-    references_from_tmd_hf_bundle,
-    source_interpolation_path,
+from chiral_dw.config import ContinuumGridParams, ContinuumHFParams, ContinuumWorkflowParams
+from chiral_dw.continuum import (
+    build_continuum_bundle,
+    build_symmetric_hf_references,
+    reference_diagnostics,
+    symmetric_convex_path,
 )
 
-# Build this with TMD_HF, for example from ttmd.problem.build_ttmd_hf_bundle.
-# bundle = ...
-
-# Prefer converged TMD_HF reference projectors in production.
-# P_vp = ...
-# P_ivc = ...
-
-refs = references_from_tmd_hf_bundle(
-    bundle,
-    P_vp=P_vp,
-    P_ivc=P_ivc,
-    params=TMDHFReferenceParams(n_occ_per_block=1),
+params = ContinuumWorkflowParams(
+    grid=ContinuumGridParams(n_k=5),
+    hf=ContinuumHFParams(n_occ_per_k=1),
 )
-
-print(diagnose_reference_projectors(refs).model_dump())
-print(endpoint_diagnostics(refs).model_dump())
+bundle = build_continuum_bundle(params.model, params.grid, params.interaction)
+refs = build_symmetric_hf_references(bundle, params.hf)
 
 theta = np.linspace(0.0, np.pi, 41)
-projectors, path_diagnostics = source_interpolation_path(
-    refs,
-    theta,
-    params=SourceInterpolationParams(source_scale=1.0, n_occ_per_block=1),
-)
-```
+projectors, path_diagnostics = symmetric_convex_path(refs, theta)
 
-If `P_vp` or `P_ivc` is omitted, the adapter can call TMD_HF seed helpers, but
-production runs should normally pass self-consistent references from TMD_HF.
+print(refs.vp_plus.diagnostics.idempotency_error_fro)
+print(refs.ivc.diagnostics.aufbau_residual_norm)
+print(reference_diagnostics(refs)["ivc"].model_dump())
+```
 
 ## Artifacts
 
@@ -308,9 +304,9 @@ For the AC workflow, check convergence against:
 - `b1`, `u1`, `b1_c3`, and `u1_c3`, which control residual `B'(r)` and `U(r)`;
 - `interaction_shell`, `gate_distance`, and `v0` when comparing energies.
 
-For the TMD_HF path, run the TMD_HF convergence checks first, then audit this
-repo's `diagnose_reference_projectors` and `endpoint_diagnostics` before using
-the resulting projector path in charge-response calculations.
+For the native continuum path, check convergence against `n_k`, `n_theta`,
+`v0`, `q_shell`, `mixing`, and the reported final idempotency and
+Aufbau-residual diagnostics for VP+, VP-, and IVC references.
 
 ## Development Protocol
 
