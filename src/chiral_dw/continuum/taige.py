@@ -159,18 +159,28 @@ def taige_interaction_params(
     q_mesh: Literal["shell", "full"] = "shell",
     q_shell: int = 1,
     local_field_cutoff: int = 0,
+    epsilon: float = TAIGE_EPSILON,
+    gate_distance_nm: float = TAIGE_GATE_DISTANCE_NM,
+    smear_length_nm: float | None = None,
+    interaction_strength_scale: float = 1.0,
+    hartree_scale: float = 1.0,
+    exchange_scale: float = 1.0,
 ) -> ContinuumInteractionParams:
     """Return dual-gated smeared Coulomb parameters for Taige MoTe2."""
 
+    smear = TAIGE_A0_ANGSTROM / 10.0 if smear_length_nm is None else float(smear_length_nm)
     return ContinuumInteractionParams(
+        v0=float(interaction_strength_scale),
         coulomb_kind="dual_gate",
-        epsilon=TAIGE_EPSILON,
-        gate_distance_nm=TAIGE_GATE_DISTANCE_NM,
+        epsilon=float(epsilon),
+        gate_distance_nm=float(gate_distance_nm),
         include_q0=bool(include_q0),
-        smear_length_nm=TAIGE_A0_ANGSTROM / 10.0,
+        smear_length_nm=smear,
         q_mesh=q_mesh,
         q_shell=int(q_shell),
         local_field_cutoff=int(local_field_cutoff),
+        hartree_scale=float(hartree_scale),
+        exchange_scale=float(exchange_scale),
     )
 
 

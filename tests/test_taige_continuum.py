@@ -189,6 +189,33 @@ def test_taige_density_vertices_have_q0_identity_and_smeared_dual_gate_weights()
     assert coulomb_potential_mev_nm2(5.0, interaction) < coulomb_potential_mev_nm2(5.0, unsmeared)
 
 
+def test_taige_interaction_params_accept_screening_overrides():
+    interaction = taige_interaction_params(
+        include_q0=False,
+        q_mesh="full",
+        q_shell=0,
+        local_field_cutoff=4,
+        epsilon=12.5,
+        gate_distance_nm=18.0,
+        smear_length_nm=0.2,
+        interaction_strength_scale=0.7,
+        hartree_scale=0.9,
+        exchange_scale=0.8,
+    )
+
+    assert interaction.coulomb_kind == "dual_gate"
+    assert interaction.include_q0 is False
+    assert interaction.q_mesh == "full"
+    assert interaction.q_shell == 0
+    assert interaction.local_field_cutoff == 4
+    assert interaction.epsilon == 12.5
+    assert interaction.gate_distance_nm == 18.0
+    assert interaction.smear_length_nm == 0.2
+    assert interaction.v0 == 0.7
+    assert interaction.hartree_scale == 0.9
+    assert interaction.exchange_scale == 0.8
+
+
 def test_taige_finite_q_density_vertices_use_shifted_physical_sources():
     model = taige_model_params(theta_deg=3.5, u_D=0.0, plane_wave_shell=1, n_bands=1)
     interaction = ContinuumInteractionParams(

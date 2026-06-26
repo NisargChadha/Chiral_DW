@@ -96,8 +96,8 @@ plt.rcParams.update({"figure.dpi": 120})
 # %%
 
 # Continuum model parameters.
-theta_deg = 3.5
-u_D = 10.0
+theta_deg = 3.89
+u_D = 20.0
 plane_wave_shell = 5
 n_bands = 2
 
@@ -158,18 +158,27 @@ plt.show()
 #
 # The continuum band plot above does not require an HF mesh or Coulomb kernel. Those controls enter here, where we build the active hole basis, density vertices/form factors, and dual-gated smeared Coulomb weights used by HF.
 #
-# Increase `n_k`, `q_mesh`, `q_shell`, and `local_field_cutoff` for more faithful production runs. The default is intentionally modest so the notebook remains interactive.
+# The first block controls the active-space and momentum-transfer truncations. The second block controls the physical dual-gate Coulomb kernel. Taige-reference defaults are `epsilon = 16.7`, `gate_distance_nm = 30.0`, and `smear_length_nm = a0 / 10 = 0.347 nm`.
+#
+# Increase `n_k`, `q_mesh`, `q_shell`, and `local_field_cutoff` for more faithful production runs. Change `epsilon`, `gate_distance_nm`, or `interaction_strength_scale` when testing screening assumptions.
 #
 
 # %%
 
-n_active_bands_per_valley = 1
+n_active_bands_per_valley = 2
 n_k = 18
 
 q_mesh = "full"  # "shell" for quick scans, "full" for all mesh transfers
 q_shell = 0
 local_field_cutoff = 4
 include_q0 = True
+
+epsilon = 16.7
+gate_distance_nm = 30.0
+smear_length_nm = 0.347
+interaction_strength_scale = 1.0
+hartree_scale = 1.0
+exchange_scale = 1.0
 
 model = model.model_copy(
     update={"n_active_bands_per_valley": n_active_bands_per_valley}
@@ -179,6 +188,12 @@ interaction = taige_interaction_params(
     q_mesh=q_mesh,
     q_shell=q_shell,
     local_field_cutoff=local_field_cutoff,
+    epsilon=epsilon,
+    gate_distance_nm=gate_distance_nm,
+    smear_length_nm=smear_length_nm,
+    interaction_strength_scale=interaction_strength_scale,
+    hartree_scale=hartree_scale,
+    exchange_scale=exchange_scale,
 )
 grid_params = ContinuumGridParams(n_k=n_k)
 

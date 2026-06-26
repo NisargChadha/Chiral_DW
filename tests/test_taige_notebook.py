@@ -57,3 +57,13 @@ def test_taige_notebook_compares_q0_and_finite_q_ivc_energies():
     assert "\"finite_q_ivc\"" in text
     assert "ivc_q0_vs_finite_q_energy_comparison.csv" in text
     assert "Delta_finite_Q_minus_Q0_per_cell" in text
+
+
+def test_taige_notebook_exposes_interaction_screening_controls():
+    text = SCRIPT.read_text()
+    assert "epsilon = 16.7" in text
+    assert "gate_distance_nm = 30.0" in text
+    assert "smear_length_nm = 0.347" in text
+    assert "interaction_strength_scale = 1.0" in text
+    assert "epsilon=epsilon" in text
+    assert "gate_distance_nm=gate_distance_nm" in text
