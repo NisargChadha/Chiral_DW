@@ -67,7 +67,9 @@ from chiral_dw.continuum import (
     chern_number_table,
     compute_hf_diagnostics,
     compute_taige_path_spectrum,
+    evaluate_hf_high_symmetry_path,
     finite_q_shift_metadata,
+    hf_band_chern_table,
     mix_projector_seeds,
     projector_maps,
     random_projector_like_seed,
@@ -97,7 +99,7 @@ plt.rcParams.update({"figure.dpi": 120})
 
 # Continuum model parameters.
 theta_deg = 3.89
-u_D = 20.0
+u_D = 0.0
 plane_wave_shell = 5
 n_bands = 2
 
@@ -868,6 +870,152 @@ print("VP splitting E(VP+) - E(VP-):", energies["VP+"] - energies["VP-"])
 
 for name, diag in reference_diagnostics(refs).items():
     print(name, diag.model_dump(mode="json"))
+
+
+# %% [markdown]
+# ## Fixed-Density HF Band Structure Parameters
+#
+# The HF references are converged at this point, so these plotting controls can be changed without rerunning HF. The path calculation holds each converged coarse projector fixed, builds the corresponding HF Hamiltonian along the Taige high-symmetry path, and diagonalizes that Hamiltonian point by point.
+#
+# For the VP reference, the code chooses the lower-energy VP solution and breaks exact numerical ties in favor of `VP+`. The Q=0 and finite-Q IVC spectra are kept separate, matching the energy-comparison workflow above.
+#
+
+# %%
+
+hf_band_path_n_per_segment = 36
+
+vp_reference_is_degenerate = np.isclose(vp_plus.energy, vp_minus.energy, rtol=1e-9, atol=1e-9)
+if vp_reference_is_degenerate or vp_plus.energy <= vp_minus.energy:
+    vp_band_reference_name = "VP+"
+    vp_band_reference = vp_plus
+else:
+    vp_band_reference_name = "VP-"
+    vp_band_reference = vp_minus
+
+hf_band_references = [
+    ("VP", bundle, vp_band_reference, vp_band_reference_name),
+    ("IVC_Q0", bundle, ivc, "IVC Q=0"),
+]
+if finite_q_ivc is not None:
+    hf_band_references.append(("IVC_finite_Q", finite_q_bundle, finite_q_ivc, "IVC finite Q"))
+
+print("hf_band_path_n_per_segment:", hf_band_path_n_per_segment)
+print("VP HF band reference:", vp_band_reference_name)
+print("HF band references:", [label for _key, _bundle, _result, label in hf_band_references])
+
+
+# %% [markdown]
+# ## Fixed-Density HF Band Structures
+#
+# This cell evaluates and plots the final HF band structure for the selected VP solution, the Q=0 IVC solution, and the finite-Q IVC solution if that branch was enabled. Each CSV contains one row per path point and HF band, including the valley weights of the active-space eigenvector.
+#
+# The plotted energies are shifted by the path gap midpoint for that reference: the midpoint between the highest occupied path band and the lowest empty path band, using the notebook's fixed `n_occ_per_k`.
+#
+
+# %%
+
+def _hf_path_energy_zero(energies: np.ndarray, n_occ: int) -> float:
+    n = int(n_occ)
+    if n <= 0 or n >= energies.shape[1]:
+        return float(np.mean(energies))
+    occupied_top = float(np.max(energies[:, :n]))
+    empty_bottom = float(np.min(energies[:, n:]))
+    return 0.5 * (occupied_top + empty_bottom)
+
+
+def _path_label_text(label: str) -> str:
+    return (
+        str(label)
+        .replace("Gamma", r"$\Gamma$")
+        .replace("kappa+", r"$\kappa_+$")
+        .replace("kappa-", r"$\kappa_-$")
+        .replace("m", "M")
+    )
+
+
+def plot_hf_path_spectrum(path_df: pd.DataFrame, ticks, labels, title: str):
+    fig, ax = plt.subplots(figsize=(8.5, 4.2), constrained_layout=True)
+    for band, band_df in path_df.groupby("band"):
+        ax.plot(
+            band_df["k_distance"],
+            band_df["energy_shifted"],
+            linewidth=1.15,
+            label=f"band {band}",
+        )
+    ax.axhline(0.0, color="0.2", linewidth=0.8)
+    ax.set_title(title)
+    ax.set_ylabel("energy - path gap midpoint")
+    tick_positions = [path_df.loc[path_df["path_index"] == tick, "k_distance"].iloc[0] for tick in ticks]
+    ax.set_xticks(tick_positions)
+    ax.set_xticklabels([_path_label_text(label) for label in labels])
+    for position in tick_positions:
+        ax.axvline(position, color="0.82", linewidth=0.8)
+    ax.legend(fontsize="small", ncols=2)
+    return fig
+
+
+hf_path_tables = {}
+hf_path_spectra = {}
+for file_key, bundle_for_bands, result_for_bands, display_label in hf_band_references:
+    spectrum = evaluate_hf_high_symmetry_path(
+        bundle_for_bands,
+        result_for_bands.P,
+        n_per_segment=hf_band_path_n_per_segment,
+        reference=display_label,
+    )
+    path_df = pd.DataFrame([row.model_dump(mode="json") for row in spectrum.rows])
+    energy_zero = _hf_path_energy_zero(spectrum.energies, hf_params.n_occ_per_k)
+    path_df["energy_shifted"] = path_df["energy"] - energy_zero
+    path_df["energy_zero"] = energy_zero
+    path_df.to_csv(result_dir / f"{file_key.lower()}_hf_path_spectrum.csv", index=False)
+    hf_path_tables[file_key] = path_df
+    hf_path_spectra[file_key] = spectrum
+
+    display(path_df.head(10))
+    fig = plot_hf_path_spectrum(
+        path_df,
+        spectrum.ticks,
+        spectrum.labels,
+        f"{display_label} fixed-density HF path spectrum",
+    )
+    fig.savefig(result_dir / f"{file_key.lower()}_hf_path_spectrum.png", dpi=180)
+    plt.show()
+
+
+# %% [markdown]
+# ## HF Band Chern Numbers
+#
+# This cell diagonalizes the final HF Hamiltonian on the self-consistent momentum mesh, embeds each active-space HF eigenvector back into the Taige plane-wave Bloch frame, and applies the Fukui link formula to every HF band. This is the mesh Chern number of the physical HF bands, not just the Chern number of the active-space eigenvector coefficients.
+#
+
+# %%
+
+hf_chern_rows = []
+for file_key, bundle_for_bands, result_for_bands, display_label in hf_band_references:
+    rows = hf_band_chern_table(
+        bundle_for_bands.active,
+        result_for_bands.H_hf,
+        reference=display_label,
+    )
+    hf_chern_rows.extend(row.model_dump(mode="json") for row in rows)
+    pd.DataFrame([row.model_dump(mode="json") for row in rows]).to_csv(
+        result_dir / f"{file_key.lower()}_hf_chern_numbers.csv",
+        index=False,
+    )
+
+hf_chern_df = pd.DataFrame(hf_chern_rows)
+hf_chern_df.to_csv(result_dir / "hf_chern_numbers.csv", index=False)
+display(hf_chern_df)
+
+if not hf_chern_df.empty:
+    display(
+        hf_chern_df.pivot_table(
+            index="band",
+            columns="reference",
+            values="chern",
+            aggfunc="first",
+        )
+    )
 
 
 # %% [markdown]

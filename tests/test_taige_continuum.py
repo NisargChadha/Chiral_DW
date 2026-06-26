@@ -19,8 +19,12 @@ from chiral_dw.continuum import (
     chern_number_table,
     compute_taige_path_spectrum,
     finite_q_shift_metadata,
+    evaluate_hf_high_symmetry_path,
+    hf_band_chern_table,
+    hf_hamiltonian_at_k,
     random_projector_like_seed,
     symmetric_convex_path,
+    taige_active_fine_frame,
     taige_interaction_params,
     taige_ivc_minus_half_shift_coord,
     taige_ivc_minus_q_coord,
@@ -426,3 +430,68 @@ def test_tiny_taige_multi_active_response_smoke():
     assert len(diagnostics) == 5
     assert np.all(np.isfinite(response.K))
     assert np.isfinite(response.cG)
+
+
+def test_taige_fixed_density_hf_path_and_chern_smoke():
+    model = taige_model_params(
+        theta_deg=3.5,
+        u_D=0.0,
+        plane_wave_shell=1,
+        n_bands=2,
+        n_active_bands_per_valley=2,
+    )
+    bundle = build_continuum_bundle(
+        model=model,
+        grid=ContinuumGridParams(n_k=3),
+        interaction=ContinuumInteractionParams(
+            coulomb_kind="dimensionless_screened",
+            v0=0.0,
+            q_shell=0,
+            local_field_cutoff=0,
+        ),
+    )
+    active = bundle.active
+    P = build_seed("vp_plus", active, n_occ_per_k=1)
+
+    coarse_index = active.grid.index_of((1, 2))
+    k_frac = np.array((1 / active.grid.n1, 2 / active.grid.n2), dtype=float)
+    fine_h = hf_hamiltonian_at_k(bundle, P, k_frac)
+    assert np.allclose(np.linalg.eigvalsh(fine_h), np.linalg.eigvalsh(active.h0[coarse_index]), atol=1e-8)
+
+    spectrum = evaluate_hf_high_symmetry_path(bundle, P, n_per_segment=2, reference="VP")
+    assert spectrum.energies.shape == (11, active.dim)
+    assert len(spectrum.rows) == 11 * active.dim
+    assert np.all(np.isfinite(spectrum.energies))
+    assert np.allclose(np.sum(spectrum.valley_weights, axis=-1), 1.0)
+
+    chern_rows = hf_band_chern_table(active, active.h0, reference="h0")
+    assert len(chern_rows) == active.dim
+    assert all(np.isfinite(row.chern) for row in chern_rows)
+
+
+def test_taige_fixed_density_hf_path_supports_finite_q_frame():
+    finite_q = ContinuumFiniteQParams(
+        enabled=True,
+        q_coord=taige_ivc_minus_q_coord(6),
+        half_shift_coord=taige_ivc_minus_half_shift_coord(6),
+    )
+    bundle = build_continuum_bundle(
+        model=taige_model_params(theta_deg=3.5, u_D=0.0, plane_wave_shell=1, n_bands=1),
+        grid=ContinuumGridParams(n_k=6),
+        finite_q=finite_q,
+        interaction=ContinuumInteractionParams(
+            coulomb_kind="dimensionless_screened",
+            v0=0.0,
+            q_shell=0,
+            local_field_cutoff=0,
+        ),
+    )
+    P = build_seed("finite_q_ivc", bundle.active)
+
+    frame = taige_active_fine_frame(bundle.active, np.array([0.0, 0.0]))
+    assert np.any(frame.physical_shift != 0) or np.any(np.abs(frame.physical_k_frac) > 0.0)
+
+    spectrum = evaluate_hf_high_symmetry_path(bundle, P, n_per_segment=1, reference="finite-Q IVC")
+    assert spectrum.energies.shape == (6, bundle.active.dim)
+    assert len(spectrum.rows) == 6 * bundle.active.dim
+    assert np.all(np.isfinite(spectrum.energies))

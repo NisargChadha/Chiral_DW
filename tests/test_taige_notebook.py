@@ -61,6 +61,19 @@ def test_taige_notebook_compares_q0_and_finite_q_ivc_energies():
     assert "Delta_finite_Q_minus_Q0_per_cell" in text
 
 
+def test_taige_notebook_plots_hf_bands_and_chern_numbers():
+    text = SCRIPT.read_text()
+    assert "evaluate_hf_high_symmetry_path" in text
+    assert "hf_band_chern_table" in text
+    assert "vp_band_reference_name = \"VP+\"" in text
+    assert "IVC finite Q" in text
+    assert "_hf_path_energy_zero" in text
+    assert "_hf_path_spectrum.csv" in text
+    assert "_hf_path_spectrum.png" in text
+    assert "hf_chern_numbers.csv" in text
+    assert "mesh Chern number of the physical HF bands" in text
+
+
 def test_taige_notebook_exposes_interaction_screening_controls():
     text = SCRIPT.read_text()
     assert "epsilon = 16.7" in text
