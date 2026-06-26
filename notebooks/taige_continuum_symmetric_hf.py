@@ -51,7 +51,12 @@ if not (ROOT / "src").exists() and (ROOT.parent / "src").exists():
 if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
-from chiral_dw.config import ContinuumGridParams, ContinuumHFParams, DomainWallParams
+from chiral_dw.config import (
+    ContinuumFiniteQParams,
+    ContinuumGridParams,
+    ContinuumHFParams,
+    DomainWallParams,
+)
 from chiral_dw.continuum import (
     SymmetricHFReferences,
     TPrimeConstraint,
@@ -62,6 +67,7 @@ from chiral_dw.continuum import (
     chern_number_table,
     compute_hf_diagnostics,
     compute_taige_path_spectrum,
+    finite_q_shift_metadata,
     mix_projector_seeds,
     projector_maps,
     random_projector_like_seed,
@@ -69,6 +75,8 @@ from chiral_dw.continuum import (
     solve_hf,
     symmetric_convex_path,
     taige_interaction_params,
+    taige_ivc_minus_half_shift_coord,
+    taige_ivc_minus_q_coord,
     taige_model_params,
 )
 from chiral_dw.domain_wall import charge_density_radial
@@ -89,7 +97,7 @@ plt.rcParams.update({"figure.dpi": 120})
 
 # Continuum model parameters.
 theta_deg = 3.5
-u_D = 0.0
+u_D = 10.0
 plane_wave_shell = 5
 n_bands = 2
 
@@ -248,8 +256,9 @@ def _display_and_close(fig):
     plt.close(fig)
 
 
-def plot_projector_diagnostics(P, title):
-    maps = projector_maps(P, active)
+def plot_projector_diagnostics(P, title, active_for_plot=None):
+    active_local = active if active_for_plot is None else active_for_plot
+    maps = projector_maps(P, active_local)
     fig, axes = plt.subplots(3, 2, figsize=(9.2, 10.2), constrained_layout=True)
     specs = [
         (axes[0, 0], "P_KK", maps["P_KK"], "viridis", 0.0, 1.0),
@@ -257,7 +266,7 @@ def plot_projector_diagnostics(P, title):
         (axes[1, 0], "|P_KprimeK|", maps["P_KprimeK_abs"], "viridis", 0.0, 1.0),
         (axes[1, 1], "P_KprimeKprime", maps["P_KprimeKprime"], "viridis", 0.0, 1.0),
         (axes[2, 0], "valley polarization", maps["VP"], "coolwarm", -1.0, 1.0),
-        (axes[2, 1], "|IVC|", maps["IVC_abs"], "viridis", 0.0, 0.5 * active.n_active),
+        (axes[2, 1], "|IVC|", maps["IVC_abs"], "viridis", 0.0, 0.5 * active_local.n_active),
     ]
     for ax, label, values, cmap, vmin, vmax in specs:
         image = ax.imshow(values, origin="lower", cmap=cmap, vmin=vmin, vmax=vmax)
@@ -269,13 +278,15 @@ def plot_projector_diagnostics(P, title):
     return fig
 
 
-def noisy_initial_projector(seed_name, rng_seed, constraint):
+def noisy_initial_projector(seed_name, rng_seed, constraint, active_for_seed=None, hf_for_seed=None):
+    active_local = active if active_for_seed is None else active_for_seed
+    hf_local = hf_params if hf_for_seed is None else hf_for_seed
     ordered = build_seed(
         seed_name,
-        active,
-        n_occ_per_k=hf_params.n_occ_per_k,
-        ivc_angle=hf_params.ivc_angle,
-        ivc_phase=hf_params.ivc_phase,
+        active_local,
+        n_occ_per_k=hf_local.n_occ_per_k,
+        ivc_angle=hf_local.ivc_angle,
+        ivc_phase=hf_local.ivc_phase,
         random_seed_value=rng_seed,
     )
     if constraint is not None:
@@ -286,16 +297,17 @@ def noisy_initial_projector(seed_name, rng_seed, constraint):
     mixed = mix_projector_seeds(
         ordered,
         noise,
-        ordered_weight=hf_params.seed_ordered_weight,
-        random_weight=hf_params.seed_random_weight,
+        ordered_weight=hf_local.seed_ordered_weight,
+        random_weight=hf_local.seed_random_weight,
     )
     if constraint is not None:
         mixed = constraint.project_density(mixed)
     return mixed, ordered, noise
 
 
-def projector_order_parameters(P):
-    maps = projector_maps(P, active)
+def projector_order_parameters(P, active_for_plot=None):
+    active_local = active if active_for_plot is None else active_for_plot
+    maps = projector_maps(P, active_local)
     return {
         "mean_VP": float(np.mean(maps["VP"])),
         "mean_abs_IVC": float(np.mean(maps["IVC_abs"])),
@@ -303,8 +315,9 @@ def projector_order_parameters(P):
     }
 
 
-def seed_diagnostics_row(label, P, constraint):
-    maps = projector_maps(P, active)
+def seed_diagnostics_row(label, P, constraint, active_for_plot=None):
+    active_local = active if active_for_plot is None else active_for_plot
+    maps = projector_maps(P, active_local)
     return {
         "seed": label,
         "trace": float(np.real(np.trace(P, axis1=-2, axis2=-1).sum())),
@@ -317,8 +330,8 @@ def seed_diagnostics_row(label, P, constraint):
     }
 
 
-def hf_history_row(iteration, P, energy, diagnostics):
-    order = projector_order_parameters(P)
+def hf_history_row(iteration, P, energy, diagnostics, active_for_plot=None):
+    order = projector_order_parameters(P, active_for_plot)
     return {
         "iteration": int(iteration),
         "energy": float(energy),
@@ -409,40 +422,58 @@ def summarize_result(name, result):
     print("  snapshots:", [snapshot.iteration for snapshot in result.snapshots])
 
 
-def run_live_hf(label, P0, constraint, seed, filename_prefix):
-    P_start = backend.as_block_density(P0)
+def run_live_hf(
+    label,
+    P0,
+    constraint,
+    seed,
+    filename_prefix,
+    backend_for_run=None,
+    active_for_run=None,
+    hf_for_run=None,
+):
+    backend_local = backend if backend_for_run is None else backend_for_run
+    active_local = active if active_for_run is None else active_for_run
+    hf_local = hf_params if hf_for_run is None else hf_for_run
+    P_start = backend_local.as_block_density(P0)
     if constraint is not None:
         P_start = constraint.project_density(P_start)
     initial_diagnostics = compute_hf_diagnostics(
-        backend,
+        backend_local,
         P_start,
-        hf_params,
+        hf_local,
         constraint=constraint,
         iteration=0,
     )
-    history = [hf_history_row(0, P_start, initial_diagnostics.energy, initial_diagnostics)]
+    history = [hf_history_row(0, P_start, initial_diagnostics.energy, initial_diagnostics, active_local)]
 
     def record_iteration(iteration, P_iter, energy_iter, diagnostics_iter, is_snapshot):
-        history.append(hf_history_row(iteration, P_iter, energy_iter, diagnostics_iter))
+        history.append(hf_history_row(iteration, P_iter, energy_iter, diagnostics_iter, active_local))
         if is_snapshot:
             if clear_output is not None:
                 clear_output(wait=True)
             history_df = pd.DataFrame(history)
             display(history_df.tail(12))
 
-            fig = plot_projector_diagnostics(P_iter, f"{label} projector after iteration {iteration}")
+            fig = plot_projector_diagnostics(
+                P_iter,
+                f"{label} projector after iteration {iteration}",
+                active_local,
+            )
             fig.savefig(_figure_path(filename_prefix, f"projector_iter_{iteration:04d}"), dpi=180)
             _display_and_close(fig)
 
     result = solve_hf(
-        backend,
+        backend_local,
         P_start,
-        hf_params,
+        hf_local,
         constraint=constraint,
         seed=seed,
         on_iteration=record_iteration,
     )
-    history.append(hf_history_row(result.diagnostics.iteration, result.P, result.energy, result.diagnostics))
+    history.append(
+        hf_history_row(result.diagnostics.iteration, result.P, result.energy, result.diagnostics, active_local)
+    )
     history_df = pd.DataFrame(history)
     history_df.to_csv(result_dir / f"{filename_prefix}_hf_history.csv", index=False)
 
@@ -453,7 +484,7 @@ def run_live_hf(label, P0, constraint, seed, filename_prefix):
     fig.savefig(_figure_path(filename_prefix, "hf_history"), dpi=180)
     _display_and_close(fig)
 
-    fig = plot_projector_diagnostics(result.P, f"{label} final projector")
+    fig = plot_projector_diagnostics(result.P, f"{label} final projector", active_local)
     fig.savefig(_figure_path(filename_prefix, "final_projector"), dpi=180)
     _display_and_close(fig)
     return result, history_df
@@ -593,9 +624,217 @@ ivc, ivc_history = run_live_hf(
 
 
 # %% [markdown]
+# ## Finite-Q IVC Active Frame
+#
+# The Q=0 references above remain the source for the convex trial Hamiltonian and charge response. This finite-Q branch is built as a separate active frame so we can compare the IVC HF energy cost without changing the `c_G` workflow.
+#
+# The default branch is Taige IVC-, `Q = kappa_plus - kappa_minus`. The symmetric active frame uses physical momenta `K: k-Q/2` and `Kprime: k+Q/2`; the unfolded half-shift is required to preserve the non-Kramers T-prime relation in the active frame.
+#
+
+# %%
+
+finite_q_enabled = True
+finite_q_branch = "Taige IVC-"
+
+if finite_q_enabled:
+    finite_q = ContinuumFiniteQParams(
+        enabled=True,
+        q_coord=taige_ivc_minus_q_coord(n_k),
+        half_shift_coord=taige_ivc_minus_half_shift_coord(n_k),
+    )
+else:
+    finite_q = ContinuumFiniteQParams(enabled=False, q_coord=(0, 0))
+
+finite_q_metadata = finite_q_shift_metadata(finite_q, bundle.grid)
+
+print("finite_q_enabled:", finite_q_enabled)
+print("finite_q_branch:", finite_q_branch)
+print("finite_q:", finite_q)
+print("finite_q_shift:", finite_q_metadata)
+
+
+# %% [markdown]
+# ## Finite-Q Density Vertices
+#
+# This cell builds the finite-Q active basis, form factors, and HF backend. The interaction parameters are intentionally the same as the Q=0 run, so any energy difference comes from the shifted active frame and the self-consistent IVC solution rather than from a changed Coulomb kernel.
+#
+# The `source_index` and `source_shift` diagnostics check that the finite-Q active blocks really use shifted physical momenta. The `q=0` density vertex should still be the identity in the active frame.
+#
+
+# %%
+
+if finite_q_enabled:
+    finite_q_bundle = build_continuum_bundle(
+        model=model,
+        grid=grid_params,
+        interaction=interaction,
+        finite_q=finite_q,
+    )
+    finite_q_active = finite_q_bundle.active
+    finite_q_vertices = finite_q_bundle.vertices
+    finite_q_backend = finite_q_bundle.backend
+
+    finite_iq0 = finite_q_vertices.q_shifts.index((0, 0))
+    finite_q0_identity_error = np.max(
+        np.abs(finite_q_vertices.lambda_blocks[finite_iq0, 0] - np.eye(finite_q_active.dim))
+    )
+
+    print("finite-Q grid blocks:", finite_q_active.n_k)
+    print("finite-Q h0:", finite_q_active.h0.shape)
+    print("finite-Q lambda blocks:", finite_q_vertices.lambda_blocks.shape)
+    print("finite-Q source index differs from active index:", bool(np.any(
+        finite_q_active.source_index != np.arange(finite_q_active.n_k)[:, None]
+    )))
+    print("finite-Q nonzero source shifts:", int(np.count_nonzero(finite_q_active.source_shift)))
+    print("finite-Q q=0 identity error:", float(finite_q0_identity_error))
+else:
+    finite_q_bundle = None
+    finite_q_active = None
+    finite_q_vertices = None
+    finite_q_backend = None
+    print("finite-Q branch disabled")
+
+
+# %% [markdown]
+# ## Finite-Q IVC Initial Projector
+#
+# This seed uses the same 0.8 ordered / 0.2 random-noisy recipe as the Q=0 IVC run, but it is built in the finite-Q active frame. The projector panels should show intervalley coherence in that shifted frame.
+#
+
+# %%
+
+if finite_q_enabled:
+    finite_q_ivc_constraint = TPrimeConstraint(finite_q_active)
+    P0_finite_q_ivc, P_ordered_finite_q_ivc, P_noise_finite_q_ivc = noisy_initial_projector(
+        "finite_q_ivc",
+        hf_params.random_seed + 4,
+        finite_q_ivc_constraint,
+        active_for_seed=finite_q_active,
+        hf_for_seed=hf_params,
+    )
+    display(pd.DataFrame([
+        seed_diagnostics_row(
+            "finite-Q IVC initial",
+            P0_finite_q_ivc,
+            finite_q_ivc_constraint,
+            active_for_plot=finite_q_active,
+        )
+    ]))
+    fig = plot_projector_diagnostics(
+        P0_finite_q_ivc,
+        "finite-Q IVC initial projector",
+        active_for_plot=finite_q_active,
+    )
+    fig.savefig(result_dir / "finite_q_ivc_initial.png", dpi=180)
+    _display_and_close(fig)
+else:
+    finite_q_ivc_constraint = None
+    P0_finite_q_ivc = None
+
+
+# %% [markdown]
+# ## Finite-Q IVC T-Prime HF
+#
+# This cell solves the finite-Q IVC reference with the same T-prime constrained HF loop used above. The result is for energy comparison only; it is not inserted into the Q=0 convex Hamiltonian path below.
+#
+
+# %%
+
+if finite_q_enabled:
+    finite_q_ivc, finite_q_ivc_history = run_live_hf(
+        "finite-Q IVC",
+        P0_finite_q_ivc,
+        finite_q_ivc_constraint,
+        "finite_q_ivc_0p8_ordered_0p2_random",
+        "finite_q_ivc",
+        backend_for_run=finite_q_backend,
+        active_for_run=finite_q_active,
+        hf_for_run=hf_params,
+    )
+else:
+    finite_q_ivc = None
+    finite_q_ivc_history = pd.DataFrame()
+
+
+# %% [markdown]
+# ## Q=0 Versus Finite-Q IVC Energy Cost
+#
+# This comparison uses the lower of the two Q=0 VP energies as the VP reference baseline. Energies are divided by the number of moire momentum blocks, giving energy per moire unit cell in the same units as the continuum Hamiltonian.
+#
+
+# %%
+
+energy_norm = float(backend.n_blocks)
+finite_q_energy_norm = np.nan if finite_q_ivc is None else float(finite_q_backend.n_blocks)
+
+vp_energy_by_name = {"VP+": vp_plus.energy, "VP-": vp_minus.energy}
+vp_reference_name = min(vp_energy_by_name, key=vp_energy_by_name.get)
+E_VP_reference_per_cell = vp_energy_by_name[vp_reference_name] / energy_norm
+E_IVC_Q0_per_cell = ivc.energy / energy_norm
+E_IVC_finite_Q_per_cell = (
+    np.nan if finite_q_ivc is None else finite_q_ivc.energy / finite_q_energy_norm
+)
+Delta_IVC_Q0_vs_VP_per_cell = E_IVC_Q0_per_cell - E_VP_reference_per_cell
+Delta_IVC_finite_Q_vs_VP_per_cell = E_IVC_finite_Q_per_cell - E_VP_reference_per_cell
+Delta_finite_Q_minus_Q0_per_cell = E_IVC_finite_Q_per_cell - E_IVC_Q0_per_cell
+
+ivc_energy_comparison = pd.DataFrame(
+    [
+        {
+            "quantity": "E_VP_reference_per_cell",
+            "value": E_VP_reference_per_cell,
+            "reference": vp_reference_name,
+        },
+        {
+            "quantity": "E_IVC_Q0_per_cell",
+            "value": E_IVC_Q0_per_cell,
+            "reference": "",
+        },
+        {
+            "quantity": "E_IVC_finite_Q_per_cell",
+            "value": E_IVC_finite_Q_per_cell,
+            "reference": finite_q_branch if finite_q_enabled else "disabled",
+        },
+        {
+            "quantity": "Delta_IVC_Q0_vs_VP_per_cell",
+            "value": Delta_IVC_Q0_vs_VP_per_cell,
+            "reference": vp_reference_name,
+        },
+        {
+            "quantity": "Delta_IVC_finite_Q_vs_VP_per_cell",
+            "value": Delta_IVC_finite_Q_vs_VP_per_cell,
+            "reference": vp_reference_name,
+        },
+        {
+            "quantity": "Delta_finite_Q_minus_Q0_per_cell",
+            "value": Delta_finite_Q_minus_Q0_per_cell,
+            "reference": "",
+        },
+    ]
+)
+ivc_energy_comparison.to_csv(result_dir / "ivc_q0_vs_finite_q_energy_comparison.csv", index=False)
+display(ivc_energy_comparison)
+
+fig, axes = plt.subplots(1, 2, figsize=(10.5, 3.8), constrained_layout=True)
+energy_plot = ivc_energy_comparison.iloc[:3]
+axes[0].bar(energy_plot["quantity"], energy_plot["value"])
+axes[0].tick_params(axis="x", rotation=35)
+axes[0].set_ylabel("energy per cell")
+axes[0].set_title("absolute energies")
+
+cost_plot = ivc_energy_comparison.iloc[3:]
+axes[1].bar(cost_plot["quantity"], cost_plot["value"])
+axes[1].tick_params(axis="x", rotation=35)
+axes[1].set_ylabel("energy per cell")
+axes[1].set_title("IVC costs")
+fig.savefig(result_dir / "ivc_q0_vs_finite_q_energy_costs.png", dpi=180)
+plt.show()
+
+
+# %% [markdown]
 # ## Reference Energies And Channel Diagnostics
 #
-# The VP splitting printed below is a convention/truncation check. At `u_D = 0`, a nonzero value indicates the finite active-space/form-factor setup or the selected mesh controls are still breaking the expected VP+/VP- equivalence.
+# The VP splitting printed below is a convention/truncation check. At `u_D = 0`, a nonzero value indicates the finite active-space/form-factor setup or the selected mesh controls are still breaking the expected VP+/VP- equivalence. The finite-Q IVC energy, if enabled, is printed for comparison but is not included in `refs`.
 #
 
 # %%
@@ -608,6 +847,8 @@ energies = {
 }
 for key, value in energies.items():
     print(f"{key:4s}: {value:.12g}")
+if finite_q_ivc is not None:
+    print(f"finite-Q IVC: {finite_q_ivc.energy:.12g}")
 print("VP splitting E(VP+) - E(VP-):", energies["VP+"] - energies["VP-"])
 
 for name, diag in reference_diagnostics(refs).items():
@@ -712,9 +953,9 @@ print("energy per cell range:", float(np.ptp(trial_energy_total_per_cell)))
 # %% [markdown]
 # ## Post-HF Texture Controls
 #
-# The domain-wall texture parameters enter only after `K(theta)` is known. Edit `R` and `w` here to recompute the radial texture and charge density from the already computed HF references and convex path.
+# The domain-wall texture parameters enter only after `K(theta)` is known. Edit `R` and `w` here to recompute the radial texture and charge density from the already computed Q=0 HF references and convex path.
 #
-# This cell does not rerun continuum bands, density vertices, or HF.
+# This cell does not rerun continuum bands, density vertices, Q=0 HF, or finite-Q IVC HF.
 #
 
 # %%
@@ -800,7 +1041,7 @@ print("integrated 2D charge:", integrated_charge_2d)
 # %% [markdown]
 # ## Save Arrays
 #
-# This cell writes the converged reference projectors, convex-path projectors, `K(theta)`, `c_G`, and the current post-HF charge profile and real-space charge-density map into a compressed NumPy artifact under `results/`.
+# This cell writes the converged Q=0 reference projectors, convex-path projectors, `K(theta)`, `c_G`, the physical trial-energy curve, and the current post-HF charge-density profiles into a compressed NumPy artifact under `results/`. The finite-Q IVC comparison is stored separately in its own CSV/figures above.
 #
 
 # %%
@@ -827,7 +1068,6 @@ np.savez_compressed(
     charge_theta_xy=grid_profile.theta,
     charge_K_xy=grid_profile.K_theta,
     charge_rho_xy_dimless=rho_xy,
+    integrated_charge_2d=np.array(integrated_charge_2d),
 )
 print("saved:", result_dir / "taige_symmetric_hf_references_and_response.npz")
-
-# %%

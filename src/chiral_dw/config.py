@@ -198,6 +198,34 @@ class ContinuumGridParams(BaseModel):
         return self.n_k * self.n_k
 
 
+class ContinuumFiniteQParams(BaseModel):
+    """Finite-Q active-frame controls for native continuum/HF workflows."""
+
+    model_config = ConfigDict(frozen=True)
+
+    enabled: bool = False
+    q_coord: tuple[int, int] = (0, 0)
+    half_shift_coord: tuple[int, int] | None = None
+
+    @field_validator("q_coord")
+    @classmethod
+    def _q_coord_is_integral(cls, value: tuple[int, int]) -> tuple[int, int]:
+        if len(value) != 2:
+            raise ValueError("q_coord must have length 2")
+        return int(value[0]), int(value[1])
+
+    @field_validator("half_shift_coord")
+    @classmethod
+    def _half_shift_coord_is_integral(
+        cls, value: tuple[int, int] | None
+    ) -> tuple[int, int] | None:
+        if value is None:
+            return None
+        if len(value) != 2:
+            raise ValueError("half_shift_coord must have length 2")
+        return int(value[0]), int(value[1])
+
+
 class ContinuumModelParams(BaseModel):
     """Native continuum active-band parameters."""
 

@@ -9,6 +9,7 @@ import numpy as np
 from pydantic import BaseModel, ConfigDict
 
 from chiral_dw.config import (
+    ContinuumFiniteQParams,
     ContinuumGridParams,
     ContinuumHFParams,
     ContinuumInteractionParams,
@@ -40,6 +41,67 @@ def projector_idempotency_errors(P: np.ndarray) -> tuple[float, float]:
     arr = np.asarray(P, dtype=complex)
     err = arr @ arr - arr
     return float(np.linalg.norm(err)), float(np.max(np.abs(err)))
+
+
+def finite_q_shift_metadata(
+    finite_q: ContinuumFiniteQParams | None,
+    grid: "MomentumGrid" | None = None,
+) -> dict:
+    """Return JSON-friendly metadata for the finite-Q active-frame convention."""
+
+    controls = finite_q or ContinuumFiniteQParams()
+    enabled = bool(controls.enabled)
+    q_coord = (int(controls.q_coord[0]), int(controls.q_coord[1]))
+    metadata = {
+        "enabled": enabled,
+        "q_coord": [q_coord[0], q_coord[1]],
+        "shift_convention": "K: k-Q/2, Kprime: k+Q/2",
+        "momentum_frame": (
+            "finite-Q symmetric active frame"
+            if enabled
+            else "translation-symmetric Q=0 active frame"
+        ),
+    }
+    if grid is None:
+        metadata.update(
+            {
+                "grid": None,
+                "q_fractional": [0.0, 0.0],
+                "half_shift_coord": [0, 0],
+                "half_shift_fractional": [0.0, 0.0],
+                "half_shift_centered_fractional": [0.0, 0.0],
+                "valley_shifts_fractional": {
+                    VALLEY_K: [0.0, 0.0],
+                    VALLEY_KPRIME: [0.0, 0.0],
+                },
+            }
+        )
+        return metadata
+
+    if enabled:
+        half = grid.assert_half_q_on_mesh(q_coord, controls.half_shift_coord)
+        half_frac = np.array([half[0] / grid.n1, half[1] / grid.n2], dtype=float)
+        q_frac = [q_coord[0] / grid.n1, q_coord[1] / grid.n2]
+    else:
+        half = (0, 0)
+        half_frac = np.zeros(2, dtype=float)
+        q_frac = [0.0, 0.0]
+    metadata.update(
+        {
+            "grid": {"n1": int(grid.n1), "n2": int(grid.n2)},
+            "q_fractional": [float(q_frac[0]), float(q_frac[1])],
+            "half_shift_coord": [int(half[0]), int(half[1])],
+            "half_shift_fractional": [float(half_frac[0]), float(half_frac[1])],
+            "half_shift_centered_fractional": [
+                float(x) for x in (np.mod(half_frac + 0.5, 1.0) - 0.5)
+            ],
+            "valley_shifts_fractional": {
+                VALLEY_K: [float(-half_frac[0]), float(-half_frac[1])],
+                VALLEY_KPRIME: [float(half_frac[0]), float(half_frac[1])],
+            },
+        }
+    )
+    return metadata
 
 
 @dataclass(frozen=True)
@@ -85,6 +147,44 @@ class MomentumGrid:
     def shift_minus_q(self, coord: tuple[int, int], q_coord: tuple[int, int]) -> tuple[tuple[int, int], tuple[int, int]]:
         return self.fold_grid_coord((int(coord[0]) - int(q_coord[0]), int(coord[1]) - int(q_coord[1])))
 
+    def assert_half_q_on_mesh(
+        self,
+        q_coord: tuple[int, int],
+        half_shift_coord: tuple[int, int] | None = None,
+    ) -> tuple[int, int]:
+        """Return a folded Q/2 coordinate and validate it lies on the mesh."""
+
+        q = (int(q_coord[0]), int(q_coord[1]))
+        if half_shift_coord is not None:
+            h = (int(half_shift_coord[0]), int(half_shift_coord[1]))
+            folded, _shift = self.fold_grid_coord(h)
+            if (2 * folded[0] - q[0]) % self.n1 or (2 * folded[1] - q[1]) % self.n2:
+                raise ValueError(
+                    "finite-Q half_shift_coord must satisfy 2*half_shift_coord = "
+                    f"q_coord modulo the mesh; got half_shift_coord={h}, q_coord={q}"
+                )
+            return folded
+        if q[0] % 2 or q[1] % 2:
+            raise ValueError(f"finite-Q symmetric basis requires Q/2 on mesh; got {q}")
+        return q[0] // 2, q[1] // 2
+
+    def finite_q_physical_coord(
+        self,
+        coord: tuple[int, int],
+        q_coord: tuple[int, int],
+        valley: str,
+        half_shift_coord: tuple[int, int] | None = None,
+    ) -> tuple[tuple[int, int], tuple[int, int]]:
+        """Map active-frame k to physical k in the symmetric finite-Q frame."""
+
+        half = self.assert_half_q_on_mesh(q_coord, half_shift_coord)
+        k = (int(coord[0]), int(coord[1]))
+        if valley == VALLEY_K:
+            return self.fold_grid_coord((k[0] - half[0], k[1] - half[1]))
+        if valley == VALLEY_KPRIME:
+            return self.fold_grid_coord((k[0] + half[0], k[1] + half[1]))
+        raise ValueError(f"unknown valley {valley!r}")
+
     def fractional_coords(self) -> np.ndarray:
         coords = np.zeros((self.size, 2), dtype=float)
         for ik in range(self.size):
@@ -113,6 +213,9 @@ class ContinuumActiveSpace:
     electron_vectors: np.ndarray | None = None
     source_index: np.ndarray | None = None
     source_shift: np.ndarray | None = None
+    finite_q_enabled: bool = False
+    q_coord: tuple[int, int] | None = None
+    half_shift_coord: tuple[int, int] | None = None
     geometry: object | None = None
     bands: object | None = None
 
@@ -158,6 +261,7 @@ class ContinuumBundle:
     backend: object
     params: ContinuumModelParams
     interaction: ContinuumInteractionParams
+    finite_q: ContinuumFiniteQParams = field(default_factory=ContinuumFiniteQParams)
     bands: object | None = None
     geometry: object | None = None
     form_factors: object | None = None

@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from chiral_dw.config import (
+    ContinuumFiniteQParams,
     ContinuumGridParams,
     ContinuumHFParams,
     ContinuumInteractionParams,
@@ -27,6 +28,9 @@ from chiral_dw.continuum import (
     symmetric_convex_hamiltonian,
     symmetric_convex_path,
     symmetric_convex_projector,
+    taige_ivc_minus_half_shift_coord,
+    taige_ivc_minus_q_coord,
+    taige_model_params,
 )
 from chiral_dw.continuum.models import SymmetricHFReferences, block_trace_product, hermitize
 from chiral_dw.continuum.seeds import ivc_seed, valley_polarized_seed
@@ -107,6 +111,31 @@ def test_optimized_backend_matches_slow_hartree_fock_reference():
 
     P, _evals, _direct, _indirect = backend.update_density(backend.h0, 3)
     assert np.real(np.trace(P, axis1=-2, axis2=-1).sum()) == pytest.approx(3.0)
+
+
+def test_finite_q_taige_backend_matches_slow_hartree_fock_reference():
+    bundle = build_continuum_bundle(
+        model=taige_model_params(theta_deg=3.5, u_D=0.0, plane_wave_shell=1, n_bands=1),
+        grid=ContinuumGridParams(n_k=6),
+        finite_q=ContinuumFiniteQParams(
+            enabled=True,
+            q_coord=taige_ivc_minus_q_coord(6),
+            half_shift_coord=taige_ivc_minus_half_shift_coord(6),
+        ),
+        interaction=ContinuumInteractionParams(
+            coulomb_kind="dimensionless_screened",
+            v0=0.03,
+            q_shell=1,
+            local_field_cutoff=0,
+        ),
+    )
+    rng = np.random.default_rng(13)
+    Q = hermitize(
+        rng.normal(size=bundle.active.h0.shape) + 1j * rng.normal(size=bundle.active.h0.shape)
+    )
+
+    assert np.allclose(bundle.backend.hartree_hamiltonian(Q), _slow_hartree(bundle.backend, Q))
+    assert np.allclose(bundle.backend.fock_hamiltonian(Q), _slow_fock(bundle.backend, Q))
 
 
 def test_valley_u1_constraint_projects_intervalley_blocks_and_preserves_vp_seed():

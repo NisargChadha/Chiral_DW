@@ -19,6 +19,7 @@ from chiral_dw.continuum.models import (
     ContinuumHFResult,
     ConvexPathDiagnostics,
     DensityVertices,
+    finite_q_shift_metadata,
     MomentumGrid,
     ReferenceHamiltonianDiagnostics,
     SymmetricHFReferences,
@@ -42,6 +43,7 @@ from chiral_dw.continuum.references import (
 )
 from chiral_dw.continuum.seeds import (
     build_seed,
+    finite_q_ivc_seed,
     ivc_seed,
     mix_projector_seeds,
     random_projector_like_seed,
@@ -63,6 +65,8 @@ from chiral_dw.continuum.taige import (
     chern_number_table,
     compute_taige_path_spectrum,
     taige_interaction_params,
+    taige_ivc_minus_half_shift_coord,
+    taige_ivc_minus_q_coord,
     taige_model_params,
 )
 from chiral_dw.continuum.workflow import (
@@ -83,6 +87,8 @@ __all__ = [
     "ConvexPathDiagnostics",
     "DensityVertices",
     "ChernNumberRow",
+    "finite_q_shift_metadata",
+    "finite_q_ivc_seed",
     "MomentumGrid",
     "ReferenceHamiltonianDiagnostics",
     "SymmetricHFReferences",
@@ -118,6 +124,8 @@ __all__ = [
     "symmetric_convex_path",
     "symmetric_convex_projector",
     "taige_interaction_params",
+    "taige_ivc_minus_half_shift_coord",
+    "taige_ivc_minus_q_coord",
     "taige_model_params",
     "valley_polarized_seed",
     "valley_projector_matrix",

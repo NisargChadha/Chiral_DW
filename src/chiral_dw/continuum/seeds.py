@@ -58,6 +58,20 @@ def ivc_seed(
     return hermitize(P)
 
 
+def finite_q_ivc_seed(
+    active: ContinuumActiveSpace,
+    *,
+    n_occ_per_k: int = 1,
+    angle: float = 0.5 * np.pi,
+    phase: float = 0.0,
+) -> np.ndarray:
+    """Build an active-frame IVC seed for a finite-Q active space."""
+
+    if not active.finite_q_enabled:
+        raise ValueError("finite_q_ivc seed requires an active space built with finite_q enabled")
+    return ivc_seed(active, n_occ_per_k=n_occ_per_k, angle=angle, phase=phase)
+
+
 def random_seed(
     active: ContinuumActiveSpace,
     *,
@@ -150,6 +164,13 @@ def build_seed(
         return valley_polarized_seed(active, VALLEY_KPRIME, n_occ_per_k=n_occ_per_k)
     if key in {"ivc", "ivc_q0"}:
         return ivc_seed(
+            active,
+            n_occ_per_k=n_occ_per_k,
+            angle=ivc_angle,
+            phase=ivc_phase,
+        )
+    if key in {"finite_q_ivc", "finite_q_ivc_minus"}:
+        return finite_q_ivc_seed(
             active,
             n_occ_per_k=n_occ_per_k,
             angle=ivc_angle,

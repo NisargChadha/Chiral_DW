@@ -8,7 +8,7 @@ from typing import Literal
 import numpy as np
 from pydantic import BaseModel, ConfigDict
 
-from chiral_dw.config import ContinuumInteractionParams, ContinuumModelParams
+from chiral_dw.config import ContinuumFiniteQParams, ContinuumInteractionParams, ContinuumModelParams
 from chiral_dw.continuum.models import (
     ContinuumActiveSpace,
     DensityVertices,
@@ -172,6 +172,24 @@ def taige_interaction_params(
         q_shell=int(q_shell),
         local_field_cutoff=int(local_field_cutoff),
     )
+
+
+def taige_ivc_minus_q_coord(n_k: int) -> GridCoord:
+    """Return the folded Taige IVC- Q mesh coordinate."""
+
+    n = int(n_k)
+    if n % 6:
+        raise ValueError("Taige IVC- finite-Q runs require n_k divisible by 6")
+    return n // 3, n // 3
+
+
+def taige_ivc_minus_half_shift_coord(n_k: int) -> GridCoord:
+    """Return the unfolded-half Taige IVC- Q/2 mesh representative."""
+
+    n = int(n_k)
+    if n % 6:
+        raise ValueError("Taige IVC- finite-Q runs require n_k divisible by 6")
+    return n // 6, 2 * n // 3
 
 
 def reciprocal_shell(n_shell: int) -> tuple[GridCoord, ...]:
@@ -385,21 +403,49 @@ def compute_taige_bandstructure(model: ContinuumModelParams, grid: MomentumGrid)
 def build_taige_active_space(
     grid: MomentumGrid,
     model: ContinuumModelParams,
+    finite_q: ContinuumFiniteQParams | None = None,
 ) -> tuple[ContinuumActiveSpace, TaigeBandStructure]:
-    """Build the Q=0 active hole basis for the Taige continuum model."""
+    """Build the Taige active hole basis, optionally in a finite-Q frame."""
 
     bands = compute_taige_bandstructure(model, grid)
+    finite_q_params = finite_q or ContinuumFiniteQParams()
+    finite_q_enabled = bool(finite_q_params.enabled)
+    q_coord = finite_q_params.q_coord if finite_q_enabled else None
+    half_shift_coord = finite_q_params.half_shift_coord if finite_q_enabled else None
+    if finite_q_enabled:
+        grid.assert_half_q_on_mesh(q_coord, half_shift_coord)
     n_active = int(model.n_active_bands_per_valley)
     if n_active > bands.n_bands:
         raise ValueError("n_active_bands_per_valley exceeds computed n_bands")
     dim = 2 * n_active
-    hole_energies = bands.hole_energies[:, :, :n_active].copy()
-    hole_vectors = bands.hole_vectors[:, :, :, :n_active].copy()
+    hole_energies = np.empty((grid.size, 2, n_active), dtype=float)
+    hole_vectors = np.empty((grid.size, 2, 2 * bands.n_plane_waves, n_active), dtype=complex)
+    electron_energies = np.empty((grid.size, 2, n_active), dtype=float)
+    electron_vectors = np.empty((grid.size, 2, 2 * bands.n_plane_waves, n_active), dtype=complex)
+    source_index = np.empty((grid.size, 2), dtype=int)
+    source_shift = np.zeros((grid.size, 2, 2), dtype=int)
+    for ik in range(grid.size):
+        coord = grid.coord_of(ik)
+        for iv, valley in enumerate(VALLEY_ORDER):
+            if finite_q_enabled:
+                folded, shift = grid.finite_q_physical_coord(
+                    coord,
+                    q_coord,
+                    valley,
+                    half_shift_coord,
+                )
+                src = grid.index_of(folded)
+                source_shift[ik, iv] = shift
+            else:
+                src = ik
+            source_index[ik, iv] = src
+            hole_energies[ik, iv] = bands.hole_energies[src, iv, :n_active]
+            hole_vectors[ik, iv] = bands.hole_vectors[src, iv, :, :n_active]
+            electron_energies[ik, iv] = bands.electron_energies[src, iv, :n_active]
+            electron_vectors[ik, iv] = bands.electron_vectors[src, iv, :, :n_active]
     h0 = np.zeros((grid.size, dim, dim), dtype=complex)
     for ik in range(grid.size):
         h0[ik] = np.diag(hole_energies[ik].reshape(-1).astype(complex))
-    source_index = np.tile(np.arange(grid.size, dtype=int)[:, None], (1, 2))
-    source_shift = np.zeros((grid.size, 2, 2), dtype=int)
     active = ContinuumActiveSpace(
         grid=grid,
         n_active=n_active,
@@ -409,10 +455,13 @@ def build_taige_active_space(
         model=model,
         shell=bands.shell,
         n_plane_waves=bands.n_plane_waves,
-        electron_energies=bands.electron_energies[:, :, :n_active].copy(),
-        electron_vectors=bands.electron_vectors[:, :, :, :n_active].copy(),
+        electron_energies=electron_energies,
+        electron_vectors=electron_vectors,
         source_index=source_index,
         source_shift=source_shift,
+        finite_q_enabled=finite_q_enabled,
+        q_coord=q_coord,
+        half_shift_coord=half_shift_coord,
         geometry=bands.geometry,
         bands=bands,
     )
@@ -560,8 +609,8 @@ def build_taige_density_vertices(
 ) -> DensityVertices:
     """Build projected hole density vertices and Taige interaction weights."""
 
-    if active.electron_vectors is None or active.geometry is None:
-        raise ValueError("Taige density vertices require electron vectors and geometry")
+    if active.bands is None or active.geometry is None:
+        raise ValueError("Taige density vertices require bandstructure and geometry")
     grid = active.grid
     q_list = q_transfers(grid, interaction)
     g_channels = reciprocal_box(interaction.local_field_cutoff)
@@ -572,7 +621,8 @@ def build_taige_density_vertices(
     lambdas = np.zeros((n_q, n_g, grid.size, active.dim, active.dim), dtype=complex)
     shell = active.shell
     shell_index = {g: i for i, g in enumerate(shell)}
-    electron_vectors = np.asarray(active.electron_vectors, dtype=complex)
+    bands = active.bands
+    electron_vectors = np.asarray(bands.electron_vectors, dtype=complex)
     geometry = active.geometry
     channel_in_disk = _channel_mask(
         geometry,
@@ -586,9 +636,13 @@ def build_taige_density_vertices(
         forward, rec_shift = grid.shift_plus_q(grid.coord_of(ik), q_mesh)
         ikq = grid.index_of(forward)
         shift = (rec_shift[0] + int(g_channel[0]), rec_shift[1] + int(g_channel[1]))
-        left = electron_vectors[ik, iv]
-        right = electron_vectors[ikq, iv]
+        left = electron_vectors[ik, iv, :, : active.n_active]
+        right = electron_vectors[ikq, iv, :, : active.n_active]
         return _overlap(left, right, shell=shell, shell_index=shell_index, shift=shift)
+
+    def hole_form_factor(iv: int, ik: int, q_mesh: GridCoord, g_channel: GridCoord) -> np.ndarray:
+        ik_minus_q = grid.index_of(grid.shift_minus_q(grid.coord_of(ik), q_mesh)[0])
+        return electron_form_factor(iv, ik_minus_q, q_mesh, g_channel).T
 
     for iq, q in enumerate(q_list):
         q_is_zero[iq] = q == (0, 0)
@@ -599,16 +653,20 @@ def build_taige_density_vertices(
             if not channel_in_disk[iq, ig]:
                 continue
             for ik in range(grid.size):
-                ik_minus_q = int(target_minus_q[iq, ik])
                 for iv in range(2):
                     start = iv * active.n_active
                     stop = start + active.n_active
-                    lambdas[iq, ig, ik, start:stop, start:stop] = electron_form_factor(
+                    physical_source = (
+                        int(active.source_index[ik, iv])
+                        if active.source_index is not None
+                        else int(ik)
+                    )
+                    lambdas[iq, ig, ik, start:stop, start:stop] = hole_form_factor(
                         iv,
-                        ik_minus_q,
+                        physical_source,
                         q,
                         g,
-                    ).T
+                    )
 
     q_vectors_nm_inv = geometry.mesh_q_vectors_nm_inv(grid, q_list, g_channels)
     if interaction.coulomb_kind == "dual_gate":

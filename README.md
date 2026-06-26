@@ -32,6 +32,9 @@ moving back to the nonideal conjugate AC/domain-wall calculation:
 - The native continuum/HF workflow builds self-contained VP+, VP-, and IVC
   reference Hamiltonians, reports final projector idempotency, and constructs a
   convex full-HF variational path.
+- The Taige notebook can also build a separate finite-Q IVC active frame and
+  compare its HF energy cost against the Q=0 IVC reference without changing the
+  Q=0 charge-response path.
 - The same-Chern QHFM benchmark validates the real-space 4D charge evaluator
   against `rho_top=-q_sk` in a controlled Chern-1 limit.
 - The ideal opposite-Chern conjugate LLL benchmark validates the circular
@@ -111,6 +114,11 @@ reference HF states:
 - VP+ from a `K`-polarized seed with a continuous valley-U(1) constraint;
 - VP- from a `Kprime`-polarized seed with the same constraint;
 - IVC from an intervalley-coherent seed with the non-Kramers `T'` constraint.
+
+For Taige-parameter notebooks, a separate finite-Q IVC energy comparison is
+available in the symmetric active frame `K: k-Q/2`, `Kprime: k+Q/2`. This is an
+HF energy/cost diagnostic only; the v1 convex `K(theta)` and `cG` response
+still uses the Q=0 VP+/VP-/IVC references.
 
 The variational Hamiltonian is a convex combination of the full raw HF
 Hamiltonians:

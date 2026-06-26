@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 from chiral_dw.config import (
+    ContinuumFiniteQParams,
     ContinuumGridParams,
     ContinuumInteractionParams,
     ContinuumModelParams,
@@ -48,17 +49,21 @@ def _qiwuzhang_hole_vector(u: float, v: float, mass: float = 0.6) -> tuple[float
 def build_active_space(
     grid_params: ContinuumGridParams | None = None,
     model_params: ContinuumModelParams | None = None,
+    finite_q: ContinuumFiniteQParams | None = None,
 ) -> ContinuumActiveSpace:
     """Build the native two-valley active space."""
 
     grid_controls = grid_params or ContinuumGridParams()
     model = model_params or ContinuumModelParams()
+    finite_q_params = finite_q or ContinuumFiniteQParams()
     grid = MomentumGrid(grid_controls.n_k)
     if model.active_model == "taige":
         from chiral_dw.continuum.taige import build_taige_active_space
 
-        active, _bands = build_taige_active_space(grid, model)
+        active, _bands = build_taige_active_space(grid, model, finite_q_params)
         return active
+    if finite_q_params.enabled:
+        raise NotImplementedError("finite-Q active frames are implemented for Taige models only")
     if model.active_model != "qiwuzhang":
         raise ValueError(f"unknown active_model {model.active_model!r}")
     n_active = int(model.n_active_bands_per_valley)
@@ -145,12 +150,14 @@ def build_continuum_bundle(
     model: ContinuumModelParams | None = None,
     grid: ContinuumGridParams | None = None,
     interaction: ContinuumInteractionParams | None = None,
+    finite_q: ContinuumFiniteQParams | None = None,
 ) -> ContinuumBundle:
     """Build a self-contained native continuum/HF bundle."""
 
     model_params = model or ContinuumModelParams()
     interaction_params = interaction or ContinuumInteractionParams()
-    active = build_active_space(grid, model_params)
+    finite_q_params = finite_q or ContinuumFiniteQParams()
+    active = build_active_space(grid, model_params, finite_q_params)
     vertices = build_density_vertices(active, interaction_params)
     from chiral_dw.continuum.hf import ContinuumHFBackend
 
@@ -162,6 +169,7 @@ def build_continuum_bundle(
         backend=backend,
         params=model_params,
         interaction=interaction_params,
+        finite_q=finite_q_params,
         bands=active.bands,
         geometry=active.geometry,
         form_factors=None,
