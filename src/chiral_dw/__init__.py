@@ -38,6 +38,7 @@ from chiral_dw.ideal_conjugate_lll import run_ideal_conjugate_lll_charge_benchma
 from chiral_dw.response import (
     KThetaResult,
     compute_cG,
+    flavor_tau_z,
     k_theta_from_projectors,
     k_theta_from_projectors_with_basis,
 )
@@ -72,6 +73,7 @@ __all__ = [
     "build_continuum_bundle",
     "build_symmetric_hf_references",
     "compute_cG",
+    "flavor_tau_z",
     "k_theta_from_projectors",
     "k_theta_from_projectors_with_basis",
     "run_ideal_conjugate_lll_charge_benchmark",

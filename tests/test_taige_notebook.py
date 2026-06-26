@@ -28,6 +28,8 @@ def test_taige_notebook_embeds_projectors_for_charge_response():
     assert "active_basis_frames(active).reshape" in text
     assert "k_theta_from_projectors_with_basis(projectors, theta_nodes, basis_frames)" in text
     assert "SymmetricHFReferences(vp_plus=vp_plus, vp_minus=vp_minus, ivc=ivc" in text
+    assert "charge-response cell currently expects one active band per valley" not in text
+    assert "if active.dim != 2" not in text
 
 
 def test_taige_notebook_plots_real_space_charge_density():

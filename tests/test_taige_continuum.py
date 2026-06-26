@@ -8,6 +8,9 @@ from chiral_dw.config import (
     ContinuumInteractionParams,
 )
 from chiral_dw.continuum import (
+    ContinuumHFDiagnostics,
+    ContinuumHFResult,
+    SymmetricHFReferences,
     TPrimeConstraint,
     ValleyU1Constraint,
     active_basis_frames,
@@ -40,6 +43,37 @@ def _tiny_taige_bundle(interaction=None):
             q_shell=0,
             local_field_cutoff=0,
         ),
+    )
+
+
+def _dummy_hf_result(H: np.ndarray, seed: str) -> ContinuumHFResult:
+    P = np.zeros_like(H, dtype=complex)
+    P[:, 0, 0] = 1.0
+    diagnostics = ContinuumHFDiagnostics(
+        energy=0.0,
+        delta_energy=0.0,
+        delta_P=0.0,
+        idempotency_error_fro=0.0,
+        idempotency_error_max=0.0,
+        constraint_error=0.0,
+        aufbau_residual_norm=0.0,
+        commutator_norm=0.0,
+        trace_error=0.0,
+        direct_gap_min=1.0,
+        indirect_gap=1.0,
+        iteration=0,
+        constraint_name=None,
+        density_kind="final_idempotent",
+    )
+    return ContinuumHFResult(
+        P=P,
+        H_hf=H,
+        energy=0.0,
+        converged=True,
+        n_iter=0,
+        diagnostics=diagnostics,
+        seed=seed,
+        constraint_name=None,
     )
 
 
@@ -347,3 +381,48 @@ def test_tiny_taige_symmetric_response_smoke():
     assert len(diagnostics) == 5
     assert np.all(np.isfinite(response.K))
     assert np.isfinite(compute_cG(response.theta, response.K))
+
+
+def test_tiny_taige_multi_active_response_smoke():
+    model = taige_model_params(
+        theta_deg=3.5,
+        u_D=0.0,
+        plane_wave_shell=1,
+        n_bands=2,
+        n_active_bands_per_valley=2,
+    )
+    bundle = build_continuum_bundle(
+        model=model,
+        grid=ContinuumGridParams(n_k=2),
+        interaction=ContinuumInteractionParams(
+            coulomb_kind="dimensionless_screened",
+            v0=0.0,
+            q_shell=0,
+            local_field_cutoff=0,
+        ),
+    )
+    active = bundle.active
+    assert active.dim == 4
+
+    H_plus = np.broadcast_to(np.diag([-2.0, -1.0, 2.0, 3.0]), active.h0.shape).astype(complex)
+    H_minus = np.broadcast_to(np.diag([2.0, 3.0, -2.0, -1.0]), active.h0.shape).astype(complex)
+    H_ivc = np.zeros_like(active.h0, dtype=complex)
+    H_ivc[:, 0, 2] = H_ivc[:, 2, 0] = -1.0
+    H_ivc[:, 1, 3] = H_ivc[:, 3, 1] = -0.5
+    refs = SymmetricHFReferences(
+        vp_plus=_dummy_hf_result(H_plus, "vp_plus"),
+        vp_minus=_dummy_hf_result(H_minus, "vp_minus"),
+        ivc=_dummy_hf_result(H_ivc, "ivc"),
+        n_occ_per_k=1,
+    )
+
+    theta = np.linspace(0.1, np.pi - 0.1, 5)
+    projectors, diagnostics = symmetric_convex_path(refs, theta)
+    response_projectors = projectors.reshape(5, 2, 2, active.dim, active.dim)
+    basis = active_basis_frames(active).reshape(2, 2, -1, active.dim)
+    response = k_theta_from_projectors_with_basis(response_projectors, theta, basis)
+
+    assert response_projectors.shape[-2:] == (4, 4)
+    assert len(diagnostics) == 5
+    assert np.all(np.isfinite(response.K))
+    assert np.isfinite(response.cG)

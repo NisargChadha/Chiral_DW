@@ -5,11 +5,14 @@ from chiral_dw.config import DomainWallParams, UnitsParams
 from chiral_dw.domain_wall import charge_density_radial, dtheta_dr, theta_profile
 from chiral_dw.response import (
     compute_cG,
+    flavor_tau_z,
+    phi_derivative_projector,
     k_theta_from_projectors,
     k_theta_from_projectors_with_basis,
     projector_errors,
     projector_grid_from_theta,
     rotate_projector_phi,
+    u1_rotation,
 )
 
 
@@ -30,6 +33,38 @@ def test_u1_rotation_preserves_projector_and_is_periodic():
     assert np.allclose(periodic, P, atol=1e-12)
 
 
+def test_flavor_tau_z_and_u1_rotation_general_dim():
+    phi = 0.37
+
+    assert np.allclose(flavor_tau_z(4), np.diag([1.0, 1.0, -1.0, -1.0]))
+    assert np.allclose(
+        u1_rotation(phi, dim=4),
+        np.diag(
+            [
+                np.exp(-0.5j * phi),
+                np.exp(-0.5j * phi),
+                np.exp(0.5j * phi),
+                np.exp(0.5j * phi),
+            ]
+        ),
+    )
+    with pytest.raises(ValueError, match="positive even"):
+        flavor_tau_z(3)
+
+
+def test_phi_derivative_matches_finite_difference_for_general_dim():
+    eps = 1e-6
+    for dim in (2, 4, 6):
+        rng = np.random.default_rng(dim)
+        z = rng.normal(size=(dim, dim)) + 1j * rng.normal(size=(dim, dim))
+        q, _ = np.linalg.qr(z)
+        occ = q[:, : max(1, dim // 3)]
+        P = occ @ occ.conj().T
+
+        finite_difference = (rotate_projector_phi(P, eps) - rotate_projector_phi(P, -eps)) / (2.0 * eps)
+        assert np.allclose(phi_derivative_projector(P), finite_difference, atol=1e-8)
+
+
 def test_projector_grid_from_theta_preserves_projectors():
     theta, P = _constant_projector_grid()
     grid = projector_grid_from_theta(P, np.array([0.0, 0.3, 2.0 * np.pi]))
@@ -37,6 +72,23 @@ def test_projector_grid_from_theta_preserves_projectors():
     assert grid.shape == (len(theta), 3, 4, 4, 2, 2)
     assert projector_errors(grid)["idempotency"] < 1e-12
     assert np.allclose(grid[:, 0], grid[:, 2], atol=1e-12)
+
+
+def test_projector_grid_from_theta_accepts_dim4():
+    n_theta = 5
+    n_k = 3
+    dim = 4
+    theta = np.linspace(0.0, np.pi, n_theta)
+    P = np.zeros((n_theta, n_k, n_k, dim, dim), dtype=complex)
+    for it, th in enumerate(theta):
+        spinor = np.array([np.cos(0.5 * th), 0.0, np.sin(0.5 * th), 0.0], dtype=complex)
+        P[it, :, :] = spinor[:, None] * spinor.conj()[None, :]
+
+    grid = projector_grid_from_theta(P, np.array([0.0, 0.4]))
+
+    assert grid.shape == (n_theta, 2, n_k, n_k, dim, dim)
+    assert projector_errors(grid)["hermiticity"] < 1e-12
+    assert projector_errors(grid)["idempotency"] < 1e-12
 
 
 def test_trivial_projector_has_zero_response():
@@ -63,6 +115,29 @@ def test_embedded_response_matches_active_response_for_constant_basis():
                 P[it, i, j] = spinor[:, None] * spinor.conj()[None, :]
 
     basis = np.broadcast_to(np.eye(2, dtype=complex), (n_k, n_k, 2, 2)).copy()
+    active = k_theta_from_projectors(P, theta)
+    embedded = k_theta_from_projectors_with_basis(P, theta, basis)
+
+    assert np.allclose(embedded.K, active.K, atol=1e-12)
+    assert embedded.cG == pytest.approx(active.cG, abs=1e-12)
+
+
+def test_embedded_response_matches_active_response_for_constant_basis_dim4():
+    n_theta = 7
+    n_k = 4
+    theta = np.linspace(0.1, np.pi - 0.1, n_theta)
+    P = np.zeros((n_theta, n_k, n_k, 4, 4), dtype=complex)
+    for it, th in enumerate(theta):
+        for i in range(n_k):
+            for j in range(n_k):
+                phase = 2.0 * np.pi * (i + 2 * j) / n_k
+                spinor = np.array(
+                    [np.cos(0.5 * th), 0.0, np.exp(1j * phase) * np.sin(0.5 * th), 0.0],
+                    dtype=complex,
+                )
+                P[it, i, j] = spinor[:, None] * spinor.conj()[None, :]
+
+    basis = np.broadcast_to(np.eye(4, dtype=complex), (n_k, n_k, 4, 4)).copy()
     active = k_theta_from_projectors(P, theta)
     embedded = k_theta_from_projectors_with_basis(P, theta, basis)
 

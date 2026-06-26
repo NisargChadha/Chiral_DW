@@ -6,8 +6,6 @@ from dataclasses import dataclass
 
 import numpy as np
 
-TAU_Z = np.array([[1.0, 0.0], [0.0, -1.0]], dtype=complex)
-
 
 @dataclass(frozen=True)
 class KThetaResult:
@@ -23,33 +21,57 @@ def hermitian_part(matrix: np.ndarray) -> np.ndarray:
     return 0.5 * (arr + arr.conj().swapaxes(-1, -2))
 
 
-def u1_rotation(phi: float) -> np.ndarray:
-    """Return U_phi=exp(-i phi tau_z/2)."""
+def flavor_tau_z(dim: int) -> np.ndarray:
+    """Return tau_z=diag(+I_n,-I_n) for an even active flavor dimension."""
+
+    d = int(dim)
+    if d <= 0 or d % 2:
+        raise ValueError("dim must be a positive even integer")
+    n = d // 2
+    charges = np.concatenate([np.ones(n, dtype=float), -np.ones(n, dtype=float)])
+    return np.diag(charges.astype(complex))
+
+
+def u1_rotation(phi: float, dim: int = 2) -> np.ndarray:
+    """Return U_phi=exp(-i phi tau_z/2) in valley-block flavor space."""
     angle = float(phi)
-    return np.diag([np.exp(-0.5j * angle), np.exp(0.5j * angle)]).astype(complex)
+    tau = np.diag(flavor_tau_z(dim)).real
+    phases = np.exp(-0.5j * angle * tau)
+    return np.diag(phases.astype(complex))
 
 
 def rotate_projector_phi(P: np.ndarray, phi: float) -> np.ndarray:
     """Rotate flavor projector(s) by U_phi."""
-    U = u1_rotation(phi)
-    rotated = U @ np.asarray(P, dtype=complex) @ U.conj().T
+    arr = np.asarray(P, dtype=complex)
+    if arr.shape[-1] != arr.shape[-2]:
+        raise ValueError("projector blocks must be square in the final two axes")
+    U = u1_rotation(phi, dim=arr.shape[-1])
+    rotated = np.einsum("ab,...bc,dc->...ad", U, arr, U.conj(), optimize=True)
     return hermitian_part(rotated)
 
 
 def phi_derivative_projector(P: np.ndarray) -> np.ndarray:
     """Analytic derivative d_phi P at phi=0 for exp(-i phi tau_z/2)."""
     arr = np.asarray(P, dtype=complex)
-    comm = TAU_Z @ arr - arr @ TAU_Z
+    if arr.shape[-1] != arr.shape[-2]:
+        raise ValueError("projector blocks must be square in the final two axes")
+    tau = flavor_tau_z(arr.shape[-1])
+    comm = (
+        np.einsum("ab,...bc->...ac", tau, arr, optimize=True)
+        - np.einsum("...ab,bc->...ac", arr, tau, optimize=True)
+    )
     return -0.5j * comm
 
 
 def projector_grid_from_theta(P_theta: np.ndarray, phi_nodes: np.ndarray) -> np.ndarray:
-    """Return P[theta, phi, k1, k2, 2, 2] from P[theta, k1, k2, 2, 2]."""
+    """Return P[theta,phi,k1,k2,dim,dim] from P[theta,k1,k2,dim,dim]."""
     base = np.asarray(P_theta, dtype=complex)
-    if base.ndim != 5 or base.shape[-2:] != (2, 2) or base.shape[1] != base.shape[2]:
-        raise ValueError("P_theta must have shape (n_theta,n_k,n_k,2,2)")
+    if base.ndim != 5 or base.shape[-1] != base.shape[-2] or base.shape[1] != base.shape[2]:
+        raise ValueError("P_theta must have shape (n_theta,n_k,n_k,dim,dim)")
+    dim = base.shape[-1]
+    flavor_tau_z(dim)
     phi = np.asarray(phi_nodes, dtype=float)
-    out = np.zeros((base.shape[0], len(phi), base.shape[1], base.shape[2], 2, 2), dtype=complex)
+    out = np.zeros((base.shape[0], len(phi), base.shape[1], base.shape[2], dim, dim), dtype=complex)
     for ip, value in enumerate(phi):
         out[:, ip] = rotate_projector_phi(base, float(value))
     return out
@@ -87,11 +109,12 @@ def projector_berry_curvature(P: np.ndarray, d_a: np.ndarray, d_b: np.ndarray) -
 
 
 def k_theta_from_projectors(P_theta: np.ndarray, theta: np.ndarray) -> KThetaResult:
-    """Compute dimensionless K(theta) and cG from P[theta,k1,k2,2,2]."""
+    """Compute dimensionless K(theta) and cG from P[theta,k1,k2,dim,dim]."""
     P = hermitian_part(np.asarray(P_theta, dtype=complex))
     theta_arr = np.asarray(theta, dtype=float)
-    if P.ndim != 5 or P.shape[-2:] != (2, 2):
-        raise ValueError("P_theta must have shape (n_theta,n_k,n_k,2,2)")
+    if P.ndim != 5 or P.shape[-1] != P.shape[-2]:
+        raise ValueError("P_theta must have shape (n_theta,n_k,n_k,dim,dim)")
+    flavor_tau_z(P.shape[-1])
     if P.shape[0] != len(theta_arr):
         raise ValueError("theta length must match P_theta leading dimension")
     n_k = P.shape[1]
@@ -164,6 +187,7 @@ def k_theta_from_projectors_with_basis(
     W = np.asarray(basis_frames, dtype=complex)
     if P.ndim != 5 or P.shape[-1] != P.shape[-2]:
         raise ValueError("P_theta must have shape (n_theta,n_k,n_k,dim,dim)")
+    flavor_tau_z(P.shape[-1])
     if P.shape[0] != len(theta_arr):
         raise ValueError("theta length must match P_theta leading dimension")
     if W.shape[:2] != P.shape[1:3] or W.shape[-1] != P.shape[-1]:

@@ -896,8 +896,6 @@ print("phi:", phi)
 theta_nodes = np.linspace(endpoint_eps, np.pi - endpoint_eps, n_theta)
 projectors_flat, path_diagnostics = symmetric_convex_path(refs, theta_nodes, phi=phi)
 projectors = projectors_flat.reshape(n_theta, n_k, n_k, active.dim, active.dim)
-if active.dim != 2:
-    raise ValueError("charge-response cell currently expects one active band per valley")
 basis_frames = active_basis_frames(active).reshape(n_k, n_k, -1, active.dim)
 response = k_theta_from_projectors_with_basis(projectors, theta_nodes, basis_frames)
 

@@ -57,9 +57,17 @@ def run_continuum_symmetric_hf_workflow(
     refs = build_symmetric_hf_references(bundle, controls.hf)
     theta = continuum_theta_nodes(controls)
     projectors_flat, path_diagnostics = symmetric_convex_path(refs, theta)
-    if bundle.grid.n_k * bundle.grid.n_k != projectors_flat.shape[1] or projectors_flat.shape[-1] != 2:
-        raise ValueError("response workflow currently requires one active band per valley")
-    projectors = projectors_flat.reshape(theta.size, bundle.grid.n_k, bundle.grid.n_k, 2, 2)
+    if bundle.grid.n_k * bundle.grid.n_k != projectors_flat.shape[1]:
+        raise ValueError("projector path does not match the continuum momentum grid")
+    if projectors_flat.shape[-1] != bundle.active.dim:
+        raise ValueError("projector path active dimension does not match the continuum active space")
+    projectors = projectors_flat.reshape(
+        theta.size,
+        bundle.grid.n_k,
+        bundle.grid.n_k,
+        bundle.active.dim,
+        bundle.active.dim,
+    )
     basis = active_basis_frames(bundle.active).reshape(
         bundle.grid.n_k,
         bundle.grid.n_k,
