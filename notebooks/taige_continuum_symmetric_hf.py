@@ -99,7 +99,7 @@ plt.rcParams.update({"figure.dpi": 120})
 
 # Continuum model parameters.
 theta_deg = 3.89
-u_D = 0.0
+u_D = 100
 plane_wave_shell = 5
 n_bands = 2
 
@@ -924,13 +924,13 @@ def _hf_path_energy_zero(energies: np.ndarray, n_occ: int) -> float:
 
 
 def _path_label_text(label: str) -> str:
-    return (
-        str(label)
-        .replace("Gamma", r"$\Gamma$")
-        .replace("kappa+", r"$\kappa_+$")
-        .replace("kappa-", r"$\kappa_-$")
-        .replace("m", "M")
-    )
+    return {
+        "Gamma": r"$\Gamma$",
+        "kappa+": r"$\kappa_+$",
+        "kappa-": r"$\kappa_-$",
+        "m": "M",
+        "M": "M",
+    }.get(str(label), str(label))
 
 
 def plot_hf_path_spectrum(path_df: pd.DataFrame, ticks, labels, title: str):
