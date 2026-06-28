@@ -64,6 +64,8 @@ DOMAIN_WINDING=${DOMAIN_WINDING:-"1"}
 
 COMPUTE_CHERN=${COMPUTE_CHERN:-"1"}
 COMPUTE_FINITE_Q_IVC=${COMPUTE_FINITE_Q_IVC:-"1"}
+IVC_BRANCH_POLICY=${IVC_BRANCH_POLICY:-"lower-energy"}
+IVC_BRANCH_TIE_ATOL=${IVC_BRANCH_TIE_ATOL:-"1e-9"}
 WRITE_HF_PATH_SPECTRA=${WRITE_HF_PATH_SPECTRA:-"0"}
 HF_PATH_N_PER_SEGMENT=${HF_PATH_N_PER_SEGMENT:-"36"}
 
@@ -132,6 +134,8 @@ python scripts/scan_taige_continuum_cg.py \
   --domain-winding "$DOMAIN_WINDING" \
   "${CHERN_FLAG[@]}" \
   "${FINITE_Q_IVC_FLAG[@]}" \
+  --ivc-branch-policy "$IVC_BRANCH_POLICY" \
+  --ivc-branch-tie-atol "$IVC_BRANCH_TIE_ATOL" \
   "${HF_PATH_FLAG[@]}" \
   --skip-existing
 

@@ -12,8 +12,10 @@ The continuum workflow uses symmetry-constrained HF references:
 - VP+ from a K-valley seed with continuous valley-U(1) projection.
 - VP- from a Kprime-valley seed with continuous valley-U(1) projection.
 - IVC from a Q=0 coherent seed with non-Kramers T-prime projection.
-- A separate finite-Q IVC active-frame comparison can be built for HF energy
-  costs, using the symmetric convention `K: k-Q/2`, `Kprime: k+Q/2`.
+- For Taige sweeps, a finite-Q IVC active-frame branch can also be solved using
+  the symmetric convention `K: k-Q/2`, `Kprime: k+Q/2`. When branch selection is
+  enabled, the lower-energy IVC branch supplies the whole VP+/VP-/IVC
+  interpolation frame; exact ties prefer Q=0.
 
 The variational path is a convex interpolation of full raw reference HF
 Hamiltonians:
@@ -41,8 +43,9 @@ optional physical conversion divides charge density by `a_M^2`.
   embedded Bloch-basis charge response, and end-to-end workflow.
 - Store raw Hermitian HF Hamiltonians by default. Do not silently subtract
   scalar, identity, or traceless channels; instead report channel diagnostics.
-- Support Taige finite-Q IVC energy comparisons without feeding finite-Q
-  projectors into the v1 Q=0 charge-response path.
+- Support Taige lower-energy Q=0/finite-Q IVC branch selection without mixing
+  active frames: selected finite-Q responses use finite-Q VP+/VP-/IVC
+  references and the finite-Q active basis.
 - Generated outputs stay under `results/` unless tests intentionally write to a
   temporary directory.
 

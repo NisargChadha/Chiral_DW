@@ -25,9 +25,10 @@ def test_taige_notebook_uses_fixed_scale_3x2_projector_diagnostic():
 
 def test_taige_notebook_embeds_projectors_for_charge_response():
     text = SCRIPT.read_text()
-    assert "active_basis_frames(active).reshape" in text
+    assert "active_basis_frames(selected_active).reshape" in text
     assert "k_theta_from_projectors_with_basis(projectors, theta_nodes, basis_frames)" in text
-    assert "SymmetricHFReferences(vp_plus=vp_plus, vp_minus=vp_minus, ivc=ivc" in text
+    assert "select_ivc_branch_by_energy" in text
+    assert "selected_refs = selected_branch.references" in text
     assert "charge-response cell currently expects one active band per valley" not in text
     assert "if active.dim != 2" not in text
 
@@ -42,8 +43,8 @@ def test_taige_notebook_plots_real_space_charge_density():
 
 def test_taige_notebook_plots_trial_physical_energy_per_cell():
     text = SCRIPT.read_text()
-    assert "trial_energy_components = [bundle.backend.energy(P_theta) for P_theta in projectors_flat]" in text
-    assert "energy_norm = float(bundle.backend.n_blocks)" in text
+    assert "trial_energy_components = [selected_backend.energy(P_theta) for P_theta in projectors_flat]" in text
+    assert "energy_norm = float(selected_backend.n_blocks)" in text
     assert "trial_physical_energy_theta.csv" in text
     assert "trial_physical_energy_theta.png" in text
     assert "\"energy_total_per_cell\": trial_energy_total_per_cell" in text
@@ -56,9 +57,13 @@ def test_taige_notebook_compares_q0_and_finite_q_ivc_energies():
     assert "taige_ivc_minus_half_shift_coord(n_k)" in text
     assert "finite_q_shift_metadata(finite_q, bundle.grid)" in text
     assert "build_continuum_bundle(" in text and "finite_q=finite_q" in text
+    assert "finite_q_vp_plus" in text
+    assert "finite_q_vp_minus" in text
     assert "\"finite_q_ivc\"" in text
+    assert "selected_ivc_branch" in text
     assert "ivc_q0_vs_finite_q_energy_comparison.csv" in text
     assert "Delta_finite_Q_minus_Q0_per_cell" in text
+    assert "not inserted into the Q=0 convex Hamiltonian" not in text
 
 
 def test_taige_notebook_plots_hf_bands_and_chern_numbers():

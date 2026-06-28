@@ -85,9 +85,10 @@ def build_symmetric_hf_references(
         hf_params,
         constraint=vp_minus_constraint,
     )
+    ivc_seed_name = "finite_q_ivc" if work_bundle.active.finite_q_enabled else "ivc"
     ivc = solve_reference_hf(
         work_bundle,
-        "ivc",
+        ivc_seed_name,
         hf_params,
         constraint=tprime_constraint,
     )

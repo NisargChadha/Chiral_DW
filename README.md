@@ -32,9 +32,9 @@ moving back to the nonideal conjugate AC/domain-wall calculation:
 - The native continuum/HF workflow builds self-contained VP+, VP-, and IVC
   reference Hamiltonians, reports final projector idempotency, and constructs a
   convex full-HF variational path.
-- The Taige notebook can also build a separate finite-Q IVC active frame and
-  compare its HF energy cost against the Q=0 IVC reference without changing the
-  Q=0 charge-response path.
+- The Taige notebook and cluster sweep can solve both Q=0 and finite-Q IVC
+  branches, then use the lower-energy IVC branch as the whole interpolation
+  frame for `K(theta)` and `c_G`.
 - The same-Chern QHFM benchmark validates the real-space 4D charge evaluator
   against `rho_top=-q_sk` in a controlled Chern-1 limit.
 - The ideal opposite-Chern conjugate LLL benchmark validates the circular
@@ -115,10 +115,12 @@ reference HF states:
 - VP- from a `Kprime`-polarized seed with the same constraint;
 - IVC from an intervalley-coherent seed with the non-Kramers `T'` constraint.
 
-For Taige-parameter notebooks, a separate finite-Q IVC energy comparison is
-available in the symmetric active frame `K: k-Q/2`, `Kprime: k+Q/2`. This is an
-HF energy/cost diagnostic only; the v1 convex `K(theta)` and `cG` response
-still uses the Q=0 VP+/VP-/IVC references.
+For Taige-parameter notebooks and sweeps, the finite-Q IVC branch is available
+in the symmetric active frame `K: k-Q/2`, `Kprime: k+Q/2`. By default the code
+compares Q=0 and finite-Q IVC energies per moire cell and uses the lower-energy
+IVC branch for the whole convex `K(theta)` and `cG` response. If finite-Q wins,
+the response uses finite-Q VP+/VP-/IVC references and the finite-Q active basis;
+ties prefer Q=0.
 
 The variational Hamiltonian is a convex combination of the full raw HF
 Hamiltonians:
@@ -216,8 +218,11 @@ Monitor with `squeue -u "$USER"` and inspect `logs/taige_continuum_cG_*` for
 per-task output. By default each point records scalar-rich diagnostics:
 `c_G`, `K(theta)`, trial energy and gap versus theta, HF reference gaps and
 energies, noninteracting Chern numbers, HF Chern numbers, and the Taige IVC-
-finite-Q energy comparison. Disable expensive branches with
-`COMPUTE_CHERN=0` or `COMPUTE_FINITE_Q_IVC=0`; set
+finite-Q energy comparison. The default `IVC_BRANCH_POLICY=lower-energy`
+selects the lower-energy Q=0/finite-Q IVC branch for interpolation; use
+`IVC_BRANCH_POLICY=q0` to force the Q=0 path. Disable expensive branches with
+`COMPUTE_CHERN=0` or `COMPUTE_FINITE_Q_IVC=0`; disabling finite-Q forces Q=0
+selection. Set
 `WRITE_HF_PATH_SPECTRA=1` only when path spectra are needed for every point.
 
 After the array finishes, manually merge per-point summaries:

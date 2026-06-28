@@ -6,8 +6,11 @@ from chiral_dw.config import (
     ContinuumGridParams,
     ContinuumHFParams,
     ContinuumInteractionParams,
+    ContinuumWorkflowParams,
+    ResponseParams,
 )
 from chiral_dw.continuum import (
+    ContinuumSymmetricHFBranch,
     ContinuumHFDiagnostics,
     ContinuumHFResult,
     SymmetricHFReferences,
@@ -23,6 +26,8 @@ from chiral_dw.continuum import (
     hf_band_chern_table,
     hf_hamiltonian_at_k,
     random_projector_like_seed,
+    run_taige_branch_selected_symmetric_hf_workflow,
+    select_ivc_branch_by_energy,
     symmetric_convex_path,
     taige_active_fine_frame,
     taige_interaction_params,
@@ -30,6 +35,7 @@ from chiral_dw.continuum import (
     taige_ivc_minus_q_coord,
     taige_model_params,
 )
+import chiral_dw.continuum.workflow as workflow_mod
 from chiral_dw.continuum.seeds import build_seed, mix_projector_seeds
 from chiral_dw.continuum.taige import TaigeContinuumModel, coulomb_potential_mev_nm2
 from chiral_dw.response import compute_cG, k_theta_from_projectors_with_basis
@@ -50,11 +56,11 @@ def _tiny_taige_bundle(interaction=None):
     )
 
 
-def _dummy_hf_result(H: np.ndarray, seed: str) -> ContinuumHFResult:
+def _dummy_hf_result(H: np.ndarray, seed: str, *, energy: float = 0.0) -> ContinuumHFResult:
     P = np.zeros_like(H, dtype=complex)
     P[:, 0, 0] = 1.0
     diagnostics = ContinuumHFDiagnostics(
-        energy=0.0,
+        energy=float(energy),
         delta_energy=0.0,
         delta_P=0.0,
         idempotency_error_fro=0.0,
@@ -72,12 +78,37 @@ def _dummy_hf_result(H: np.ndarray, seed: str) -> ContinuumHFResult:
     return ContinuumHFResult(
         P=P,
         H_hf=H,
-        energy=0.0,
+        energy=float(energy),
         converged=True,
         n_iter=0,
         diagnostics=diagnostics,
         seed=seed,
         constraint_name=None,
+    )
+
+
+def _dummy_refs_for_bundle(
+    bundle,
+    *,
+    ivc_energy: float,
+    vp_plus_energy: float = 0.0,
+    vp_minus_energy: float = 0.1,
+) -> SymmetricHFReferences:
+    H = np.asarray(bundle.active.h0, dtype=complex)
+    return SymmetricHFReferences(
+        vp_plus=_dummy_hf_result(H, "vp_plus", energy=vp_plus_energy),
+        vp_minus=_dummy_hf_result(H, "vp_minus", energy=vp_minus_energy),
+        ivc=_dummy_hf_result(H, "finite_q_ivc" if bundle.active.finite_q_enabled else "ivc", energy=ivc_energy),
+        n_occ_per_k=1,
+    )
+
+
+def _branch_for_selection_test(bundle, name: str, *, ivc_energy: float) -> ContinuumSymmetricHFBranch:
+    return ContinuumSymmetricHFBranch(
+        name=name,
+        bundle=bundle,
+        references=_dummy_refs_for_bundle(bundle, ivc_energy=ivc_energy),
+        metadata=finite_q_shift_metadata(bundle.finite_q, bundle.grid),
     )
 
 
@@ -193,6 +224,121 @@ def test_taige_finite_q_active_space_uses_symmetric_physical_sources():
         k_source_coord = grid.coord_of(k_source)
         inverted_source = grid.index_of((-k_source_coord[0], -k_source_coord[1]))
         assert int(active.source_index[int(partner[ik]), 1]) == inverted_source
+
+
+def test_taige_ivc_branch_selector_prefers_lower_energy_and_q0_ties():
+    q0_bundle = build_continuum_bundle(
+        model=taige_model_params(theta_deg=3.5, u_D=0.0, plane_wave_shell=0, n_bands=1),
+        grid=ContinuumGridParams(n_k=6),
+        interaction=ContinuumInteractionParams(
+            coulomb_kind="dimensionless_screened",
+            v0=0.0,
+            q_shell=0,
+            local_field_cutoff=0,
+        ),
+    )
+    finite_bundle = build_continuum_bundle(
+        model=q0_bundle.params,
+        grid=ContinuumGridParams(n_k=6),
+        finite_q=ContinuumFiniteQParams(
+            enabled=True,
+            q_coord=taige_ivc_minus_q_coord(6),
+            half_shift_coord=taige_ivc_minus_half_shift_coord(6),
+        ),
+        interaction=q0_bundle.interaction,
+    )
+    q0_branch = _branch_for_selection_test(q0_bundle, "q0", ivc_energy=-1.0)
+    finite_branch = _branch_for_selection_test(finite_bundle, "finite_q", ivc_energy=-1.5)
+
+    selected, metadata = select_ivc_branch_by_energy(
+        q0_branch=q0_branch,
+        finite_q_branch=finite_branch,
+        ivc_branch_policy="lower_energy",
+        tie_atol=1e-9,
+    )
+    assert selected == "finite_q"
+    assert metadata["finite_q_minus_q0_ivc_energy_per_cell"] < 0.0
+
+    tie_branch = _branch_for_selection_test(finite_bundle, "finite_q", ivc_energy=-1.0)
+    selected, metadata = select_ivc_branch_by_energy(
+        q0_branch=q0_branch,
+        finite_q_branch=tie_branch,
+        ivc_branch_policy="lower_energy",
+        tie_atol=1e-9,
+    )
+    assert selected == "q0"
+    assert metadata["selected_ivc_branch"] == "q0"
+
+
+def test_taige_branch_selected_workflow_uses_whole_finite_q_frame(monkeypatch):
+    def fake_references(bundle, params):
+        return _dummy_refs_for_bundle(
+            bundle,
+            ivc_energy=-2.0 if bundle.active.finite_q_enabled else -1.0,
+            vp_plus_energy=-0.4 if bundle.active.finite_q_enabled else -0.2,
+            vp_minus_energy=-0.3 if bundle.active.finite_q_enabled else -0.1,
+        )
+
+    monkeypatch.setattr(workflow_mod, "build_symmetric_hf_references", fake_references)
+    params = ContinuumWorkflowParams(
+        model=taige_model_params(theta_deg=3.5, u_D=0.0, plane_wave_shell=0, n_bands=1),
+        grid=ContinuumGridParams(n_k=6),
+        interaction=ContinuumInteractionParams(
+            coulomb_kind="dimensionless_screened",
+            v0=0.0,
+            q_shell=0,
+            local_field_cutoff=0,
+        ),
+        hf=ContinuumHFParams(max_iter=1, min_iter=0),
+        response=ResponseParams(n_theta=5, theta_min=1e-4, theta_max=np.pi - 1e-4),
+    )
+
+    result = run_taige_branch_selected_symmetric_hf_workflow(
+        params,
+        finite_q_enabled=True,
+        ivc_branch_policy="lower_energy",
+        write_outputs=False,
+    )
+
+    assert result.selected_ivc_branch == "finite_q"
+    assert result.bundle.active.finite_q_enabled is True
+    assert result.references is result.finite_q_branch.references
+    assert result.q0_branch.bundle.active.finite_q_enabled is False
+    assert result.projectors.shape[-1] == result.bundle.active.dim
+    assert result.branch_selection["finite_q_minus_q0_ivc_energy_per_cell"] < 0.0
+
+
+def test_taige_branch_selected_workflow_can_force_q0(monkeypatch):
+    def fake_references(bundle, params):
+        return _dummy_refs_for_bundle(
+            bundle,
+            ivc_energy=-2.0 if bundle.active.finite_q_enabled else -1.0,
+        )
+
+    monkeypatch.setattr(workflow_mod, "build_symmetric_hf_references", fake_references)
+    params = ContinuumWorkflowParams(
+        model=taige_model_params(theta_deg=3.5, u_D=0.0, plane_wave_shell=0, n_bands=1),
+        grid=ContinuumGridParams(n_k=6),
+        interaction=ContinuumInteractionParams(
+            coulomb_kind="dimensionless_screened",
+            v0=0.0,
+            q_shell=0,
+            local_field_cutoff=0,
+        ),
+        hf=ContinuumHFParams(max_iter=1, min_iter=0),
+        response=ResponseParams(n_theta=5, theta_min=1e-4, theta_max=np.pi - 1e-4),
+    )
+
+    result = run_taige_branch_selected_symmetric_hf_workflow(
+        params,
+        finite_q_enabled=True,
+        ivc_branch_policy="q0",
+        write_outputs=False,
+    )
+
+    assert result.selected_ivc_branch == "q0"
+    assert result.bundle.active.finite_q_enabled is False
+    assert result.finite_q_branch.bundle.active.finite_q_enabled is True
 
 
 def test_taige_chern_table_returns_finite_values_on_tiny_grid():

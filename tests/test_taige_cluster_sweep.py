@@ -45,6 +45,7 @@ def test_taige_sweep_dry_run_writes_selected_plan(tmp_path):
     assert point["u_D"] == 10.0
     assert point["theta_deg"] == 3.25
     assert "points/u_001_theta_001" in point["point_dir"]
+    assert plan["args"]["ivc_branch_policy"] == "lower-energy"
     assert (output_root / "sweep_plan.csv").exists()
 
 
@@ -61,6 +62,12 @@ def test_taige_sweep_merge_only_collects_point_summaries(tmp_path):
                     "u_D_meV": 0.0,
                     "theta_deg": 3.5,
                     "cG": 1.25,
+                    "ivc_branch_policy": "lower_energy",
+                    "selected_ivc_branch": "q0",
+                    "selected_ivc_energy_per_cell": -1.0,
+                    "q0_ivc_energy_per_cell": -1.0,
+                    "finite_q_ivc_energy_per_cell": None,
+                    "finite_q_minus_q0_ivc_energy_per_cell": None,
                     "chern_hf_vpplus_band_0": 1.0,
                     "point_dir": str(point_dir),
                 }
@@ -164,8 +171,12 @@ def test_taige_sweep_point_writes_scalar_rich_diagnostics(tmp_path):
     row = summary["row"]
     assert row["cG"] == row["cG"]
     assert row["finite_q_ivc_enabled"] is False
+    assert row["ivc_branch_policy"] == "q0"
+    assert row["selected_ivc_branch"] == "q0"
+    assert row["finite_q_ivc_energy_per_cell"] is None
     assert row["chern_enabled"] is True
     assert "ivc_q0_energy_per_cell" in row
+    assert "q0_ivc_energy_per_cell" in row
     assert any(key.startswith("chern_nonint_hole_k_band_") for key in row)
     assert any(key.startswith("chern_hf_vpplus_band_") for key in row)
 
@@ -191,8 +202,12 @@ def test_taige_sweep_job_uses_array_task_and_results_root():
     assert 'OUTPUT_ROOT=${OUTPUT_ROOT:-"results/taige_continuum_cg_sweep"}' in text
     assert 'COMPUTE_CHERN=${COMPUTE_CHERN:-"1"}' in text
     assert 'COMPUTE_FINITE_Q_IVC=${COMPUTE_FINITE_Q_IVC:-"1"}' in text
+    assert 'IVC_BRANCH_POLICY=${IVC_BRANCH_POLICY:-"lower-energy"}' in text
+    assert 'IVC_BRANCH_TIE_ATOL=${IVC_BRANCH_TIE_ATOL:-"1e-9"}' in text
     assert 'WRITE_HF_PATH_SPECTRA=${WRITE_HF_PATH_SPECTRA:-"0"}' in text
     assert "--no-chern" in text
     assert "--no-finite-q-ivc" in text
+    assert "--ivc-branch-policy" in text
+    assert "--ivc-branch-tie-atol" in text
     assert "--write-hf-path-spectra" in text
     assert "--merge-only" in text

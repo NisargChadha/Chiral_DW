@@ -32,7 +32,7 @@ from chiral_dw.continuum.sweep import (  # noqa: E402
     build_taige_sweep_diagnostics,
 )
 from chiral_dw.continuum.taige import taige_interaction_params, taige_model_params  # noqa: E402
-from chiral_dw.continuum.workflow import run_continuum_symmetric_hf_workflow  # noqa: E402
+from chiral_dw.continuum.workflow import run_taige_branch_selected_symmetric_hf_workflow  # noqa: E402
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -84,6 +84,18 @@ def _build_parser() -> argparse.ArgumentParser:
 
     parser.add_argument("--no-chern", action="store_true", help="Skip noninteracting and HF Chern diagnostics.")
     parser.add_argument("--no-finite-q-ivc", action="store_true", help="Skip the Taige IVC- finite-Q diagnostic branch.")
+    parser.add_argument(
+        "--ivc-branch-policy",
+        choices=["lower-energy", "q0"],
+        default="lower-energy",
+        help="Choose the IVC branch used for interpolation; lower-energy compares Q=0 and finite-Q IVC.",
+    )
+    parser.add_argument(
+        "--ivc-branch-tie-atol",
+        type=float,
+        default=1e-9,
+        help="Energy-per-cell tolerance for treating Q=0 and finite-Q IVC as tied; ties choose Q=0.",
+    )
     parser.add_argument("--write-hf-path-spectra", action="store_true", help="Write optional fixed-density HF path spectra.")
     parser.add_argument("--hf-path-n-per-segment", type=int, default=36)
 
@@ -299,9 +311,14 @@ def _write_plan(output_root: Path, points: list[TaigeSweepPoint], args: argparse
 
 
 def _diagnostic_params(args: argparse.Namespace) -> TaigeSweepDiagnosticsParams:
+    branch_policy = str(args.ivc_branch_policy).replace("-", "_")
+    if args.no_finite_q_ivc:
+        branch_policy = "q0"
     return TaigeSweepDiagnosticsParams(
         compute_chern_numbers=not args.no_chern,
         compute_finite_q_ivc=not args.no_finite_q_ivc,
+        ivc_branch_policy=branch_policy,
+        ivc_branch_tie_atol=float(args.ivc_branch_tie_atol),
         write_hf_path_spectra=bool(args.write_hf_path_spectra),
         hf_path_n_per_segment=args.hf_path_n_per_segment,
     )
@@ -333,11 +350,18 @@ def run_point(args: argparse.Namespace, output_root: Path, point: TaigeSweepPoin
         f"local_field_cutoff={args.local_field_cutoff}"
     )
     start = time.perf_counter()
-    result = run_continuum_symmetric_hf_workflow(params, write_outputs=True)
+    diagnostic_controls = _diagnostic_params(args)
+    result = run_taige_branch_selected_symmetric_hf_workflow(
+        params,
+        finite_q_enabled=diagnostic_controls.compute_finite_q_ivc,
+        ivc_branch_policy=diagnostic_controls.ivc_branch_policy,
+        tie_atol=diagnostic_controls.ivc_branch_tie_atol,
+        write_outputs=True,
+    )
     diagnostics = build_taige_sweep_diagnostics(
         point=point,
         workflow_result=result,
-        controls=_diagnostic_params(args),
+        controls=diagnostic_controls,
         elapsed_seconds=0.0,
         point_dir=point_dir,
     )
@@ -350,8 +374,9 @@ def run_point(args: argparse.Namespace, output_root: Path, point: TaigeSweepPoin
             "point": point.model_dump(mode="json"),
             "row": row,
             "params": params.model_dump(mode="json"),
-            "diagnostics_params": _diagnostic_params(args).model_dump(mode="json"),
+            "diagnostics_params": diagnostic_controls.model_dump(mode="json"),
             "summary": result.summary.model_dump(mode="json"),
+            "branch_selection": result.branch_selection,
             "reference_summary": result.reference_summary,
             "finite_q_ivc": (
                 None
@@ -363,7 +388,10 @@ def run_point(args: argparse.Namespace, output_root: Path, point: TaigeSweepPoin
             ),
         },
     )
-    print(f"Finished {point.label}: cG={row['cG']:.12g} elapsed={seconds:.1f}s")
+    print(
+        f"Finished {point.label}: cG={row['cG']:.12g} "
+        f"selected_ivc_branch={row['selected_ivc_branch']} elapsed={seconds:.1f}s"
+    )
     return row
 
 

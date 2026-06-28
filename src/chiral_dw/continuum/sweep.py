@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, computed_field
@@ -51,6 +51,8 @@ class TaigeSweepDiagnosticsParams(BaseModel):
 
     compute_chern_numbers: bool = True
     compute_finite_q_ivc: bool = True
+    ivc_branch_policy: Literal["lower_energy", "q0"] = "lower_energy"
+    ivc_branch_tie_atol: float = Field(default=1e-9, ge=0.0)
     write_hf_path_spectra: bool = False
     hf_path_n_per_segment: int = Field(default=36, ge=1)
 
@@ -69,6 +71,12 @@ class TaigeSweepPointSummary(BaseModel):
     K_max: float
     gap_min: float
     valid_local_gap: bool
+    ivc_branch_policy: Literal["lower_energy", "q0"]
+    selected_ivc_branch: Literal["q0", "finite_q"]
+    selected_ivc_energy_per_cell: float
+    q0_ivc_energy_per_cell: float
+    finite_q_ivc_energy_per_cell: float | None = None
+    finite_q_minus_q0_ivc_energy_per_cell: float | None = None
     vp_plus_energy: float
     vp_minus_energy: float
     ivc_energy: float
@@ -178,6 +186,28 @@ def _vp_reference(refs: SymmetricHFReferences) -> tuple[str, ContinuumHFResult]:
     return "VP-", refs.vp_minus
 
 
+def _branch_from_workflow(workflow_result: Any, name: str) -> Any | None:
+    return getattr(workflow_result, f"{name}_branch", None)
+
+
+def _q0_bundle_and_refs(workflow_result: Any) -> tuple[ContinuumBundle, SymmetricHFReferences]:
+    branch = _branch_from_workflow(workflow_result, "q0")
+    if branch is not None:
+        return branch.bundle, branch.references
+    return workflow_result.bundle, workflow_result.references
+
+
+def _finite_q_ivc_from_workflow(workflow_result: Any) -> FiniteQIVCDiagnostic | None:
+    branch = _branch_from_workflow(workflow_result, "finite_q")
+    if branch is None:
+        return None
+    return FiniteQIVCDiagnostic(
+        bundle=branch.bundle,
+        result=branch.references.ivc,
+        metadata=branch.metadata,
+    )
+
+
 def trial_theta_rows(workflow_result: Any) -> list[dict[str, Any]]:
     """Return theta-dependent response, gap, and physical-energy diagnostics."""
 
@@ -217,7 +247,7 @@ def trial_theta_rows(workflow_result: Any) -> list[dict[str, Any]]:
 
 
 def run_finite_q_ivc_diagnostic(workflow_result: Any) -> FiniteQIVCDiagnostic:
-    """Solve the Taige IVC- finite-Q branch for comparison only."""
+    """Solve the Taige IVC- finite-Q branch for energy/topology diagnostics."""
 
     n_k = int(workflow_result.params.grid.n_k)
     try:
@@ -259,14 +289,16 @@ def reference_energy_rows(
 ) -> list[dict[str, Any]]:
     """Return reference energies and IVC energy costs per moire cell."""
 
-    refs = workflow_result.references
-    energy_norm = float(workflow_result.bundle.backend.n_blocks)
+    selected_refs = workflow_result.references
+    selected_energy_norm = float(workflow_result.bundle.backend.n_blocks)
+    q0_bundle, q0_refs = _q0_bundle_and_refs(workflow_result)
+    q0_energy_norm = float(q0_bundle.backend.n_blocks)
     finite_q_norm = (
         None if finite_q_ivc is None else float(finite_q_ivc.bundle.backend.n_blocks)
     )
-    vp_reference_name, vp_reference = _vp_reference(refs)
-    vp_reference_per_cell = float(vp_reference.energy / energy_norm)
-    ivc_q0_per_cell = float(refs.ivc.energy / energy_norm)
+    vp_reference_name, vp_reference = _vp_reference(selected_refs)
+    vp_reference_per_cell = float(vp_reference.energy / selected_energy_norm)
+    ivc_q0_per_cell = float(q0_refs.ivc.energy / q0_energy_norm)
     finite_q_per_cell = (
         None
         if finite_q_ivc is None or finite_q_norm is None
@@ -275,18 +307,28 @@ def reference_energy_rows(
     rows = [
         {
             "quantity": "E_VP_plus_per_cell",
-            "value": float(refs.vp_plus.energy / energy_norm),
-            "reference": "VP+",
+            "value": float(selected_refs.vp_plus.energy / selected_energy_norm),
+            "reference": "VP+ selected frame",
         },
         {
             "quantity": "E_VP_minus_per_cell",
-            "value": float(refs.vp_minus.energy / energy_norm),
-            "reference": "VP-",
+            "value": float(selected_refs.vp_minus.energy / selected_energy_norm),
+            "reference": "VP- selected frame",
         },
         {
             "quantity": "E_VP_reference_per_cell",
             "value": vp_reference_per_cell,
             "reference": vp_reference_name,
+        },
+        {
+            "quantity": "E_VP_plus_Q0_per_cell",
+            "value": float(q0_refs.vp_plus.energy / q0_energy_norm),
+            "reference": "VP+ Q=0",
+        },
+        {
+            "quantity": "E_VP_minus_Q0_per_cell",
+            "value": float(q0_refs.vp_minus.energy / q0_energy_norm),
+            "reference": "VP- Q=0",
         },
         {
             "quantity": "E_IVC_Q0_per_cell",
@@ -297,6 +339,11 @@ def reference_energy_rows(
             "quantity": "E_IVC_finite_Q_per_cell",
             "value": finite_q_per_cell,
             "reference": "Taige IVC-" if finite_q_ivc is not None else "disabled",
+        },
+        {
+            "quantity": "E_selected_IVC_per_cell",
+            "value": float(workflow_result.references.ivc.energy / selected_energy_norm),
+            "reference": getattr(workflow_result, "selected_ivc_branch", "q0"),
         },
         {
             "quantity": "Delta_IVC_Q0_vs_VP_per_cell",
@@ -322,16 +369,33 @@ def reference_energy_rows(
             "reference": "",
         },
     ]
+    finite_branch = _branch_from_workflow(workflow_result, "finite_q")
+    if finite_branch is not None and finite_q_norm is not None:
+        rows.extend(
+            [
+                {
+                    "quantity": "E_VP_plus_finite_Q_per_cell",
+                    "value": float(finite_branch.references.vp_plus.energy / finite_q_norm),
+                    "reference": "VP+ finite Q",
+                },
+                {
+                    "quantity": "E_VP_minus_finite_Q_per_cell",
+                    "value": float(finite_branch.references.vp_minus.energy / finite_q_norm),
+                    "reference": "VP- finite Q",
+                },
+            ]
+        )
     return rows
 
 
 def noninteracting_chern_rows(workflow_result: Any) -> list[dict[str, Any]]:
     """Return noninteracting electron/hole Chern numbers for active Taige bands."""
 
-    bands = workflow_result.bundle.bands
+    q0_bundle, _q0_refs = _q0_bundle_and_refs(workflow_result)
+    bands = q0_bundle.bands
     if bands is None:
         return []
-    n_active = int(workflow_result.bundle.active.n_active)
+    n_active = int(q0_bundle.active.n_active)
     rows = chern_number_table(bands, band_indices=tuple(range(n_active)))
     return [row.model_dump(mode="json") for row in rows]
 
@@ -342,12 +406,12 @@ def hf_chern_rows(
 ) -> list[dict[str, Any]]:
     """Return embedded Chern numbers of the physical HF bands."""
 
-    refs = workflow_result.references
+    q0_bundle, refs = _q0_bundle_and_refs(workflow_result)
     rows: list[dict[str, Any]] = []
     for reference, bundle, result in (
-        ("VP+", workflow_result.bundle, refs.vp_plus),
-        ("VP-", workflow_result.bundle, refs.vp_minus),
-        ("IVC Q=0", workflow_result.bundle, refs.ivc),
+        ("VP+", q0_bundle, refs.vp_plus),
+        ("VP-", q0_bundle, refs.vp_minus),
+        ("IVC Q=0", q0_bundle, refs.ivc),
     ):
         rows.extend(
             row.model_dump(mode="json")
@@ -366,6 +430,20 @@ def hf_chern_rows(
                 reference="IVC finite Q",
             )
         )
+        finite_branch = _branch_from_workflow(workflow_result, "finite_q")
+        if finite_branch is not None:
+            for reference, result in (
+                ("VP+ finite Q", finite_branch.references.vp_plus),
+                ("VP- finite Q", finite_branch.references.vp_minus),
+            ):
+                rows.extend(
+                    row.model_dump(mode="json")
+                    for row in hf_band_chern_table(
+                        finite_branch.bundle.active,
+                        result.H_hf,
+                        reference=reference,
+                    )
+                )
     return rows
 
 
@@ -377,16 +455,27 @@ def hf_path_spectrum_rows(
 ) -> list[dict[str, Any]]:
     """Return optional high-symmetry fixed-density HF path spectra."""
 
-    refs = workflow_result.references
+    q0_bundle, refs = _q0_bundle_and_refs(workflow_result)
     vp_reference_name, vp_reference = _vp_reference(refs)
     references = [
-        ("VP", workflow_result.bundle, vp_reference, vp_reference_name),
-        ("IVC_Q0", workflow_result.bundle, refs.ivc, "IVC Q=0"),
+        ("VP_Q0", q0_bundle, vp_reference, f"{vp_reference_name} Q=0"),
+        ("IVC_Q0", q0_bundle, refs.ivc, "IVC Q=0"),
     ]
     if finite_q_ivc is not None:
         references.append(
             ("IVC_finite_Q", finite_q_ivc.bundle, finite_q_ivc.result, "IVC finite Q")
         )
+        finite_branch = _branch_from_workflow(workflow_result, "finite_q")
+        if finite_branch is not None:
+            finite_vp_reference_name, finite_vp_reference = _vp_reference(finite_branch.references)
+            references.append(
+                (
+                    "VP_finite_Q",
+                    finite_branch.bundle,
+                    finite_vp_reference,
+                    f"{finite_vp_reference_name} finite Q",
+                )
+            )
     rows: list[dict[str, Any]] = []
     for file_key, bundle, result, display_label in references:
         spectrum = evaluate_hf_high_symmetry_path(
@@ -439,7 +528,11 @@ def build_taige_sweep_diagnostics(
     """Build all scalar and table diagnostics for one Taige sweep point."""
 
     out_dir = Path(point_dir)
-    finite_q = run_finite_q_ivc_diagnostic(workflow_result) if controls.compute_finite_q_ivc else None
+    finite_q = None
+    if controls.compute_finite_q_ivc:
+        finite_q = _finite_q_ivc_from_workflow(workflow_result)
+        if finite_q is None:
+            finite_q = run_finite_q_ivc_diagnostic(workflow_result)
     trial_rows = _with_point_fields(point, trial_theta_rows(workflow_result))
     energy_rows = _with_point_fields(point, reference_energy_rows(workflow_result, finite_q))
     nonint_rows = (
@@ -466,10 +559,17 @@ def build_taige_sweep_diagnostics(
     )
 
     refs = workflow_result.reference_summary
+    branch_selection = dict(getattr(workflow_result, "branch_selection", {}))
     reference_rows_by_quantity = {row["quantity"]: row for row in energy_rows}
     vp_reference_name, _vp_reference_result = _vp_reference(workflow_result.references)
     finite_q_diag = None if finite_q is None else finite_q.result.diagnostics
     finite_q_energy_norm = None if finite_q is None else float(finite_q.bundle.backend.n_blocks)
+    selected_ivc_energy_per_cell = float(
+        branch_selection.get(
+            "selected_ivc_energy_per_cell",
+            workflow_result.references.ivc.energy / workflow_result.bundle.backend.n_blocks,
+        )
+    )
     summary = TaigeSweepPointSummary(
         u_index=point.u_index,
         theta_index=point.theta_index,
@@ -480,6 +580,18 @@ def build_taige_sweep_diagnostics(
         K_max=float(workflow_result.summary.kappa_max),
         gap_min=float(workflow_result.summary.gap_min),
         valid_local_gap=bool(workflow_result.summary.valid_local_gap),
+        ivc_branch_policy=str(branch_selection.get("ivc_branch_policy", controls.ivc_branch_policy)),
+        selected_ivc_branch=str(branch_selection.get("selected_ivc_branch", "q0")),
+        selected_ivc_energy_per_cell=selected_ivc_energy_per_cell,
+        q0_ivc_energy_per_cell=float(reference_rows_by_quantity["E_IVC_Q0_per_cell"]["value"]),
+        finite_q_ivc_energy_per_cell=(
+            None
+            if reference_rows_by_quantity["E_IVC_finite_Q_per_cell"]["value"] is None
+            else float(reference_rows_by_quantity["E_IVC_finite_Q_per_cell"]["value"])
+        ),
+        finite_q_minus_q0_ivc_energy_per_cell=reference_rows_by_quantity[
+            "Delta_finite_Q_minus_Q0_per_cell"
+        ]["value"],
         vp_plus_energy=float(refs["vp_plus"]["energy"]),
         vp_minus_energy=float(refs["vp_minus"]["energy"]),
         ivc_energy=float(refs["ivc"]["energy"]),

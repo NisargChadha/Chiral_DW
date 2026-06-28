@@ -58,6 +58,7 @@ from chiral_dw.config import (
     DomainWallParams,
 )
 from chiral_dw.continuum import (
+    ContinuumSymmetricHFBranch,
     SymmetricHFReferences,
     TPrimeConstraint,
     ValleyU1Constraint,
@@ -74,6 +75,7 @@ from chiral_dw.continuum import (
     projector_maps,
     random_projector_like_seed,
     reference_diagnostics,
+    select_ivc_branch_by_energy,
     solve_hf,
     symmetric_convex_path,
     taige_interaction_params,
@@ -643,7 +645,7 @@ ivc, ivc_history = run_live_hf(
 # %% [markdown]
 # ## Finite-Q IVC Active Frame
 #
-# The Q=0 references above remain the source for the convex trial Hamiltonian and charge response. This finite-Q branch is built as a separate active frame so we can compare the IVC HF energy cost without changing the `c_G` workflow.
+# The Q=0 references above define one complete interpolation branch. The finite-Q cells below build a second complete branch in a shifted active frame, including VP+ and VP- endpoints, so the lower-energy IVC branch can be selected without mixing active frames.
 #
 # The default branch is Taige IVC-, `Q = kappa_plus - kappa_minus`. The symmetric active frame uses physical momenta `K: k-Q/2` and `Kprime: k+Q/2`; the unfolded half-shift is required to preserve the non-Kramers T-prime relation in the active frame.
 #
@@ -713,6 +715,88 @@ else:
 
 
 # %% [markdown]
+# ## Finite-Q VP Initial Projectors
+#
+# These are the VP endpoints for the finite-Q interpolation branch. They use the same valley-U(1) constrained noisy seed recipe as the Q=0 VP references, but in the finite-Q active basis.
+#
+
+# %%
+
+if finite_q_enabled:
+    finite_q_vp_plus_constraint = ValleyU1Constraint(finite_q_active)
+    finite_q_vp_minus_constraint = ValleyU1Constraint(finite_q_active)
+    P0_finite_q_vp_plus, P_ordered_finite_q_vp_plus, P_noise_finite_q_vp_plus = noisy_initial_projector(
+        "vp_plus",
+        hf_params.random_seed + 2,
+        finite_q_vp_plus_constraint,
+        active_for_seed=finite_q_active,
+        hf_for_seed=hf_params,
+    )
+    P0_finite_q_vp_minus, P_ordered_finite_q_vp_minus, P_noise_finite_q_vp_minus = noisy_initial_projector(
+        "vp_minus",
+        hf_params.random_seed + 3,
+        finite_q_vp_minus_constraint,
+        active_for_seed=finite_q_active,
+        hf_for_seed=hf_params,
+    )
+    display(pd.DataFrame([
+        seed_diagnostics_row(
+            "finite-Q VP+ initial",
+            P0_finite_q_vp_plus,
+            finite_q_vp_plus_constraint,
+            active_for_plot=finite_q_active,
+        ),
+        seed_diagnostics_row(
+            "finite-Q VP- initial",
+            P0_finite_q_vp_minus,
+            finite_q_vp_minus_constraint,
+            active_for_plot=finite_q_active,
+        ),
+    ]))
+else:
+    finite_q_vp_plus_constraint = None
+    finite_q_vp_minus_constraint = None
+    P0_finite_q_vp_plus = None
+    P0_finite_q_vp_minus = None
+
+
+# %% [markdown]
+# ## Finite-Q VP HF
+#
+# These solves are needed only because a finite-Q IVC branch, if selected, must interpolate with VP endpoints from the same finite-Q active frame.
+#
+
+# %%
+
+if finite_q_enabled:
+    finite_q_vp_plus, finite_q_vp_plus_history = run_live_hf(
+        "finite-Q VP+",
+        P0_finite_q_vp_plus,
+        finite_q_vp_plus_constraint,
+        "finite_q_vp_plus_0p8_ordered_0p2_random",
+        "finite_q_vp_plus",
+        backend_for_run=finite_q_backend,
+        active_for_run=finite_q_active,
+        hf_for_run=hf_params,
+    )
+    finite_q_vp_minus, finite_q_vp_minus_history = run_live_hf(
+        "finite-Q VP-",
+        P0_finite_q_vp_minus,
+        finite_q_vp_minus_constraint,
+        "finite_q_vp_minus_0p8_ordered_0p2_random",
+        "finite_q_vp_minus",
+        backend_for_run=finite_q_backend,
+        active_for_run=finite_q_active,
+        hf_for_run=hf_params,
+    )
+else:
+    finite_q_vp_plus = None
+    finite_q_vp_minus = None
+    finite_q_vp_plus_history = pd.DataFrame()
+    finite_q_vp_minus_history = pd.DataFrame()
+
+
+# %% [markdown]
 # ## Finite-Q IVC Initial Projector
 #
 # This seed uses the same 0.8 ordered / 0.2 random-noisy recipe as the Q=0 IVC run, but it is built in the finite-Q active frame. The projector panels should show intervalley coherence in that shifted frame.
@@ -752,7 +836,7 @@ else:
 # %% [markdown]
 # ## Finite-Q IVC T-Prime HF
 #
-# This cell solves the finite-Q IVC reference with the same T-prime constrained HF loop used above. The result is for energy comparison only; it is not inserted into the Q=0 convex Hamiltonian path below.
+# This cell solves the finite-Q IVC reference with the same T-prime constrained HF loop used above. Together with the finite-Q VP endpoints above, it can become the selected interpolation branch if its IVC energy is lower than the Q=0 IVC energy.
 #
 
 # %%
@@ -776,31 +860,82 @@ else:
 # %% [markdown]
 # ## Q=0 Versus Finite-Q IVC Energy Cost
 #
-# This comparison uses the lower of the two Q=0 VP energies as the VP reference baseline. Energies are divided by the number of moire momentum blocks, giving energy per moire unit cell in the same units as the continuum Hamiltonian.
+# This comparison chooses the interpolation branch. Energies are divided by the number of moire momentum blocks, giving energy per moire unit cell in the same units as the continuum Hamiltonian. If the finite-Q IVC energy is strictly lower than Q=0 beyond the tie tolerance, the selected branch switches to finite-Q and carries its own VP endpoints into the convex path.
 #
 
 # %%
 
-energy_norm = float(backend.n_blocks)
-finite_q_energy_norm = np.nan if finite_q_ivc is None else float(finite_q_backend.n_blocks)
+q0_refs = SymmetricHFReferences(
+    vp_plus=vp_plus,
+    vp_minus=vp_minus,
+    ivc=ivc,
+    n_occ_per_k=hf_params.n_occ_per_k,
+)
+q0_branch = ContinuumSymmetricHFBranch(
+    name="q0",
+    bundle=bundle,
+    references=q0_refs,
+    metadata=finite_q_shift_metadata(ContinuumFiniteQParams(enabled=False, q_coord=(0, 0)), bundle.grid),
+)
+finite_q_refs = None
+finite_q_branch_result = None
+if finite_q_enabled and finite_q_vp_plus is not None and finite_q_vp_minus is not None and finite_q_ivc is not None:
+    finite_q_refs = SymmetricHFReferences(
+        vp_plus=finite_q_vp_plus,
+        vp_minus=finite_q_vp_minus,
+        ivc=finite_q_ivc,
+        n_occ_per_k=hf_params.n_occ_per_k,
+    )
+    finite_q_branch_result = ContinuumSymmetricHFBranch(
+        name="finite_q",
+        bundle=finite_q_bundle,
+        references=finite_q_refs,
+        metadata=finite_q_metadata,
+    )
 
-vp_energy_by_name = {"VP+": vp_plus.energy, "VP-": vp_minus.energy}
+ivc_branch_policy = "lower_energy"
+ivc_branch_tie_atol = 1e-9
+selected_ivc_branch, ivc_branch_selection = select_ivc_branch_by_energy(
+    q0_branch=q0_branch,
+    finite_q_branch=finite_q_branch_result,
+    ivc_branch_policy=ivc_branch_policy,
+    tie_atol=ivc_branch_tie_atol,
+)
+selected_branch = q0_branch if selected_ivc_branch == "q0" else finite_q_branch_result
+selected_bundle = selected_branch.bundle
+selected_active = selected_bundle.active
+selected_backend = selected_bundle.backend
+selected_refs = selected_branch.references
+
+energy_norm = float(selected_backend.n_blocks)
+q0_energy_norm = float(bundle.backend.n_blocks)
+finite_q_energy_norm = np.nan if finite_q_branch_result is None else float(finite_q_backend.n_blocks)
+
+vp_energy_by_name = {"VP+": selected_refs.vp_plus.energy, "VP-": selected_refs.vp_minus.energy}
 vp_reference_name = min(vp_energy_by_name, key=vp_energy_by_name.get)
 E_VP_reference_per_cell = vp_energy_by_name[vp_reference_name] / energy_norm
-E_IVC_Q0_per_cell = ivc.energy / energy_norm
+E_IVC_Q0_per_cell = ivc_branch_selection["q0_ivc_energy_per_cell"]
 E_IVC_finite_Q_per_cell = (
-    np.nan if finite_q_ivc is None else finite_q_ivc.energy / finite_q_energy_norm
+    np.nan
+    if ivc_branch_selection["finite_q_ivc_energy_per_cell"] is None
+    else ivc_branch_selection["finite_q_ivc_energy_per_cell"]
 )
+E_selected_IVC_per_cell = ivc_branch_selection["selected_ivc_energy_per_cell"]
 Delta_IVC_Q0_vs_VP_per_cell = E_IVC_Q0_per_cell - E_VP_reference_per_cell
 Delta_IVC_finite_Q_vs_VP_per_cell = E_IVC_finite_Q_per_cell - E_VP_reference_per_cell
-Delta_finite_Q_minus_Q0_per_cell = E_IVC_finite_Q_per_cell - E_IVC_Q0_per_cell
+Delta_finite_Q_minus_Q0_per_cell = ivc_branch_selection["finite_q_minus_q0_ivc_energy_per_cell"]
 
 ivc_energy_comparison = pd.DataFrame(
     [
         {
+            "quantity": "selected_ivc_branch",
+            "value": selected_ivc_branch,
+            "reference": ivc_branch_policy,
+        },
+        {
             "quantity": "E_VP_reference_per_cell",
             "value": E_VP_reference_per_cell,
-            "reference": vp_reference_name,
+            "reference": f"{vp_reference_name} selected frame",
         },
         {
             "quantity": "E_IVC_Q0_per_cell",
@@ -811,6 +946,11 @@ ivc_energy_comparison = pd.DataFrame(
             "quantity": "E_IVC_finite_Q_per_cell",
             "value": E_IVC_finite_Q_per_cell,
             "reference": finite_q_branch if finite_q_enabled else "disabled",
+        },
+        {
+            "quantity": "E_selected_IVC_per_cell",
+            "value": E_selected_IVC_per_cell,
+            "reference": selected_ivc_branch,
         },
         {
             "quantity": "Delta_IVC_Q0_vs_VP_per_cell",
@@ -833,35 +973,38 @@ ivc_energy_comparison.to_csv(result_dir / "ivc_q0_vs_finite_q_energy_comparison.
 display(ivc_energy_comparison)
 
 fig, axes = plt.subplots(1, 2, figsize=(10.5, 3.8), constrained_layout=True)
-energy_plot = ivc_energy_comparison.iloc[:3]
+energy_plot = ivc_energy_comparison[ivc_energy_comparison["quantity"].str.startswith("E_")]
 axes[0].bar(energy_plot["quantity"], energy_plot["value"])
 axes[0].tick_params(axis="x", rotation=35)
 axes[0].set_ylabel("energy per cell")
 axes[0].set_title("absolute energies")
 
-cost_plot = ivc_energy_comparison.iloc[3:]
+cost_plot = ivc_energy_comparison[ivc_energy_comparison["quantity"].str.startswith("Delta_")]
 axes[1].bar(cost_plot["quantity"], cost_plot["value"])
 axes[1].tick_params(axis="x", rotation=35)
 axes[1].set_ylabel("energy per cell")
 axes[1].set_title("IVC costs")
 fig.savefig(result_dir / "ivc_q0_vs_finite_q_energy_costs.png", dpi=180)
 plt.show()
+print("selected IVC branch:", selected_ivc_branch)
+print("branch selection:", ivc_branch_selection)
 
 
 # %% [markdown]
 # ## Reference Energies And Channel Diagnostics
 #
-# The VP splitting printed below is a convention/truncation check. At `u_D = 0`, a nonzero value indicates the finite active-space/form-factor setup or the selected mesh controls are still breaking the expected VP+/VP- equivalence. The finite-Q IVC energy, if enabled, is printed for comparison but is not included in `refs`.
+# The VP splitting printed below is a convention/truncation check for the selected branch. At `u_D = 0`, a nonzero value indicates the finite active-space/form-factor setup or the selected mesh controls are still breaking the expected VP+/VP- equivalence.
 #
 
 # %%
 
-refs = SymmetricHFReferences(vp_plus=vp_plus, vp_minus=vp_minus, ivc=ivc, n_occ_per_k=hf_params.n_occ_per_k)
+refs = selected_refs
 energies = {
-    "VP+": vp_plus.energy,
-    "VP-": vp_minus.energy,
-    "IVC": ivc.energy,
+    "VP+": refs.vp_plus.energy,
+    "VP-": refs.vp_minus.energy,
+    "IVC": refs.ivc.energy,
 }
+print("selected IVC branch:", selected_ivc_branch)
 for key, value in energies.items():
     print(f"{key:4s}: {value:.12g}")
 if finite_q_ivc is not None:
@@ -877,27 +1020,45 @@ for name, diag in reference_diagnostics(refs).items():
 #
 # The HF references are converged at this point, so these plotting controls can be changed without rerunning HF. The path calculation holds each converged coarse projector fixed, builds the corresponding HF Hamiltonian along the Taige high-symmetry path, and diagonalizes that Hamiltonian point by point.
 #
-# For the VP reference, the code chooses the lower-energy VP solution and breaks exact numerical ties in favor of `VP+`. The Q=0 and finite-Q IVC spectra are kept separate, matching the energy-comparison workflow above.
+# For each branch, the code chooses the lower-energy VP solution and breaks exact numerical ties in favor of `VP+`. Q=0 and finite-Q spectra are kept separate so the selected interpolation branch can be audited.
 #
 
 # %%
 
 hf_band_path_n_per_segment = 36
 
-vp_reference_is_degenerate = np.isclose(vp_plus.energy, vp_minus.energy, rtol=1e-9, atol=1e-9)
-if vp_reference_is_degenerate or vp_plus.energy <= vp_minus.energy:
+vp_reference_is_degenerate = np.isclose(q0_refs.vp_plus.energy, q0_refs.vp_minus.energy, rtol=1e-9, atol=1e-9)
+if vp_reference_is_degenerate or q0_refs.vp_plus.energy <= q0_refs.vp_minus.energy:
     vp_band_reference_name = "VP+"
-    vp_band_reference = vp_plus
+    vp_band_reference = q0_refs.vp_plus
 else:
     vp_band_reference_name = "VP-"
-    vp_band_reference = vp_minus
+    vp_band_reference = q0_refs.vp_minus
 
 hf_band_references = [
-    ("VP", bundle, vp_band_reference, vp_band_reference_name),
-    ("IVC_Q0", bundle, ivc, "IVC Q=0"),
+    ("VP_Q0", bundle, vp_band_reference, f"{vp_band_reference_name} Q=0"),
+    ("IVC_Q0", bundle, q0_refs.ivc, "IVC Q=0"),
 ]
-if finite_q_ivc is not None:
-    hf_band_references.append(("IVC_finite_Q", finite_q_bundle, finite_q_ivc, "IVC finite Q"))
+if finite_q_refs is not None:
+    finite_vp_is_degenerate = np.isclose(
+        finite_q_refs.vp_plus.energy,
+        finite_q_refs.vp_minus.energy,
+        rtol=1e-9,
+        atol=1e-9,
+    )
+    if finite_vp_is_degenerate or finite_q_refs.vp_plus.energy <= finite_q_refs.vp_minus.energy:
+        finite_vp_band_reference_name = "VP+"
+        finite_vp_band_reference = finite_q_refs.vp_plus
+    else:
+        finite_vp_band_reference_name = "VP-"
+        finite_vp_band_reference = finite_q_refs.vp_minus
+    hf_band_references.append((
+        "VP_finite_Q",
+        finite_q_bundle,
+        finite_vp_band_reference,
+        f"{finite_vp_band_reference_name} finite Q",
+    ))
+    hf_band_references.append(("IVC_finite_Q", finite_q_bundle, finite_q_refs.ivc, "IVC finite Q"))
 
 print("hf_band_path_n_per_segment:", hf_band_path_n_per_segment)
 print("VP HF band reference:", vp_band_reference_name)
@@ -1021,7 +1182,7 @@ if not hf_chern_df.empty:
 # %% [markdown]
 # ## Symmetric Convex Trial Hamiltonian Path
 #
-# The HF references are now fixed, so this is the first place where the `theta` path and global IVC phase are needed. Changing these values recomputes the trial Hamiltonian path and `K(theta)` without rerunning the three HF solves.
+# The selected HF branch is now fixed, so this is the first place where the `theta` path and global IVC phase are needed. Changing these values recomputes the trial Hamiltonian path and `K(theta)` without rerunning HF.
 #
 
 # %%
@@ -1036,15 +1197,15 @@ print("phi:", phi)
 
 
 # %% [markdown]
-# This cell builds the convex Hamiltonian path from the three raw HF Hamiltonians, diagonalizes each point into a fixed-occupation projector, embeds the active projector back into the continuum Bloch basis, and computes the dimensionless response kernel `K(theta)` and coefficient `c_G`.
+# This cell builds the convex Hamiltonian path from the three raw HF Hamiltonians in the selected branch, diagonalizes each point into a fixed-occupation projector, embeds the active projector back into that branch's continuum Bloch basis, and computes the dimensionless response kernel `K(theta)` and coefficient `c_G`.
 #
 
 # %%
 
 theta_nodes = np.linspace(endpoint_eps, np.pi - endpoint_eps, n_theta)
-projectors_flat, path_diagnostics = symmetric_convex_path(refs, theta_nodes, phi=phi)
-projectors = projectors_flat.reshape(n_theta, n_k, n_k, active.dim, active.dim)
-basis_frames = active_basis_frames(active).reshape(n_k, n_k, -1, active.dim)
+projectors_flat, path_diagnostics = symmetric_convex_path(selected_refs, theta_nodes, phi=phi)
+projectors = projectors_flat.reshape(n_theta, n_k, n_k, selected_active.dim, selected_active.dim)
+basis_frames = active_basis_frames(selected_active).reshape(n_k, n_k, -1, selected_active.dim)
 response = k_theta_from_projectors_with_basis(projectors, theta_nodes, basis_frames)
 
 gaps = np.array([row.direct_gap_min for row in path_diagnostics])
@@ -1068,8 +1229,8 @@ print("cG:", response.cG)
 
 # %%
 
-trial_energy_components = [bundle.backend.energy(P_theta) for P_theta in projectors_flat]
-energy_norm = float(bundle.backend.n_blocks)
+trial_energy_components = [selected_backend.energy(P_theta) for P_theta in projectors_flat]
+energy_norm = float(selected_backend.n_blocks)
 trial_energy_total_per_cell = np.array([item.total for item in trial_energy_components]) / energy_norm
 trial_energy_one_body_per_cell = np.array([item.one_body for item in trial_energy_components]) / energy_norm
 trial_energy_hartree_per_cell = np.array([item.hartree for item in trial_energy_components]) / energy_norm
@@ -1114,9 +1275,9 @@ print("energy per cell range:", float(np.ptp(trial_energy_total_per_cell)))
 # %% [markdown]
 # ## Post-HF Texture Controls
 #
-# The domain-wall texture parameters enter only after `K(theta)` is known. Edit `R` and `w` here to recompute the radial texture and charge density from the already computed Q=0 HF references and convex path.
+# The domain-wall texture parameters enter only after `K(theta)` is known. Edit `R` and `w` here to recompute the radial texture and charge density from the already computed selected HF branch and convex path.
 #
-# This cell does not rerun continuum bands, density vertices, Q=0 HF, or finite-Q IVC HF.
+# This cell does not rerun continuum bands, density vertices, Q=0 HF, or finite-Q HF.
 #
 
 # %%
@@ -1202,7 +1363,7 @@ print("integrated 2D charge:", integrated_charge_2d)
 # %% [markdown]
 # ## Save Arrays
 #
-# This cell writes the converged Q=0 reference projectors, convex-path projectors, `K(theta)`, `c_G`, the physical trial-energy curve, and the current post-HF charge-density profiles into a compressed NumPy artifact under `results/`. The finite-Q IVC comparison is stored separately in its own CSV/figures above.
+# This cell writes the selected-branch reference projectors, convex-path projectors, `K(theta)`, `c_G`, the physical trial-energy curve, and the current post-HF charge-density profiles into a compressed NumPy artifact under `results/`. The Q=0/finite-Q branch comparison is stored separately in its own CSV/figures above.
 #
 
 # %%
@@ -1212,9 +1373,13 @@ np.savez_compressed(
     theta=response.theta,
     K=response.K,
     cG=np.array(response.cG),
-    vp_plus_P=vp_plus.P,
-    vp_minus_P=vp_minus.P,
-    ivc_P=ivc.P,
+    selected_ivc_branch=np.array(selected_ivc_branch),
+    q0_ivc_energy_per_cell=np.array(E_IVC_Q0_per_cell),
+    finite_q_ivc_energy_per_cell=np.array(E_IVC_finite_Q_per_cell),
+    selected_ivc_energy_per_cell=np.array(E_selected_IVC_per_cell),
+    vp_plus_P=selected_refs.vp_plus.P,
+    vp_minus_P=selected_refs.vp_minus.P,
+    ivc_P=selected_refs.ivc.P,
     convex_projectors=projectors,
     trial_energy_total_per_cell=trial_energy_total_per_cell,
     trial_energy_relative_per_cell=trial_energy_relative_per_cell,
