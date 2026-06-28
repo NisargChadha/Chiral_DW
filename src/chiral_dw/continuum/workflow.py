@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import numpy as np
@@ -12,12 +12,14 @@ import numpy as np
 from chiral_dw.artifacts import RunArtifact, RunManifest
 from chiral_dw.config import ChargeResponseSummary, ContinuumWorkflowParams
 from chiral_dw.continuum.builder import build_continuum_bundle
+from chiral_dw.continuum.models import ContinuumBundle, ConvexPathDiagnostics, SymmetricHFReferences
 from chiral_dw.continuum.observables import active_basis_frames
 from chiral_dw.continuum.references import (
     build_symmetric_hf_references,
     reference_diagnostics,
     symmetric_convex_path,
 )
+from chiral_dw.continuum.sweep import trial_theta_rows
 from chiral_dw.domain_wall import DomainWallChargeProfile, charge_density_radial
 from chiral_dw.response import KThetaResult, k_theta_from_projectors_with_basis, projector_errors
 
@@ -27,8 +29,12 @@ class ContinuumSymmetricHFWorkflowResult:
     """In-memory output for one native continuum symmetric-HF run."""
 
     params: ContinuumWorkflowParams
+    bundle: ContinuumBundle
+    references: SymmetricHFReferences
     theta: np.ndarray
+    projectors_flat: np.ndarray
     projectors: np.ndarray
+    path_diagnostics: tuple[ConvexPathDiagnostics, ...]
     response: KThetaResult
     charge_profile: DomainWallChargeProfile
     summary: ChargeResponseSummary
@@ -100,8 +106,12 @@ def run_continuum_symmetric_hf_workflow(
     }
     result = ContinuumSymmetricHFWorkflowResult(
         params=controls,
+        bundle=bundle,
+        references=refs,
         theta=theta,
+        projectors_flat=projectors_flat,
         projectors=projectors,
+        path_diagnostics=path_diagnostics,
         response=response,
         charge_profile=profile,
         summary=summary,
@@ -131,9 +141,11 @@ def write_continuum_symmetric_hf_outputs(
     out_dir.mkdir(parents=True, exist_ok=True)
     arrays_path = out_dir / "projectors.npz"
     ktheta_path = out_dir / "K_theta.csv"
+    trial_theta_path = out_dir / "trial_theta.csv"
     charge_path = out_dir / "charge_profile.csv"
     summary_path = out_dir / "summary.json"
     manifest_path = out_dir / "artifact_manifest.json"
+    trial_rows = trial_theta_rows(result)
 
     np.savez_compressed(
         arrays_path,
@@ -141,6 +153,16 @@ def write_continuum_symmetric_hf_outputs(
         projectors=result.projectors,
         K_theta=result.response.K,
         cG=np.array(result.response.cG),
+        trial_direct_gap=np.asarray([row["direct_gap"] for row in trial_rows], dtype=float),
+        trial_indirect_gap=np.asarray([row["indirect_gap"] for row in trial_rows], dtype=float),
+        trial_energy_total_per_cell=np.asarray(
+            [row["energy_total_per_cell"] for row in trial_rows],
+            dtype=float,
+        ),
+        trial_energy_relative_per_cell=np.asarray(
+            [row["energy_relative_per_cell"] for row in trial_rows],
+            dtype=float,
+        ),
     )
     with ktheta_path.open("w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=["theta", "theta_over_pi", "K_theta", "cG"])
@@ -154,6 +176,26 @@ def write_continuum_symmetric_hf_outputs(
                     "cG": float(result.response.cG),
                 }
             )
+    with trial_theta_path.open("w", newline="") as f:
+        fieldnames = [
+            "theta",
+            "theta_over_pi",
+            "K_theta",
+            "cG",
+            "w_vp_plus",
+            "w_vp_minus",
+            "w_ivc",
+            "direct_gap",
+            "indirect_gap",
+            "energy_total_per_cell",
+            "energy_relative_per_cell",
+            "energy_one_body_per_cell",
+            "energy_hartree_per_cell",
+            "energy_fock_per_cell",
+        ]
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(trial_rows)
     with charge_path.open("w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=["r", "theta", "K_theta", "rho_dimless"])
         writer.writeheader()
@@ -171,12 +213,14 @@ def write_continuum_symmetric_hf_outputs(
         "params": result.params.model_dump(mode="json"),
         "summary": result.summary.model_dump(mode="json"),
         "reference_summary": result.reference_summary,
+        "path_diagnostics": [asdict(row) for row in result.path_diagnostics],
         "projector_errors": projector_errors(result.projectors),
     }
     summary_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
     artifacts = [
         _artifact(arrays_path, "projectors", "array", "Theta projector path and response arrays"),
         _artifact(ktheta_path, "K_theta", "table", "Dimensionless K(theta) table"),
+        _artifact(trial_theta_path, "trial_theta", "table", "Trial path gaps and physical energies"),
         _artifact(charge_path, "charge_profile", "table", "Radial dimensionless charge profile"),
         _artifact(summary_path, "summary", "json", "Run parameters, HF diagnostics, and response summary"),
     ]

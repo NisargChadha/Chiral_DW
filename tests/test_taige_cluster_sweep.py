@@ -1,3 +1,4 @@
+import csv
 import json
 import subprocess
 import sys
@@ -60,10 +61,27 @@ def test_taige_sweep_merge_only_collects_point_summaries(tmp_path):
                     "u_D_meV": 0.0,
                     "theta_deg": 3.5,
                     "cG": 1.25,
+                    "chern_hf_vpplus_band_0": 1.0,
                     "point_dir": str(point_dir),
                 }
             }
         )
+    )
+    (point_dir / "trial_theta.csv").write_text(
+        "u_index,theta_index,u_D_meV,theta_deg,theta,K_theta,direct_gap\n"
+        "0,0,0.0,3.5,0.1,1.2,0.3\n"
+    )
+    (point_dir / "reference_energies.csv").write_text(
+        "u_index,theta_index,u_D_meV,theta_deg,quantity,value,reference\n"
+        "0,0,0.0,3.5,E_IVC_Q0_per_cell,-1.0,IVC Q=0\n"
+    )
+    (point_dir / "noninteracting_chern_numbers.csv").write_text(
+        "u_index,theta_index,u_D_meV,theta_deg,basis,valley,band,chern\n"
+        "0,0,0.0,3.5,hole,K,0,1.0\n"
+    )
+    (point_dir / "hf_chern_numbers.csv").write_text(
+        "u_index,theta_index,u_D_meV,theta_deg,reference,band,chern,energy_min,energy_max\n"
+        "0,0,0.0,3.5,VP+,0,1.0,-1.0,1.0\n"
     )
 
     subprocess.run(
@@ -80,9 +98,89 @@ def test_taige_sweep_merge_only_collects_point_summaries(tmp_path):
     merged = json.loads((output_root / "sweep.json").read_text())
     assert merged["n_points"] == 1
     assert merged["rows"][0]["cG"] == 1.25
+    assert merged["stacked_counts"]["trial_theta"] == 1
+    assert merged["stacked_counts"]["hf_chern_numbers"] == 1
     csv_text = (output_root / "sweep.csv").read_text()
     assert "u_D_meV" in csv_text
+    assert "chern_hf_vpplus_band_0" in csv_text
     assert "1.25" in csv_text
+    assert "direct_gap" in (output_root / "sweep_trial_theta.csv").read_text()
+    assert "E_IVC_Q0_per_cell" in (output_root / "sweep_reference_energies.csv").read_text()
+    assert "hole,K,0,1.0" in (output_root / "sweep_noninteracting_chern_numbers.csv").read_text()
+    assert "VP+,0,1.0" in (output_root / "sweep_hf_chern_numbers.csv").read_text()
+
+
+def test_taige_sweep_point_writes_scalar_rich_diagnostics(tmp_path):
+    output_root = tmp_path / "sweep"
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--output-root",
+            str(output_root),
+            "--u-d",
+            "0.0",
+            "--theta-deg",
+            "3.5",
+            "--n-k",
+            "3",
+            "--plane-wave-shell",
+            "0",
+            "--n-bands",
+            "1",
+            "--n-active-bands-per-valley",
+            "1",
+            "--q-mesh",
+            "shell",
+            "--q-shell",
+            "0",
+            "--local-field-cutoff",
+            "0",
+            "--v0",
+            "0.0",
+            "--exchange-scale",
+            "0.0",
+            "--hartree-scale",
+            "0.0",
+            "--max-iter",
+            "1",
+            "--min-iter",
+            "0",
+            "--mixing-method",
+            "linear",
+            "--seed-ordered-weight",
+            "1.0",
+            "--seed-random-weight",
+            "0.0",
+            "--n-theta",
+            "5",
+            "--no-finite-q-ivc",
+        ],
+        check=True,
+    )
+
+    point_dir = output_root / "points" / "u_000_theta_000"
+    summary = json.loads((point_dir / "point_summary.json").read_text())
+    row = summary["row"]
+    assert row["cG"] == row["cG"]
+    assert row["finite_q_ivc_enabled"] is False
+    assert row["chern_enabled"] is True
+    assert "ivc_q0_energy_per_cell" in row
+    assert any(key.startswith("chern_nonint_hole_k_band_") for key in row)
+    assert any(key.startswith("chern_hf_vpplus_band_") for key in row)
+
+    trial_rows = list(csv.DictReader((point_dir / "trial_theta.csv").open()))
+    assert len(trial_rows) == 5
+    assert "energy_total_per_cell" in trial_rows[0]
+    assert "direct_gap" in trial_rows[0]
+    assert (point_dir / "reference_energies.csv").exists()
+    assert (point_dir / "noninteracting_chern_numbers.csv").exists()
+    assert (point_dir / "hf_chern_numbers.csv").exists()
+
+    merged = json.loads((output_root / "sweep.json").read_text())
+    assert merged["n_points"] == 1
+    assert merged["stacked_counts"]["trial_theta"] == 5
+    assert "sweep_hf_chern_numbers.csv" in merged["tables"]["hf_chern_numbers_csv"]
 
 
 def test_taige_sweep_job_uses_array_task_and_results_root():
@@ -91,4 +189,10 @@ def test_taige_sweep_job_uses_array_task_and_results_root():
     assert "SLURM_ARRAY_TASK_ID" in text
     assert "scripts/scan_taige_continuum_cg.py" in text
     assert 'OUTPUT_ROOT=${OUTPUT_ROOT:-"results/taige_continuum_cg_sweep"}' in text
+    assert 'COMPUTE_CHERN=${COMPUTE_CHERN:-"1"}' in text
+    assert 'COMPUTE_FINITE_Q_IVC=${COMPUTE_FINITE_Q_IVC:-"1"}' in text
+    assert 'WRITE_HF_PATH_SPECTRA=${WRITE_HF_PATH_SPECTRA:-"0"}' in text
+    assert "--no-chern" in text
+    assert "--no-finite-q-ivc" in text
+    assert "--write-hf-path-spectra" in text
     assert "--merge-only" in text

@@ -62,6 +62,11 @@ DOMAIN_RADIUS=${DOMAIN_RADIUS:-"20.0"}
 DOMAIN_WIDTH=${DOMAIN_WIDTH:-"3.0"}
 DOMAIN_WINDING=${DOMAIN_WINDING:-"1"}
 
+COMPUTE_CHERN=${COMPUTE_CHERN:-"1"}
+COMPUTE_FINITE_Q_IVC=${COMPUTE_FINITE_Q_IVC:-"1"}
+WRITE_HF_PATH_SPECTRA=${WRITE_HF_PATH_SPECTRA:-"0"}
+HF_PATH_N_PER_SEGMENT=${HF_PATH_N_PER_SEGMENT:-"36"}
+
 TASK_ID=${SLURM_ARRAY_TASK_ID:-0}
 TOTAL_TASKS=$((N_U_D * N_TWIST))
 if (( TASK_ID >= TOTAL_TASKS )); then
@@ -72,6 +77,18 @@ fi
 OMIT_Q0_FLAG=()
 if [[ "$INCLUDE_Q0" == "0" ]]; then
   OMIT_Q0_FLAG=(--omit-q0)
+fi
+CHERN_FLAG=()
+if [[ "$COMPUTE_CHERN" == "0" ]]; then
+  CHERN_FLAG=(--no-chern)
+fi
+FINITE_Q_IVC_FLAG=()
+if [[ "$COMPUTE_FINITE_Q_IVC" == "0" ]]; then
+  FINITE_Q_IVC_FLAG=(--no-finite-q-ivc)
+fi
+HF_PATH_FLAG=()
+if [[ "$WRITE_HF_PATH_SPECTRA" == "1" ]]; then
+  HF_PATH_FLAG=(--write-hf-path-spectra --hf-path-n-per-segment "$HF_PATH_N_PER_SEGMENT")
 fi
 
 echo "Running Taige continuum c_G task ${TASK_ID}/${TOTAL_TASKS} into ${OUTPUT_ROOT}"
@@ -113,6 +130,9 @@ python scripts/scan_taige_continuum_cg.py \
   --domain-radius "$DOMAIN_RADIUS" \
   --domain-width "$DOMAIN_WIDTH" \
   --domain-winding "$DOMAIN_WINDING" \
+  "${CHERN_FLAG[@]}" \
+  "${FINITE_Q_IVC_FLAG[@]}" \
+  "${HF_PATH_FLAG[@]}" \
   --skip-existing
 
 echo "Task ${TASK_ID} complete. After the array finishes, merge with:"

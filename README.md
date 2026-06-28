@@ -178,7 +178,28 @@ print(reference_diagnostics(refs)["ivc"].model_dump())
 ### Taige Continuum Cluster Sweep
 
 The cluster sweep wrapper runs one `(u_D, theta_deg)` point per SLURM array
-task and writes every point under `results/`:
+task and writes every point under `results/`. On a fresh cluster checkout,
+create the environment once:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e ".[dev]"
+```
+
+For a cheap launch sanity check, use `--dry-run`; it writes only
+`sweep_plan.csv/json` and does not run HF:
+
+```bash
+python scripts/scan_taige_continuum_cg.py \
+  --output-root results/taige_cg_grid \
+  --n-u-d 13 \
+  --n-twist 9 \
+  --n-k 18 \
+  --dry-run
+```
+
+Submit the array after checking the plan:
 
 ```bash
 sbatch jobs/scan_taige_continuum_cg_array.sh
@@ -191,8 +212,15 @@ sbatch --export=ALL,N_U_D=13,N_TWIST=9,N_K=18,OUTPUT_ROOT=results/taige_cg_grid 
   jobs/scan_taige_continuum_cg_array.sh
 ```
 
-After the array finishes, merge per-point summaries into `sweep.csv` and
-`sweep.json`:
+Monitor with `squeue -u "$USER"` and inspect `logs/taige_continuum_cG_*` for
+per-task output. By default each point records scalar-rich diagnostics:
+`c_G`, `K(theta)`, trial energy and gap versus theta, HF reference gaps and
+energies, noninteracting Chern numbers, HF Chern numbers, and the Taige IVC-
+finite-Q energy comparison. Disable expensive branches with
+`COMPUTE_CHERN=0` or `COMPUTE_FINITE_Q_IVC=0`; set
+`WRITE_HF_PATH_SPECTRA=1` only when path spectra are needed for every point.
+
+After the array finishes, manually merge per-point summaries:
 
 ```bash
 python3 scripts/scan_taige_continuum_cg.py \
@@ -200,8 +228,10 @@ python3 scripts/scan_taige_continuum_cg.py \
   --merge-only
 ```
 
-For a cheap launch sanity check, use `--dry-run`; it writes only
-`sweep_plan.csv/json` and does not run HF.
+The merge writes `sweep.csv/json` plus stacked long-form tables:
+`sweep_trial_theta.csv`, `sweep_reference_energies.csv`,
+`sweep_noninteracting_chern_numbers.csv`, `sweep_hf_chern_numbers.csv`, and
+`sweep_hf_path_spectra.csv` when that optional branch was enabled.
 
 ## Artifacts
 
