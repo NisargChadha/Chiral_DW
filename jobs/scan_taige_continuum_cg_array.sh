@@ -1,10 +1,10 @@
 #!/bin/bash
 #SBATCH -J taige_cG
 #SBATCH -p serial_requeue
-#SBATCH --array=0-624
-#SBATCH -t 12:00:00
+#SBATCH --array=0-440
+#SBATCH -t 24:00:00
 #SBATCH -c 1
-#SBATCH --mem=12G
+#SBATCH --mem=24G
 #SBATCH -o logs/taige_continuum_cG_%A_%a.out
 #SBATCH -e logs/taige_continuum_cG_%A_%a.err
 #SBATCH --requeue
@@ -20,19 +20,19 @@ mkdir -p logs
 
 # Override any value with:
 # sbatch --export=ALL,NAME=value jobs/scan_taige_continuum_cg_array.sh
-OUTPUT_ROOT=${OUTPUT_ROOT:-"results/taige_continuum_cg_sweep"}
+OUTPUT_ROOT=${OUTPUT_ROOT:-"results/taige_cg_nk24_active2_shell5_vp_region"}
 
 U_D_MIN=${U_D_MIN:-"0.0"}
-U_D_MAX=${U_D_MAX:-"30.0"}
-N_U_D=${N_U_D:-"7"}
-THETA_MIN_DEG=${THETA_MIN_DEG:-"3.0"}
-THETA_MAX_DEG=${THETA_MAX_DEG:-"4.0"}
-N_TWIST=${N_TWIST:-"5"}
+U_D_MAX=${U_D_MAX:-"20.0"}
+N_U_D=${N_U_D:-"21"}
+THETA_MIN_DEG=${THETA_MIN_DEG:-"2.0"}
+THETA_MAX_DEG=${THETA_MAX_DEG:-"5.0"}
+N_TWIST=${N_TWIST:-"21"}
 
-N_K=${N_K:-"18"}
-PLANE_WAVE_SHELL=${PLANE_WAVE_SHELL:-"1"}
+N_K=${N_K:-"24"}
+PLANE_WAVE_SHELL=${PLANE_WAVE_SHELL:-"5"}
 N_BANDS=${N_BANDS:-"2"}
-N_ACTIVE_BANDS_PER_VALLEY=${N_ACTIVE_BANDS_PER_VALLEY:-"1"}
+N_ACTIVE_BANDS_PER_VALLEY=${N_ACTIVE_BANDS_PER_VALLEY:-"2"}
 
 Q_MESH=${Q_MESH:-"full"}
 Q_SHELL=${Q_SHELL:-"0"}
@@ -66,6 +66,8 @@ COMPUTE_CHERN=${COMPUTE_CHERN:-"1"}
 COMPUTE_FINITE_Q_IVC=${COMPUTE_FINITE_Q_IVC:-"1"}
 IVC_BRANCH_POLICY=${IVC_BRANCH_POLICY:-"lower-energy"}
 IVC_BRANCH_TIE_ATOL=${IVC_BRANCH_TIE_ATOL:-"1e-9"}
+NAN_TEXTURE_WHEN_IVC_LOWER=${NAN_TEXTURE_WHEN_IVC_LOWER:-"1"}
+TEXTURE_ENERGY_TIE_ATOL=${TEXTURE_ENERGY_TIE_ATOL:-"1e-9"}
 WRITE_HF_PATH_SPECTRA=${WRITE_HF_PATH_SPECTRA:-"0"}
 HF_PATH_N_PER_SEGMENT=${HF_PATH_N_PER_SEGMENT:-"36"}
 
@@ -91,6 +93,10 @@ fi
 HF_PATH_FLAG=()
 if [[ "$WRITE_HF_PATH_SPECTRA" == "1" ]]; then
   HF_PATH_FLAG=(--write-hf-path-spectra --hf-path-n-per-segment "$HF_PATH_N_PER_SEGMENT")
+fi
+TEXTURE_FLAG=()
+if [[ "$NAN_TEXTURE_WHEN_IVC_LOWER" == "0" ]]; then
+  TEXTURE_FLAG=(--allow-texture-in-ivc-ground-state)
 fi
 
 echo "Running Taige continuum c_G task ${TASK_ID}/${TOTAL_TASKS} into ${OUTPUT_ROOT}"
@@ -136,6 +142,8 @@ python scripts/scan_taige_continuum_cg.py \
   "${FINITE_Q_IVC_FLAG[@]}" \
   --ivc-branch-policy "$IVC_BRANCH_POLICY" \
   --ivc-branch-tie-atol "$IVC_BRANCH_TIE_ATOL" \
+  "${TEXTURE_FLAG[@]}" \
+  --texture-energy-tie-atol "$TEXTURE_ENERGY_TIE_ATOL" \
   "${HF_PATH_FLAG[@]}" \
   --skip-existing
 

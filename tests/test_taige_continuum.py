@@ -362,6 +362,47 @@ def test_taige_branch_selected_workflow_can_force_q0(monkeypatch):
     assert result.finite_q_branch.bundle.active.finite_q_enabled is True
 
 
+def test_taige_branch_selected_workflow_suppresses_texture_when_ivc_wins(monkeypatch):
+    def fake_references(bundle, params):
+        return _dummy_refs_for_bundle(
+            bundle,
+            ivc_energy=-1.0,
+            vp_plus_energy=0.0,
+            vp_minus_energy=0.1,
+        )
+
+    monkeypatch.setattr(workflow_mod, "build_symmetric_hf_references", fake_references)
+    params = ContinuumWorkflowParams(
+        model=taige_model_params(theta_deg=3.5, u_D=20.0, plane_wave_shell=0, n_bands=1),
+        grid=ContinuumGridParams(n_k=3),
+        interaction=ContinuumInteractionParams(
+            coulomb_kind="dimensionless_screened",
+            v0=0.0,
+            q_shell=0,
+            local_field_cutoff=0,
+        ),
+        hf=ContinuumHFParams(max_iter=1, min_iter=0),
+        response=ResponseParams(n_theta=5, theta_min=1e-4, theta_max=np.pi - 1e-4),
+    )
+
+    result = run_taige_branch_selected_symmetric_hf_workflow(
+        params,
+        finite_q_enabled=False,
+        ivc_branch_policy="q0",
+        suppress_texture_when_ivc_below_vp=True,
+        write_outputs=False,
+    )
+
+    assert result.branch_selection["texture_valid"] is False
+    assert result.branch_selection["texture_invalid_reason"] == "ivc_energy_below_vp_reference"
+    assert result.branch_selection["hf_ground_state"] == "IVC_0"
+    assert np.isnan(result.response.cG)
+    assert np.all(np.isnan(result.response.K))
+    assert np.isnan(result.summary.gap_min)
+    assert result.summary.valid_local_gap is False
+    assert np.all(np.isnan(result.projectors.real))
+
+
 def test_taige_chern_table_returns_finite_values_on_tiny_grid():
     bundle = _tiny_taige_bundle()
     rows = chern_number_table(bundle.bands, band_indices=(0,))

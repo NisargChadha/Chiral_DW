@@ -42,17 +42,17 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--u-d", type=float, default=None, help="Run one explicit displacement value in meV.")
     parser.add_argument("--theta-deg", type=float, default=None, help="Run one explicit twist angle in degrees.")
     parser.add_argument("--u-d-min", type=float, default=0.0)
-    parser.add_argument("--u-d-max", type=float, default=30.0)
-    parser.add_argument("--n-u-d", type=int, default=7)
-    parser.add_argument("--theta-min-deg", type=float, default=3.0)
-    parser.add_argument("--theta-max-deg", type=float, default=4.0)
-    parser.add_argument("--n-twist", type=int, default=5)
+    parser.add_argument("--u-d-max", type=float, default=20.0)
+    parser.add_argument("--n-u-d", type=int, default=21)
+    parser.add_argument("--theta-min-deg", type=float, default=2.0)
+    parser.add_argument("--theta-max-deg", type=float, default=5.0)
+    parser.add_argument("--n-twist", type=int, default=21)
     parser.add_argument("--task-id", type=int, default=None, help="SLURM-style flat grid index.")
 
-    parser.add_argument("--n-k", type=int, default=18)
-    parser.add_argument("--plane-wave-shell", type=int, default=1)
+    parser.add_argument("--n-k", type=int, default=24)
+    parser.add_argument("--plane-wave-shell", type=int, default=5)
     parser.add_argument("--n-bands", type=int, default=2)
-    parser.add_argument("--n-active-bands-per-valley", type=int, default=1)
+    parser.add_argument("--n-active-bands-per-valley", type=int, default=2)
 
     parser.add_argument("--q-mesh", choices=["shell", "full"], default="full")
     parser.add_argument("--q-shell", type=int, default=0)
@@ -95,6 +95,17 @@ def _build_parser() -> argparse.ArgumentParser:
         type=float,
         default=1e-9,
         help="Energy-per-cell tolerance for treating Q=0 and finite-Q IVC as tied; ties choose Q=0.",
+    )
+    parser.add_argument(
+        "--allow-texture-in-ivc-ground-state",
+        action="store_true",
+        help="Keep cG/K(theta)/trial texture diagnostics even when IVC is below the VP reference.",
+    )
+    parser.add_argument(
+        "--texture-energy-tie-atol",
+        type=float,
+        default=1e-9,
+        help="Energy-per-cell tolerance for treating IVC and VP as tied; ties keep texture diagnostics.",
     )
     parser.add_argument("--write-hf-path-spectra", action="store_true", help="Write optional fixed-density HF path spectra.")
     parser.add_argument("--hf-path-n-per-segment", type=int, default=36)
@@ -319,6 +330,8 @@ def _diagnostic_params(args: argparse.Namespace) -> TaigeSweepDiagnosticsParams:
         compute_finite_q_ivc=not args.no_finite_q_ivc,
         ivc_branch_policy=branch_policy,
         ivc_branch_tie_atol=float(args.ivc_branch_tie_atol),
+        nan_texture_when_ivc_lower=not args.allow_texture_in_ivc_ground_state,
+        texture_energy_tie_atol=float(args.texture_energy_tie_atol),
         write_hf_path_spectra=bool(args.write_hf_path_spectra),
         hf_path_n_per_segment=args.hf_path_n_per_segment,
     )
@@ -356,6 +369,8 @@ def run_point(args: argparse.Namespace, output_root: Path, point: TaigeSweepPoin
         finite_q_enabled=diagnostic_controls.compute_finite_q_ivc,
         ivc_branch_policy=diagnostic_controls.ivc_branch_policy,
         tie_atol=diagnostic_controls.ivc_branch_tie_atol,
+        suppress_texture_when_ivc_below_vp=diagnostic_controls.nan_texture_when_ivc_lower,
+        texture_energy_tie_atol=diagnostic_controls.texture_energy_tie_atol,
         write_outputs=True,
     )
     diagnostics = build_taige_sweep_diagnostics(

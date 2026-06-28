@@ -54,6 +54,8 @@ class TaigeSweepDiagnosticsParams(BaseModel):
     compute_finite_q_ivc: bool = True
     ivc_branch_policy: Literal["lower_energy", "q0"] = "lower_energy"
     ivc_branch_tie_atol: float = Field(default=1e-9, ge=0.0)
+    nan_texture_when_ivc_lower: bool = True
+    texture_energy_tie_atol: float = Field(default=1e-9, ge=0.0)
     write_hf_path_spectra: bool = False
     hf_path_n_per_segment: int = Field(default=36, ge=1)
 
@@ -78,6 +80,12 @@ class TaigeSweepPointSummary(BaseModel):
     q0_ivc_energy_per_cell: float
     finite_q_ivc_energy_per_cell: float | None = None
     finite_q_minus_q0_ivc_energy_per_cell: float | None = None
+    texture_valid: bool
+    texture_invalid_reason: str | None = None
+    texture_nan_policy: bool
+    texture_energy_tie_atol: float
+    hf_ground_state: str
+    selected_ivc_minus_vp_energy_per_cell: float
     vp_plus_energy: float
     vp_minus_energy: float
     ivc_energy: float
@@ -285,6 +293,33 @@ def trial_theta_rows(workflow_result: Any) -> list[dict[str, Any]]:
 
     theta = np.asarray(workflow_result.theta, dtype=float)
     path_diagnostics = tuple(workflow_result.path_diagnostics)
+    branch_selection = dict(getattr(workflow_result, "branch_selection", {}))
+    if (
+        branch_selection.get("texture_valid") is False
+        and branch_selection.get("texture_nan_policy", True)
+    ):
+        rows: list[dict[str, Any]] = []
+        for idx, angle in enumerate(theta):
+            diag = path_diagnostics[idx]
+            rows.append(
+                {
+                    "theta": float(angle),
+                    "theta_over_pi": float(angle / np.pi),
+                    "K_theta": float("nan"),
+                    "cG": float("nan"),
+                    "w_vp_plus": float(diag.w_vp_plus),
+                    "w_vp_minus": float(diag.w_vp_minus),
+                    "w_ivc": float(diag.w_ivc),
+                    "direct_gap": float("nan"),
+                    "indirect_gap": float("nan"),
+                    "energy_total_per_cell": float("nan"),
+                    "energy_relative_per_cell": float("nan"),
+                    "energy_one_body_per_cell": float("nan"),
+                    "energy_hartree_per_cell": float("nan"),
+                    "energy_fock_per_cell": float("nan"),
+                }
+            )
+        return rows
     projectors_flat = np.asarray(workflow_result.projectors_flat, dtype=complex)
     backend = workflow_result.bundle.backend
     energy_norm = float(backend.n_blocks)
@@ -719,6 +754,29 @@ def build_taige_sweep_diagnostics(
         finite_q_minus_q0_ivc_energy_per_cell=reference_rows_by_quantity[
             "Delta_finite_Q_minus_Q0_per_cell"
         ]["value"],
+        texture_valid=bool(branch_selection.get("texture_valid", True)),
+        texture_invalid_reason=branch_selection.get("texture_invalid_reason"),
+        texture_nan_policy=bool(
+            branch_selection.get(
+                "texture_nan_policy",
+                controls.nan_texture_when_ivc_lower,
+            )
+        ),
+        texture_energy_tie_atol=float(
+            branch_selection.get(
+                "texture_energy_tie_atol",
+                controls.texture_energy_tie_atol,
+            )
+        ),
+        hf_ground_state=str(branch_selection.get("hf_ground_state", "VP")),
+        selected_ivc_minus_vp_energy_per_cell=float(
+            branch_selection.get(
+                "selected_ivc_minus_vp_energy_per_cell",
+                reference_rows_by_quantity["Delta_IVC_finite_Q_vs_VP_per_cell"]["value"]
+                if branch_selection.get("selected_ivc_branch") == "finite_q"
+                else reference_rows_by_quantity["Delta_IVC_Q0_vs_VP_per_cell"]["value"],
+            )
+        ),
         vp_plus_energy=float(refs["vp_plus"]["energy"]),
         vp_minus_energy=float(refs["vp_minus"]["energy"]),
         ivc_energy=float(refs["ivc"]["energy"]),

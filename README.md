@@ -194,10 +194,7 @@ For a cheap launch sanity check, use `--dry-run`; it writes only
 
 ```bash
 python scripts/scan_taige_continuum_cg.py \
-  --output-root results/taige_cg_grid \
-  --n-u-d 13 \
-  --n-twist 9 \
-  --n-k 18 \
+  --output-root results/taige_cg_nk24_active2_shell5_vp_region \
   --dry-run
 ```
 
@@ -210,7 +207,7 @@ sbatch jobs/scan_taige_continuum_cg_array.sh
 Useful overrides follow the same style as the old TMD_HF job scripts:
 
 ```bash
-sbatch --export=ALL,N_U_D=13,N_TWIST=9,N_K=18,OUTPUT_ROOT=results/taige_cg_grid \
+sbatch --export=ALL,N_U_D=11,N_TWIST=11,OUTPUT_ROOT=results/taige_cg_smaller_test \
   jobs/scan_taige_continuum_cg_array.sh
 ```
 
@@ -221,8 +218,16 @@ energies, selected/Q=0/finite-Q VP and IVC order-parameter magnitudes,
 noninteracting Chern numbers, HF Chern numbers, and the Taige IVC- finite-Q
 energy comparison. The default `IVC_BRANCH_POLICY=lower-energy` selects the
 lower-energy Q=0/finite-Q IVC branch for interpolation; use
-`IVC_BRANCH_POLICY=q0` to force the Q=0 path. The merged `sweep.csv` includes
-plotting columns such as `vp_reference_order_abs_nz`,
+`IVC_BRANCH_POLICY=q0` to force the Q=0 path. The default production window is
+`n_k=24`, two active bands per valley, `plane_wave_shell=5`, `u_D=0..20 meV`,
+and `theta=2..5 deg` on a 21 by 21 grid. If the selected IVC reference is
+below the VP reference, the spin texture is not treated as a defined VP domain
+wall; texture-specific outputs such as `cG`, `K_theta`, trial gaps, trial
+energies, and charge profile entries are written as `NaN` while HF energies,
+orders, gaps, and Chern diagnostics remain available. Set
+`NAN_TEXTURE_WHEN_IVC_LOWER=0` to force those texture diagnostics anyway. The
+merged `sweep.csv` includes plotting columns such as `texture_valid`,
+`hf_ground_state`, `vp_reference_order_abs_nz`,
 `ivc_q0_ivc_amplitude_block`, `ivc_finite_q_ivc_amplitude_block`,
 `vp_reference_direct_gap`, and `selected_ivc_direct_gap`. Disable expensive
 branches with `COMPUTE_CHERN=0` or `COMPUTE_FINITE_Q_IVC=0`; disabling finite-Q
@@ -233,7 +238,7 @@ After the array finishes, manually merge per-point summaries:
 
 ```bash
 python3 scripts/scan_taige_continuum_cg.py \
-  --output-root results/taige_cg_grid \
+  --output-root results/taige_cg_nk24_active2_shell5_vp_region \
   --merge-only
 ```
 

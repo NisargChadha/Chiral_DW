@@ -19,6 +19,7 @@ from chiral_dw.continuum.models import finite_q_shift_metadata
 from chiral_dw.continuum.observables import active_basis_frames
 from chiral_dw.continuum.references import (
     build_symmetric_hf_references,
+    convex_weights,
     reference_diagnostics,
     symmetric_convex_path,
 )
@@ -68,6 +69,18 @@ def continuum_theta_nodes(params: ContinuumWorkflowParams) -> np.ndarray:
     return np.linspace(response.theta_min, response.theta_max, response.n_theta)
 
 
+def _vp_reference_energy_per_cell(
+    branch: ContinuumSymmetricHFBranch,
+) -> tuple[str, float]:
+    refs = branch.references
+    norm = float(branch.bundle.backend.n_blocks)
+    if np.isclose(refs.vp_plus.energy, refs.vp_minus.energy, rtol=1e-9, atol=1e-9):
+        return "VP+", float(refs.vp_plus.energy / norm)
+    if refs.vp_plus.energy <= refs.vp_minus.energy:
+        return "VP+", float(refs.vp_plus.energy / norm)
+    return "VP-", float(refs.vp_minus.energy / norm)
+
+
 def _branch_reference_summary(refs: SymmetricHFReferences) -> dict:
     return {
         "vp_plus": refs.vp_plus.diagnostics.model_dump(mode="json"),
@@ -78,6 +91,88 @@ def _branch_reference_summary(refs: SymmetricHFReferences) -> dict:
             for name, diag in reference_diagnostics(refs).items()
         },
     }
+
+
+def _nan_path_diagnostics(theta: np.ndarray) -> tuple[ConvexPathDiagnostics, ...]:
+    rows: list[ConvexPathDiagnostics] = []
+    for angle in theta:
+        w_plus, w_minus, w_ivc = convex_weights(float(angle))
+        rows.append(
+            ConvexPathDiagnostics(
+                theta=float(angle),
+                phi=0.0,
+                w_vp_plus=float(w_plus),
+                w_vp_minus=float(w_minus),
+                w_ivc=float(w_ivc),
+                direct_gap_min=float("nan"),
+                indirect_gap=float("nan"),
+                projector_idempotency_error_fro=float("nan"),
+                projector_idempotency_error_max=float("nan"),
+            )
+        )
+    return tuple(rows)
+
+
+def _build_suppressed_texture_result(
+    *,
+    controls: ContinuumWorkflowParams,
+    bundle: ContinuumBundle,
+    refs: SymmetricHFReferences,
+    selected_ivc_branch: Literal["q0", "finite_q"],
+    ivc_branch_policy: IVCBranchPolicy,
+    q0_branch: ContinuumSymmetricHFBranch | None,
+    finite_q_branch: ContinuumSymmetricHFBranch | None,
+    branch_selection: dict,
+) -> ContinuumSymmetricHFWorkflowResult:
+    theta = continuum_theta_nodes(controls)
+    projectors_flat = np.full(
+        (theta.size, bundle.grid.size, bundle.active.dim, bundle.active.dim),
+        np.nan + 0.0j,
+        dtype=complex,
+    )
+    projectors = projectors_flat.reshape(
+        theta.size,
+        bundle.grid.n_k,
+        bundle.grid.n_k,
+        bundle.active.dim,
+        bundle.active.dim,
+    )
+    response = KThetaResult(
+        theta=theta,
+        K=np.full(theta.shape, np.nan, dtype=float),
+        cG=float("nan"),
+    )
+    r_max = max(
+        2.0 * controls.domain_wall.radius,
+        controls.domain_wall.radius + 8.0 * controls.domain_wall.width,
+    )
+    r = np.linspace(max(1e-6, r_max / 500.0), r_max, 500)
+    profile = charge_density_radial(r, response.theta, response.K, controls.domain_wall)
+    summary = ChargeResponseSummary(
+        cG=float("nan"),
+        kappa_min=float("nan"),
+        kappa_max=float("nan"),
+        gap_min=float("nan"),
+        valid_local_gap=False,
+    )
+    return ContinuumSymmetricHFWorkflowResult(
+        params=controls,
+        bundle=bundle,
+        references=refs,
+        theta=theta,
+        projectors_flat=projectors_flat,
+        projectors=projectors,
+        path_diagnostics=_nan_path_diagnostics(theta),
+        response=response,
+        charge_profile=profile,
+        summary=summary,
+        reference_summary=_branch_reference_summary(refs),
+        selected_ivc_branch=selected_ivc_branch,
+        ivc_branch_policy=ivc_branch_policy,
+        q0_branch=q0_branch,
+        finite_q_branch=finite_q_branch,
+        branch_selection=branch_selection,
+    )
 
 
 def _build_response_result(
@@ -243,6 +338,8 @@ def run_taige_branch_selected_symmetric_hf_workflow(
     finite_q_enabled: bool = True,
     ivc_branch_policy: IVCBranchPolicy = "lower_energy",
     tie_atol: float = 1e-9,
+    suppress_texture_when_ivc_below_vp: bool = False,
+    texture_energy_tie_atol: float = 1e-9,
     write_outputs: bool = False,
 ) -> ContinuumSymmetricHFWorkflowResult:
     """Run Taige Q=0 and optional finite-Q HF branches, then select the IVC path.
@@ -298,6 +395,46 @@ def run_taige_branch_selected_symmetric_hf_workflow(
     selected_branch = q0_branch if selected_name == "q0" else finite_q_branch
     if selected_branch is None:
         raise RuntimeError("finite-Q branch was selected but no finite-Q branch was solved")
+    vp_reference_name, vp_reference_per_cell = _vp_reference_energy_per_cell(selected_branch)
+    selected_ivc_per_cell = float(branch_selection["selected_ivc_energy_per_cell"])
+    selected_ivc_minus_vp_per_cell = float(selected_ivc_per_cell - vp_reference_per_cell)
+    texture_valid = selected_ivc_minus_vp_per_cell >= -float(texture_energy_tie_atol)
+    branch_selection = {
+        **branch_selection,
+        "vp_reference_name": vp_reference_name,
+        "vp_reference_energy_per_cell": vp_reference_per_cell,
+        "selected_ivc_minus_vp_energy_per_cell": selected_ivc_minus_vp_per_cell,
+        "hf_ground_state": (
+            "VP"
+            if texture_valid
+            else ("IVC_0" if selected_name == "q0" else "IVC_-")
+        ),
+        "texture_valid": bool(texture_valid),
+        "texture_invalid_reason": (
+            None
+            if texture_valid
+            else "ivc_energy_below_vp_reference"
+        ),
+        "texture_nan_policy": bool(suppress_texture_when_ivc_below_vp),
+        "texture_energy_tie_atol": float(texture_energy_tie_atol),
+    }
+    if suppress_texture_when_ivc_below_vp and not texture_valid:
+        result = _build_suppressed_texture_result(
+            controls=controls,
+            bundle=selected_branch.bundle,
+            refs=selected_branch.references,
+            selected_ivc_branch=selected_name,
+            ivc_branch_policy=policy,  # type: ignore[arg-type]
+            q0_branch=q0_branch,
+            finite_q_branch=finite_q_branch,
+            branch_selection=branch_selection,
+        )
+        if write_outputs:
+            manifest = write_continuum_symmetric_hf_outputs(result)
+            result = ContinuumSymmetricHFWorkflowResult(
+                **{**result.__dict__, "manifest": manifest}
+            )
+        return result
     result = _build_response_result(
         controls=controls,
         bundle=selected_branch.bundle,

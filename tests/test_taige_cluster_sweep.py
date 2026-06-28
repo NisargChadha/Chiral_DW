@@ -174,6 +174,10 @@ def test_taige_sweep_point_writes_scalar_rich_diagnostics(tmp_path):
     assert row["ivc_branch_policy"] == "q0"
     assert row["selected_ivc_branch"] == "q0"
     assert row["finite_q_ivc_energy_per_cell"] is None
+    assert row["texture_valid"] is True
+    assert row["texture_nan_policy"] is True
+    assert row["texture_invalid_reason"] is None
+    assert row["hf_ground_state"] == "VP"
     assert row["chern_enabled"] is True
     assert "ivc_q0_energy_per_cell" in row
     assert "q0_ivc_energy_per_cell" in row
@@ -204,18 +208,31 @@ def test_taige_sweep_point_writes_scalar_rich_diagnostics(tmp_path):
 
 def test_taige_sweep_job_uses_array_task_and_results_root():
     text = JOB.read_text()
-    assert "#SBATCH --array=0-624" in text
+    assert "#SBATCH --array=0-440" in text
+    assert "#SBATCH --mem=24G" in text
     assert "SLURM_ARRAY_TASK_ID" in text
     assert "scripts/scan_taige_continuum_cg.py" in text
-    assert 'OUTPUT_ROOT=${OUTPUT_ROOT:-"results/taige_continuum_cg_sweep"}' in text
+    assert 'OUTPUT_ROOT=${OUTPUT_ROOT:-"results/taige_cg_nk24_active2_shell5_vp_region"}' in text
+    assert 'U_D_MAX=${U_D_MAX:-"20.0"}' in text
+    assert 'N_U_D=${N_U_D:-"21"}' in text
+    assert 'THETA_MIN_DEG=${THETA_MIN_DEG:-"2.0"}' in text
+    assert 'THETA_MAX_DEG=${THETA_MAX_DEG:-"5.0"}' in text
+    assert 'N_TWIST=${N_TWIST:-"21"}' in text
+    assert 'N_K=${N_K:-"24"}' in text
+    assert 'PLANE_WAVE_SHELL=${PLANE_WAVE_SHELL:-"5"}' in text
+    assert 'N_ACTIVE_BANDS_PER_VALLEY=${N_ACTIVE_BANDS_PER_VALLEY:-"2"}' in text
     assert 'COMPUTE_CHERN=${COMPUTE_CHERN:-"1"}' in text
     assert 'COMPUTE_FINITE_Q_IVC=${COMPUTE_FINITE_Q_IVC:-"1"}' in text
     assert 'IVC_BRANCH_POLICY=${IVC_BRANCH_POLICY:-"lower-energy"}' in text
     assert 'IVC_BRANCH_TIE_ATOL=${IVC_BRANCH_TIE_ATOL:-"1e-9"}' in text
+    assert 'NAN_TEXTURE_WHEN_IVC_LOWER=${NAN_TEXTURE_WHEN_IVC_LOWER:-"1"}' in text
+    assert 'TEXTURE_ENERGY_TIE_ATOL=${TEXTURE_ENERGY_TIE_ATOL:-"1e-9"}' in text
     assert 'WRITE_HF_PATH_SPECTRA=${WRITE_HF_PATH_SPECTRA:-"0"}' in text
     assert "--no-chern" in text
     assert "--no-finite-q-ivc" in text
     assert "--ivc-branch-policy" in text
     assert "--ivc-branch-tie-atol" in text
+    assert "--allow-texture-in-ivc-ground-state" in text
+    assert "--texture-energy-tie-atol" in text
     assert "--write-hf-path-spectra" in text
     assert "--merge-only" in text
