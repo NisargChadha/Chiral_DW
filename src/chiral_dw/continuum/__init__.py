@@ -38,8 +38,10 @@ from chiral_dw.continuum.models import (
     SymmetricHFReferences,
 )
 from chiral_dw.continuum.observables import (
+    ContinuumOrderDiagnostics,
     active_basis_frames,
     ivc_order_parameter,
+    order_diagnostics,
     projector_maps,
     valley_projector_matrix,
     valley_occupations,
@@ -117,6 +119,7 @@ __all__ = [
     "ContinuumHFResult",
     "ContinuumSymmetricHFBranch",
     "ContinuumSymmetricHFWorkflowResult",
+    "ContinuumOrderDiagnostics",
     "ConvexPathDiagnostics",
     "DensityVertices",
     "FiniteQIVCDiagnostic",
@@ -164,6 +167,7 @@ __all__ = [
     "mesh_inversion_map",
     "mix_projector_seeds",
     "noninteracting_chern_rows",
+    "order_diagnostics",
     "projector_maps",
     "random_projector_like_seed",
     "random_seed",

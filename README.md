@@ -217,12 +217,16 @@ sbatch --export=ALL,N_U_D=13,N_TWIST=9,N_K=18,OUTPUT_ROOT=results/taige_cg_grid 
 Monitor with `squeue -u "$USER"` and inspect `logs/taige_continuum_cG_*` for
 per-task output. By default each point records scalar-rich diagnostics:
 `c_G`, `K(theta)`, trial energy and gap versus theta, HF reference gaps and
-energies, noninteracting Chern numbers, HF Chern numbers, and the Taige IVC-
-finite-Q energy comparison. The default `IVC_BRANCH_POLICY=lower-energy`
-selects the lower-energy Q=0/finite-Q IVC branch for interpolation; use
-`IVC_BRANCH_POLICY=q0` to force the Q=0 path. Disable expensive branches with
-`COMPUTE_CHERN=0` or `COMPUTE_FINITE_Q_IVC=0`; disabling finite-Q forces Q=0
-selection. Set
+energies, selected/Q=0/finite-Q VP and IVC order-parameter magnitudes,
+noninteracting Chern numbers, HF Chern numbers, and the Taige IVC- finite-Q
+energy comparison. The default `IVC_BRANCH_POLICY=lower-energy` selects the
+lower-energy Q=0/finite-Q IVC branch for interpolation; use
+`IVC_BRANCH_POLICY=q0` to force the Q=0 path. The merged `sweep.csv` includes
+plotting columns such as `vp_reference_order_abs_nz`,
+`ivc_q0_ivc_amplitude_block`, `ivc_finite_q_ivc_amplitude_block`,
+`vp_reference_direct_gap`, and `selected_ivc_direct_gap`. Disable expensive
+branches with `COMPUTE_CHERN=0` or `COMPUTE_FINITE_Q_IVC=0`; disabling finite-Q
+forces Q=0 selection. Set
 `WRITE_HF_PATH_SPECTRA=1` only when path spectra are needed for every point.
 
 After the array finishes, manually merge per-point summaries:

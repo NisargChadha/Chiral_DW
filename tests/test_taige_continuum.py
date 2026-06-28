@@ -25,6 +25,7 @@ from chiral_dw.continuum import (
     evaluate_hf_high_symmetry_path,
     hf_band_chern_table,
     hf_hamiltonian_at_k,
+    order_diagnostics,
     random_projector_like_seed,
     run_taige_branch_selected_symmetric_hf_workflow,
     select_ivc_branch_by_energy,
@@ -164,6 +165,26 @@ def test_taige_continuum_hamiltonian_and_active_space_are_well_formed():
     assert np.allclose(frames.conj().swapaxes(-1, -2) @ frames, np.eye(active.dim), atol=1e-10)
     assert bundle.bands is not None
     assert bundle.geometry is not None
+
+
+def test_taige_order_diagnostics_distinguish_vp_and_ivc_seeds():
+    bundle = _tiny_taige_bundle()
+    active = bundle.active
+    vp = order_diagnostics(build_seed("vp_plus", active), active, n_occ_per_k=1)
+    ivc = order_diagnostics(build_seed("ivc", active), active, n_occ_per_k=1)
+
+    assert np.isclose(vp.Nz_block, 1.0)
+    assert np.isclose(vp.Nz_abs, 1.0)
+    assert np.isclose(vp.C_IVC_block, 0.0)
+    assert np.isclose(vp.IVC_amplitude_block, 0.0)
+    assert np.isclose(vp.C_IVC_scalar, 0.0)
+    assert np.isclose(vp.IVC_amplitude_scalar, 0.0)
+    assert np.isclose(ivc.Nz_block, 0.0, atol=1e-12)
+    assert np.isclose(ivc.Nz_abs, 0.0, atol=1e-12)
+    assert np.isclose(ivc.C_IVC_block, 0.25)
+    assert np.isclose(ivc.IVC_amplitude_block, 0.5)
+    assert np.isclose(ivc.C_IVC_scalar, 0.25)
+    assert np.isclose(ivc.IVC_amplitude_scalar, 1.0)
 
 
 def test_taige_finite_q_active_space_uses_symmetric_physical_sources():

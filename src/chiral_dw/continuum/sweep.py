@@ -19,6 +19,7 @@ from chiral_dw.continuum.models import (
     SymmetricHFReferences,
     finite_q_shift_metadata,
 )
+from chiral_dw.continuum.observables import ContinuumOrderDiagnostics, order_diagnostics
 from chiral_dw.continuum.references import solve_reference_hf
 from chiral_dw.continuum.symmetry import TPrimeConstraint
 from chiral_dw.continuum.taige import (
@@ -96,8 +97,60 @@ class TaigeSweepPointSummary(BaseModel):
     vp_plus_indirect_gap: float
     vp_minus_indirect_gap: float
     ivc_indirect_gap: float
+    vp_reference_direct_gap: float
+    vp_reference_indirect_gap: float
+    selected_ivc_direct_gap: float
+    selected_ivc_indirect_gap: float
+    ivc_q0_direct_gap: float
+    ivc_q0_indirect_gap: float
+    vp_plus_q0_direct_gap: float
+    vp_minus_q0_direct_gap: float
+    vp_plus_q0_indirect_gap: float
+    vp_minus_q0_indirect_gap: float
     ivc_finite_q_direct_gap: float | None = None
     ivc_finite_q_indirect_gap: float | None = None
+    vp_plus_finite_q_direct_gap: float | None = None
+    vp_minus_finite_q_direct_gap: float | None = None
+    vp_reference_finite_q_direct_gap: float | None = None
+    vp_plus_finite_q_indirect_gap: float | None = None
+    vp_minus_finite_q_indirect_gap: float | None = None
+    vp_reference_finite_q_indirect_gap: float | None = None
+    vp_plus_order_nz: float
+    vp_plus_order_abs_nz: float
+    vp_minus_order_nz: float
+    vp_minus_order_abs_nz: float
+    vp_reference_order_nz: float
+    vp_reference_order_abs_nz: float
+    vp_plus_q0_order_nz: float
+    vp_plus_q0_order_abs_nz: float
+    vp_minus_q0_order_nz: float
+    vp_minus_q0_order_abs_nz: float
+    vp_reference_q0_order_nz: float
+    vp_reference_q0_order_abs_nz: float
+    selected_ivc_order_nz: float
+    selected_ivc_order_abs_nz: float
+    selected_ivc_c_ivc_block: float
+    selected_ivc_ivc_amplitude_block: float
+    selected_ivc_c_ivc_scalar: float | None = None
+    selected_ivc_ivc_amplitude_scalar: float | None = None
+    ivc_q0_order_nz: float
+    ivc_q0_order_abs_nz: float
+    ivc_q0_c_ivc_block: float
+    ivc_q0_ivc_amplitude_block: float
+    ivc_q0_c_ivc_scalar: float | None = None
+    ivc_q0_ivc_amplitude_scalar: float | None = None
+    ivc_finite_q_order_nz: float | None = None
+    ivc_finite_q_order_abs_nz: float | None = None
+    ivc_finite_q_c_ivc_block: float | None = None
+    ivc_finite_q_ivc_amplitude_block: float | None = None
+    ivc_finite_q_c_ivc_scalar: float | None = None
+    ivc_finite_q_ivc_amplitude_scalar: float | None = None
+    vp_plus_finite_q_order_nz: float | None = None
+    vp_plus_finite_q_order_abs_nz: float | None = None
+    vp_minus_finite_q_order_nz: float | None = None
+    vp_minus_finite_q_order_abs_nz: float | None = None
+    vp_reference_finite_q_order_nz: float | None = None
+    vp_reference_finite_q_order_abs_nz: float | None = None
     vp_plus_idempotency_error_fro: float
     vp_minus_idempotency_error_fro: float
     ivc_idempotency_error_fro: float
@@ -206,6 +259,25 @@ def _finite_q_ivc_from_workflow(workflow_result: Any) -> FiniteQIVCDiagnostic | 
         result=branch.references.ivc,
         metadata=branch.metadata,
     )
+
+
+def _reference_order(
+    bundle: ContinuumBundle,
+    result: ContinuumHFResult,
+    n_occ_per_k: int,
+) -> ContinuumOrderDiagnostics:
+    return order_diagnostics(result.P, bundle.active, n_occ_per_k=n_occ_per_k)
+
+
+def _order_fields(prefix: str, diagnostics: ContinuumOrderDiagnostics) -> dict[str, float | None]:
+    return {
+        f"{prefix}_order_nz": float(diagnostics.Nz_block),
+        f"{prefix}_order_abs_nz": float(diagnostics.Nz_abs),
+        f"{prefix}_c_ivc_block": float(diagnostics.C_IVC_block),
+        f"{prefix}_ivc_amplitude_block": float(diagnostics.IVC_amplitude_block),
+        f"{prefix}_c_ivc_scalar": diagnostics.C_IVC_scalar,
+        f"{prefix}_ivc_amplitude_scalar": diagnostics.IVC_amplitude_scalar,
+    }
 
 
 def trial_theta_rows(workflow_result: Any) -> list[dict[str, Any]]:
@@ -561,8 +633,63 @@ def build_taige_sweep_diagnostics(
     refs = workflow_result.reference_summary
     branch_selection = dict(getattr(workflow_result, "branch_selection", {}))
     reference_rows_by_quantity = {row["quantity"]: row for row in energy_rows}
-    vp_reference_name, _vp_reference_result = _vp_reference(workflow_result.references)
+    selected_refs = workflow_result.references
+    selected_bundle = workflow_result.bundle
+    q0_bundle, q0_refs = _q0_bundle_and_refs(workflow_result)
+    finite_branch = _branch_from_workflow(workflow_result, "finite_q")
+    n_occ = int(workflow_result.params.hf.n_occ_per_k)
+    vp_reference_name, vp_reference_result = _vp_reference(selected_refs)
+    _q0_vp_reference_name, q0_vp_reference_result = _vp_reference(q0_refs)
+    _finite_vp_reference_name = None
+    finite_vp_reference_result = None
+    if finite_branch is not None:
+        _finite_vp_reference_name, finite_vp_reference_result = _vp_reference(
+            finite_branch.references
+        )
+    selected_vp_plus_order = _reference_order(selected_bundle, selected_refs.vp_plus, n_occ)
+    selected_vp_minus_order = _reference_order(selected_bundle, selected_refs.vp_minus, n_occ)
+    selected_vp_order = _reference_order(selected_bundle, vp_reference_result, n_occ)
+    selected_ivc_order = _reference_order(selected_bundle, selected_refs.ivc, n_occ)
+    q0_vp_plus_order = _reference_order(q0_bundle, q0_refs.vp_plus, n_occ)
+    q0_vp_minus_order = _reference_order(q0_bundle, q0_refs.vp_minus, n_occ)
+    q0_vp_reference_order = _reference_order(q0_bundle, q0_vp_reference_result, n_occ)
+    q0_ivc_order = _reference_order(q0_bundle, q0_refs.ivc, n_occ)
+    finite_q_order = (
+        None if finite_q is None else _reference_order(finite_q.bundle, finite_q.result, n_occ)
+    )
+    finite_vp_plus_order = (
+        None
+        if finite_branch is None
+        else _reference_order(finite_branch.bundle, finite_branch.references.vp_plus, n_occ)
+    )
+    finite_vp_minus_order = (
+        None
+        if finite_branch is None
+        else _reference_order(finite_branch.bundle, finite_branch.references.vp_minus, n_occ)
+    )
+    finite_vp_reference_order = (
+        None
+        if finite_branch is None or finite_vp_reference_result is None
+        else _reference_order(finite_branch.bundle, finite_vp_reference_result, n_occ)
+    )
+    selected_vp_order_fields = _order_fields("vp_reference", selected_vp_order)
+    selected_ivc_order_fields = _order_fields("selected_ivc", selected_ivc_order)
+    q0_ivc_order_fields = _order_fields("ivc_q0", q0_ivc_order)
+    finite_q_order_fields = (
+        {}
+        if finite_q_order is None
+        else _order_fields("ivc_finite_q", finite_q_order)
+    )
     finite_q_diag = None if finite_q is None else finite_q.result.diagnostics
+    finite_vp_plus_diag = (
+        None if finite_branch is None else finite_branch.references.vp_plus.diagnostics
+    )
+    finite_vp_minus_diag = (
+        None if finite_branch is None else finite_branch.references.vp_minus.diagnostics
+    )
+    finite_vp_reference_diag = (
+        None if finite_vp_reference_result is None else finite_vp_reference_result.diagnostics
+    )
     finite_q_energy_norm = None if finite_q is None else float(finite_q.bundle.backend.n_blocks)
     selected_ivc_energy_per_cell = float(
         branch_selection.get(
@@ -623,8 +750,104 @@ def build_taige_sweep_diagnostics(
         vp_plus_indirect_gap=float(refs["vp_plus"]["indirect_gap"]),
         vp_minus_indirect_gap=float(refs["vp_minus"]["indirect_gap"]),
         ivc_indirect_gap=float(refs["ivc"]["indirect_gap"]),
+        vp_reference_direct_gap=float(vp_reference_result.diagnostics.direct_gap_min),
+        vp_reference_indirect_gap=float(vp_reference_result.diagnostics.indirect_gap),
+        selected_ivc_direct_gap=float(selected_refs.ivc.diagnostics.direct_gap_min),
+        selected_ivc_indirect_gap=float(selected_refs.ivc.diagnostics.indirect_gap),
+        ivc_q0_direct_gap=float(q0_refs.ivc.diagnostics.direct_gap_min),
+        ivc_q0_indirect_gap=float(q0_refs.ivc.diagnostics.indirect_gap),
+        vp_plus_q0_direct_gap=float(q0_refs.vp_plus.diagnostics.direct_gap_min),
+        vp_minus_q0_direct_gap=float(q0_refs.vp_minus.diagnostics.direct_gap_min),
+        vp_plus_q0_indirect_gap=float(q0_refs.vp_plus.diagnostics.indirect_gap),
+        vp_minus_q0_indirect_gap=float(q0_refs.vp_minus.diagnostics.indirect_gap),
         ivc_finite_q_direct_gap=None if finite_q_diag is None else finite_q_diag.direct_gap_min,
         ivc_finite_q_indirect_gap=None if finite_q_diag is None else finite_q_diag.indirect_gap,
+        vp_plus_finite_q_direct_gap=(
+            None if finite_vp_plus_diag is None else finite_vp_plus_diag.direct_gap_min
+        ),
+        vp_minus_finite_q_direct_gap=(
+            None if finite_vp_minus_diag is None else finite_vp_minus_diag.direct_gap_min
+        ),
+        vp_reference_finite_q_direct_gap=(
+            None if finite_vp_reference_diag is None else finite_vp_reference_diag.direct_gap_min
+        ),
+        vp_plus_finite_q_indirect_gap=(
+            None if finite_vp_plus_diag is None else finite_vp_plus_diag.indirect_gap
+        ),
+        vp_minus_finite_q_indirect_gap=(
+            None if finite_vp_minus_diag is None else finite_vp_minus_diag.indirect_gap
+        ),
+        vp_reference_finite_q_indirect_gap=(
+            None if finite_vp_reference_diag is None else finite_vp_reference_diag.indirect_gap
+        ),
+        vp_plus_order_nz=float(selected_vp_plus_order.Nz_block),
+        vp_plus_order_abs_nz=float(selected_vp_plus_order.Nz_abs),
+        vp_minus_order_nz=float(selected_vp_minus_order.Nz_block),
+        vp_minus_order_abs_nz=float(selected_vp_minus_order.Nz_abs),
+        vp_reference_order_nz=float(selected_vp_order_fields["vp_reference_order_nz"]),
+        vp_reference_order_abs_nz=float(selected_vp_order_fields["vp_reference_order_abs_nz"]),
+        vp_plus_q0_order_nz=float(q0_vp_plus_order.Nz_block),
+        vp_plus_q0_order_abs_nz=float(q0_vp_plus_order.Nz_abs),
+        vp_minus_q0_order_nz=float(q0_vp_minus_order.Nz_block),
+        vp_minus_q0_order_abs_nz=float(q0_vp_minus_order.Nz_abs),
+        vp_reference_q0_order_nz=float(q0_vp_reference_order.Nz_block),
+        vp_reference_q0_order_abs_nz=float(q0_vp_reference_order.Nz_abs),
+        selected_ivc_order_nz=float(selected_ivc_order_fields["selected_ivc_order_nz"]),
+        selected_ivc_order_abs_nz=float(
+            selected_ivc_order_fields["selected_ivc_order_abs_nz"]
+        ),
+        selected_ivc_c_ivc_block=float(
+            selected_ivc_order_fields["selected_ivc_c_ivc_block"]
+        ),
+        selected_ivc_ivc_amplitude_block=float(
+            selected_ivc_order_fields["selected_ivc_ivc_amplitude_block"]
+        ),
+        selected_ivc_c_ivc_scalar=selected_ivc_order_fields["selected_ivc_c_ivc_scalar"],
+        selected_ivc_ivc_amplitude_scalar=selected_ivc_order_fields[
+            "selected_ivc_ivc_amplitude_scalar"
+        ],
+        ivc_q0_order_nz=float(q0_ivc_order_fields["ivc_q0_order_nz"]),
+        ivc_q0_order_abs_nz=float(q0_ivc_order_fields["ivc_q0_order_abs_nz"]),
+        ivc_q0_c_ivc_block=float(q0_ivc_order_fields["ivc_q0_c_ivc_block"]),
+        ivc_q0_ivc_amplitude_block=float(
+            q0_ivc_order_fields["ivc_q0_ivc_amplitude_block"]
+        ),
+        ivc_q0_c_ivc_scalar=q0_ivc_order_fields["ivc_q0_c_ivc_scalar"],
+        ivc_q0_ivc_amplitude_scalar=q0_ivc_order_fields[
+            "ivc_q0_ivc_amplitude_scalar"
+        ],
+        ivc_finite_q_order_nz=finite_q_order_fields.get("ivc_finite_q_order_nz"),
+        ivc_finite_q_order_abs_nz=finite_q_order_fields.get("ivc_finite_q_order_abs_nz"),
+        ivc_finite_q_c_ivc_block=finite_q_order_fields.get("ivc_finite_q_c_ivc_block"),
+        ivc_finite_q_ivc_amplitude_block=finite_q_order_fields.get(
+            "ivc_finite_q_ivc_amplitude_block"
+        ),
+        ivc_finite_q_c_ivc_scalar=finite_q_order_fields.get("ivc_finite_q_c_ivc_scalar"),
+        ivc_finite_q_ivc_amplitude_scalar=finite_q_order_fields.get(
+            "ivc_finite_q_ivc_amplitude_scalar"
+        ),
+        vp_plus_finite_q_order_nz=(
+            None if finite_vp_plus_order is None else finite_vp_plus_order.Nz_block
+        ),
+        vp_plus_finite_q_order_abs_nz=(
+            None if finite_vp_plus_order is None else finite_vp_plus_order.Nz_abs
+        ),
+        vp_minus_finite_q_order_nz=(
+            None if finite_vp_minus_order is None else finite_vp_minus_order.Nz_block
+        ),
+        vp_minus_finite_q_order_abs_nz=(
+            None if finite_vp_minus_order is None else finite_vp_minus_order.Nz_abs
+        ),
+        vp_reference_finite_q_order_nz=(
+            None
+            if finite_vp_reference_order is None
+            else finite_vp_reference_order.Nz_block
+        ),
+        vp_reference_finite_q_order_abs_nz=(
+            None
+            if finite_vp_reference_order is None
+            else finite_vp_reference_order.Nz_abs
+        ),
         vp_plus_idempotency_error_fro=float(refs["vp_plus"]["idempotency_error_fro"]),
         vp_minus_idempotency_error_fro=float(refs["vp_minus"]["idempotency_error_fro"]),
         ivc_idempotency_error_fro=float(refs["ivc"]["idempotency_error_fro"]),

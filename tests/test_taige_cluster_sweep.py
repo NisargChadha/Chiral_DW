@@ -177,6 +177,14 @@ def test_taige_sweep_point_writes_scalar_rich_diagnostics(tmp_path):
     assert row["chern_enabled"] is True
     assert "ivc_q0_energy_per_cell" in row
     assert "q0_ivc_energy_per_cell" in row
+    assert "vp_reference_order_abs_nz" in row
+    assert "selected_ivc_ivc_amplitude_block" in row
+    assert "ivc_q0_ivc_amplitude_block" in row
+    assert "ivc_finite_q_ivc_amplitude_block" in row
+    assert row["ivc_finite_q_ivc_amplitude_block"] is None
+    assert "vp_reference_direct_gap" in row
+    assert "selected_ivc_direct_gap" in row
+    assert "ivc_q0_direct_gap" in row
     assert any(key.startswith("chern_nonint_hole_k_band_") for key in row)
     assert any(key.startswith("chern_hf_vpplus_band_") for key in row)
 
