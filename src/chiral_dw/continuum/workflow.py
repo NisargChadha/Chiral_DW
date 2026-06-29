@@ -24,7 +24,10 @@ from chiral_dw.continuum.references import (
     symmetric_convex_path,
 )
 from chiral_dw.continuum.sweep import trial_theta_rows
-from chiral_dw.continuum.taige import taige_ivc_minus_half_shift_coord, taige_ivc_minus_q_coord
+from chiral_dw.continuum.taige import (
+    TaigeFiniteQShiftPolicy,
+    taige_ivc_minus_shift_choice,
+)
 from chiral_dw.domain_wall import DomainWallChargeProfile, charge_density_radial
 from chiral_dw.response import KThetaResult, k_theta_from_projectors_with_basis, projector_errors
 
@@ -284,14 +287,44 @@ def run_continuum_symmetric_hf_workflow(
     return result
 
 
-def taige_ivc_minus_finite_q_params(n_k: int) -> ContinuumFiniteQParams:
+def taige_ivc_minus_finite_q_params(
+    n_k: int,
+    *,
+    finite_q_shift_policy: TaigeFiniteQShiftPolicy = "exact",
+) -> ContinuumFiniteQParams:
     """Return the default Taige IVC- finite-Q active-frame controls."""
 
+    choice = taige_ivc_minus_shift_choice(
+        int(n_k),
+        policy=finite_q_shift_policy,
+    )
     return ContinuumFiniteQParams(
         enabled=True,
-        q_coord=taige_ivc_minus_q_coord(int(n_k)),
-        half_shift_coord=taige_ivc_minus_half_shift_coord(int(n_k)),
+        q_coord=choice.q_coord,
+        half_shift_coord=choice.half_shift_coord,
     )
+
+
+def _taige_finite_q_metadata(
+    finite_q: ContinuumFiniteQParams,
+    grid,
+    *,
+    finite_q_shift_policy: TaigeFiniteQShiftPolicy,
+) -> dict:
+    choice = taige_ivc_minus_shift_choice(
+        grid.n_k,
+        policy=finite_q_shift_policy,
+    )
+    return {
+        **finite_q_shift_metadata(finite_q, grid),
+        "taige_ivc_minus_shift_choice": choice.model_dump(mode="json"),
+        "finite_q_shift_policy": choice.policy,
+        "finite_q_exact": choice.exact,
+        "q_error_grid_units": choice.q_error_grid_units,
+        "half_shift_error_grid_units": choice.half_shift_error_grid_units,
+        "q_error_fractional_norm": choice.q_error_fractional_norm,
+        "half_shift_error_fractional_norm": choice.half_shift_error_fractional_norm,
+    }
 
 
 def select_ivc_branch_by_energy(
@@ -336,6 +369,7 @@ def run_taige_branch_selected_symmetric_hf_workflow(
     params: ContinuumWorkflowParams | None = None,
     *,
     finite_q_enabled: bool = True,
+    finite_q_shift_policy: TaigeFiniteQShiftPolicy = "exact",
     ivc_branch_policy: IVCBranchPolicy = "lower_energy",
     tie_atol: float = 1e-9,
     suppress_texture_when_ivc_below_vp: bool = False,
@@ -371,7 +405,10 @@ def run_taige_branch_selected_symmetric_hf_workflow(
 
     finite_q_branch: ContinuumSymmetricHFBranch | None = None
     if finite_q_enabled:
-        finite_q = taige_ivc_minus_finite_q_params(controls.grid.n_k)
+        finite_q = taige_ivc_minus_finite_q_params(
+            controls.grid.n_k,
+            finite_q_shift_policy=finite_q_shift_policy,
+        )
         finite_bundle = build_continuum_bundle(
             model=controls.model,
             grid=controls.grid,
@@ -383,7 +420,11 @@ def run_taige_branch_selected_symmetric_hf_workflow(
             name="finite_q",
             bundle=finite_bundle,
             references=finite_refs,
-            metadata=finite_q_shift_metadata(finite_q, finite_bundle.grid),
+            metadata=_taige_finite_q_metadata(
+                finite_q,
+                finite_bundle.grid,
+                finite_q_shift_policy=finite_q_shift_policy,
+            ),
         )
 
     selected_name, branch_selection = select_ivc_branch_by_energy(

@@ -34,6 +34,7 @@ from chiral_dw.continuum import (
     taige_interaction_params,
     taige_ivc_minus_half_shift_coord,
     taige_ivc_minus_q_coord,
+    taige_ivc_minus_shift_choice,
     taige_model_params,
 )
 import chiral_dw.continuum.workflow as workflow_mod
@@ -146,6 +147,34 @@ def test_taige_ivc_minus_finite_q_helpers_and_metadata():
     assert metadata["q_coord"] == [6, 6]
     assert metadata["half_shift_coord"] == [3, 12]
     assert np.allclose(metadata["half_shift_centered_fractional"], [1 / 6, -1 / 3])
+
+
+def test_taige_ivc_minus_nearest_half_shift_choices_for_finite_size_meshes():
+    expected = {
+        12: ((2, 8), (4, 4), True),
+        13: ((2, 9), (4, 5), False),
+        14: ((2, 9), (4, 4), False),
+        15: ((2, 10), (4, 5), False),
+        16: ((2, 11), (4, 6), False),
+        17: ((3, 11), (6, 5), False),
+        18: ((3, 12), (6, 6), True),
+        19: ((3, 13), (6, 7), False),
+        20: ((3, 13), (6, 6), False),
+    }
+    for n_k, (half_shift, q_coord, exact) in expected.items():
+        choice = taige_ivc_minus_shift_choice(n_k, policy="nearest_half")
+        assert choice.half_shift_coord == half_shift
+        assert choice.q_coord == q_coord
+        assert choice.exact is exact
+        assert choice.policy == "nearest_half"
+
+    exact_choice = taige_ivc_minus_shift_choice(18, policy="exact")
+    assert exact_choice.half_shift_coord == (3, 12)
+    assert exact_choice.q_coord == (6, 6)
+    assert exact_choice.exact is True
+
+    with pytest.raises(ValueError, match="divisible by 6"):
+        taige_ivc_minus_shift_choice(13, policy="exact")
 
 
 def test_taige_continuum_hamiltonian_and_active_space_are_well_formed():

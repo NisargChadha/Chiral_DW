@@ -38,6 +38,9 @@ TAIGE_GATE_DISTANCE_NM = 30.0
 
 _INTRALAYER_SHIFTS: tuple[GridCoord, ...] = ((1, 0), (-1, 1), (0, -1))
 _C3_TUNNELING_RECIPROCAL_PARTS: tuple[GridCoord, ...] = ((0, 0), (0, 1), (-1, 1))
+TAIGE_IVC_MINUS_TARGET_Q_FRACTIONAL = (1.0 / 3.0, 1.0 / 3.0)
+TAIGE_IVC_MINUS_TARGET_HALF_SHIFT_FRACTIONAL = (1.0 / 6.0, 2.0 / 3.0)
+TaigeFiniteQShiftPolicy = Literal["exact", "nearest_half"]
 
 
 class ChernNumberRow(BaseModel):
@@ -49,6 +52,30 @@ class ChernNumberRow(BaseModel):
     valley: str
     band: int
     chern: float
+
+
+class TaigeFiniteQShiftChoice(BaseModel):
+    """Chosen finite-Q IVC- mesh shift and its target-frame errors."""
+
+    model_config = ConfigDict(frozen=True)
+
+    policy: TaigeFiniteQShiftPolicy
+    n_k: int
+    q_coord: GridCoord
+    half_shift_coord: GridCoord
+    exact: bool
+    target_q_fractional: tuple[float, float] = TAIGE_IVC_MINUS_TARGET_Q_FRACTIONAL
+    target_half_shift_fractional: tuple[float, float] = (
+        TAIGE_IVC_MINUS_TARGET_HALF_SHIFT_FRACTIONAL
+    )
+    q_fractional: tuple[float, float]
+    half_shift_fractional: tuple[float, float]
+    q_error_fractional: tuple[float, float]
+    half_shift_error_fractional: tuple[float, float]
+    q_error_grid_units: float
+    half_shift_error_grid_units: float
+    q_error_fractional_norm: float
+    half_shift_error_fractional_norm: float
 
 
 @dataclass(frozen=True)
@@ -200,6 +227,123 @@ def taige_ivc_minus_half_shift_coord(n_k: int) -> GridCoord:
     if n % 6:
         raise ValueError("Taige IVC- finite-Q runs require n_k divisible by 6")
     return n // 6, 2 * n // 3
+
+
+def _centered_fractional_delta(value: float, target: float) -> float:
+    return float((float(value) - float(target) + 0.5) % 1.0 - 0.5)
+
+
+def _triangular_fractional_norm(delta: tuple[float, float]) -> float:
+    x, y = float(delta[0]), float(delta[1])
+    return float(np.sqrt(max(x * x + y * y + x * y, 0.0)))
+
+
+def _taige_shift_choice_from_coords(
+    *,
+    n_k: int,
+    policy: TaigeFiniteQShiftPolicy,
+    q_coord: GridCoord,
+    half_shift_coord: GridCoord,
+) -> TaigeFiniteQShiftChoice:
+    n = int(n_k)
+    q = (int(q_coord[0]) % n, int(q_coord[1]) % n)
+    half = (int(half_shift_coord[0]) % n, int(half_shift_coord[1]) % n)
+    q_frac = (q[0] / n, q[1] / n)
+    half_frac = (half[0] / n, half[1] / n)
+    q_error = (
+        _centered_fractional_delta(q_frac[0], TAIGE_IVC_MINUS_TARGET_Q_FRACTIONAL[0]),
+        _centered_fractional_delta(q_frac[1], TAIGE_IVC_MINUS_TARGET_Q_FRACTIONAL[1]),
+    )
+    half_error = (
+        _centered_fractional_delta(
+            half_frac[0], TAIGE_IVC_MINUS_TARGET_HALF_SHIFT_FRACTIONAL[0]
+        ),
+        _centered_fractional_delta(
+            half_frac[1], TAIGE_IVC_MINUS_TARGET_HALF_SHIFT_FRACTIONAL[1]
+        ),
+    )
+    q_norm = _triangular_fractional_norm(q_error)
+    half_norm = _triangular_fractional_norm(half_error)
+    exact = bool(
+        max(abs(q_error[0]), abs(q_error[1]), abs(half_error[0]), abs(half_error[1]))
+        < 1e-12
+    )
+    return TaigeFiniteQShiftChoice(
+        policy=policy,
+        n_k=n,
+        q_coord=q,
+        half_shift_coord=half,
+        exact=exact,
+        q_fractional=q_frac,
+        half_shift_fractional=half_frac,
+        q_error_fractional=q_error,
+        half_shift_error_fractional=half_error,
+        q_error_grid_units=float(n * q_norm),
+        half_shift_error_grid_units=float(n * half_norm),
+        q_error_fractional_norm=q_norm,
+        half_shift_error_fractional_norm=half_norm,
+    )
+
+
+def taige_ivc_minus_shift_choice(
+    n_k: int,
+    *,
+    policy: TaigeFiniteQShiftPolicy = "exact",
+) -> TaigeFiniteQShiftChoice:
+    """Return the Taige IVC- finite-Q mesh shift for a requested policy."""
+
+    n = int(n_k)
+    if n < 1:
+        raise ValueError("n_k must be positive")
+    normalized_policy = str(policy).replace("-", "_")
+    if normalized_policy not in {"exact", "nearest_half"}:
+        raise ValueError("finite-Q shift policy must be 'exact' or 'nearest_half'")
+    policy_key: TaigeFiniteQShiftPolicy = normalized_policy  # type: ignore[assignment]
+    if policy_key == "exact":
+        return _taige_shift_choice_from_coords(
+            n_k=n,
+            policy=policy_key,
+            q_coord=taige_ivc_minus_q_coord(n),
+            half_shift_coord=taige_ivc_minus_half_shift_coord(n),
+        )
+
+    best: tuple[float, float, int, int, int, int] | None = None
+    for h1 in range(n):
+        for h2 in range(n):
+            half_frac = (h1 / n, h2 / n)
+            half_error = (
+                _centered_fractional_delta(
+                    half_frac[0], TAIGE_IVC_MINUS_TARGET_HALF_SHIFT_FRACTIONAL[0]
+                ),
+                _centered_fractional_delta(
+                    half_frac[1], TAIGE_IVC_MINUS_TARGET_HALF_SHIFT_FRACTIONAL[1]
+                ),
+            )
+            half_norm = _triangular_fractional_norm(half_error)
+            q1 = (2 * h1) % n
+            q2 = (2 * h2) % n
+            q_frac = (q1 / n, q2 / n)
+            q_error = (
+                _centered_fractional_delta(
+                    q_frac[0], TAIGE_IVC_MINUS_TARGET_Q_FRACTIONAL[0]
+                ),
+                _centered_fractional_delta(
+                    q_frac[1], TAIGE_IVC_MINUS_TARGET_Q_FRACTIONAL[1]
+                ),
+            )
+            q_norm = _triangular_fractional_norm(q_error)
+            candidate = (half_norm, q_norm, h1, h2, q1, q2)
+            if best is None or candidate < best:
+                best = candidate
+    if best is None:
+        raise RuntimeError("failed to choose a finite-Q half shift")
+    _half_norm, _q_norm, h1, h2, q1, q2 = best
+    return _taige_shift_choice_from_coords(
+        n_k=n,
+        policy=policy_key,
+        q_coord=(q1, q2),
+        half_shift_coord=(h1, h2),
+    )
 
 
 def reciprocal_shell(n_shell: int) -> tuple[GridCoord, ...]:

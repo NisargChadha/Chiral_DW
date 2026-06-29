@@ -23,9 +23,9 @@ from chiral_dw.continuum.observables import ContinuumOrderDiagnostics, order_dia
 from chiral_dw.continuum.references import solve_reference_hf
 from chiral_dw.continuum.symmetry import TPrimeConstraint
 from chiral_dw.continuum.taige import (
+    TaigeFiniteQShiftPolicy,
     chern_number_table,
-    taige_ivc_minus_half_shift_coord,
-    taige_ivc_minus_q_coord,
+    taige_ivc_minus_shift_choice,
 )
 
 
@@ -52,6 +52,7 @@ class TaigeSweepDiagnosticsParams(BaseModel):
 
     compute_chern_numbers: bool = True
     compute_finite_q_ivc: bool = True
+    finite_q_shift_policy: Literal["exact", "nearest_half"] = "exact"
     ivc_branch_policy: Literal["lower_energy", "q0"] = "lower_energy"
     ivc_branch_tie_atol: float = Field(default=1e-9, ge=0.0)
     nan_texture_when_ivc_lower: bool = True
@@ -80,6 +81,14 @@ class TaigeSweepPointSummary(BaseModel):
     q0_ivc_energy_per_cell: float
     finite_q_ivc_energy_per_cell: float | None = None
     finite_q_minus_q0_ivc_energy_per_cell: float | None = None
+    finite_q_shift_policy: Literal["exact", "nearest_half"] | None = None
+    finite_q_exact: bool | None = None
+    finite_q_q_coord: tuple[int, int] | None = None
+    finite_q_half_shift_coord: tuple[int, int] | None = None
+    finite_q_q_error_grid_units: float | None = None
+    finite_q_half_shift_error_grid_units: float | None = None
+    finite_q_q_error_fractional_norm: float | None = None
+    finite_q_half_shift_error_fractional_norm: float | None = None
     texture_valid: bool
     texture_invalid_reason: str | None = None
     texture_nan_policy: bool
@@ -353,22 +362,29 @@ def trial_theta_rows(workflow_result: Any) -> list[dict[str, Any]]:
     return rows
 
 
-def run_finite_q_ivc_diagnostic(workflow_result: Any) -> FiniteQIVCDiagnostic:
+def run_finite_q_ivc_diagnostic(
+    workflow_result: Any,
+    *,
+    finite_q_shift_policy: TaigeFiniteQShiftPolicy = "exact",
+) -> FiniteQIVCDiagnostic:
     """Solve the Taige IVC- finite-Q branch for energy/topology diagnostics."""
 
     n_k = int(workflow_result.params.grid.n_k)
     try:
-        q_coord = taige_ivc_minus_q_coord(n_k)
-        half_shift_coord = taige_ivc_minus_half_shift_coord(n_k)
+        choice = taige_ivc_minus_shift_choice(
+            n_k,
+            policy=finite_q_shift_policy,
+        )
     except ValueError as exc:
         raise ValueError(
-            "finite-Q IVC diagnostics require n_k divisible by 6; "
-            "use --no-finite-q-ivc to skip this diagnostic"
+            "finite-Q IVC diagnostics require an exact IVC- mesh unless "
+            "finite_q_shift_policy='nearest_half' is requested; use "
+            "--no-finite-q-ivc to skip this diagnostic"
         ) from exc
     finite_q = ContinuumFiniteQParams(
         enabled=True,
-        q_coord=q_coord,
-        half_shift_coord=half_shift_coord,
+        q_coord=choice.q_coord,
+        half_shift_coord=choice.half_shift_coord,
     )
     bundle = build_continuum_bundle(
         model=workflow_result.params.model,
@@ -386,7 +402,16 @@ def run_finite_q_ivc_diagnostic(workflow_result: Any) -> FiniteQIVCDiagnostic:
     return FiniteQIVCDiagnostic(
         bundle=bundle,
         result=result,
-        metadata=finite_q_shift_metadata(finite_q, bundle.grid),
+        metadata={
+            **finite_q_shift_metadata(finite_q, bundle.grid),
+            "taige_ivc_minus_shift_choice": choice.model_dump(mode="json"),
+            "finite_q_shift_policy": choice.policy,
+            "finite_q_exact": choice.exact,
+            "q_error_grid_units": choice.q_error_grid_units,
+            "half_shift_error_grid_units": choice.half_shift_error_grid_units,
+            "q_error_fractional_norm": choice.q_error_fractional_norm,
+            "half_shift_error_fractional_norm": choice.half_shift_error_fractional_norm,
+        },
     )
 
 
@@ -639,7 +664,10 @@ def build_taige_sweep_diagnostics(
     if controls.compute_finite_q_ivc:
         finite_q = _finite_q_ivc_from_workflow(workflow_result)
         if finite_q is None:
-            finite_q = run_finite_q_ivc_diagnostic(workflow_result)
+            finite_q = run_finite_q_ivc_diagnostic(
+                workflow_result,
+                finite_q_shift_policy=controls.finite_q_shift_policy,
+            )
     trial_rows = _with_point_fields(point, trial_theta_rows(workflow_result))
     energy_rows = _with_point_fields(point, reference_energy_rows(workflow_result, finite_q))
     nonint_rows = (
@@ -726,6 +754,8 @@ def build_taige_sweep_diagnostics(
         None if finite_vp_reference_result is None else finite_vp_reference_result.diagnostics
     )
     finite_q_energy_norm = None if finite_q is None else float(finite_q.bundle.backend.n_blocks)
+    finite_q_metadata = {} if finite_q is None else dict(finite_q.metadata)
+    finite_q_choice = finite_q_metadata.get("taige_ivc_minus_shift_choice", {})
     selected_ivc_energy_per_cell = float(
         branch_selection.get(
             "selected_ivc_energy_per_cell",
@@ -754,6 +784,26 @@ def build_taige_sweep_diagnostics(
         finite_q_minus_q0_ivc_energy_per_cell=reference_rows_by_quantity[
             "Delta_finite_Q_minus_Q0_per_cell"
         ]["value"],
+        finite_q_shift_policy=finite_q_metadata.get("finite_q_shift_policy"),
+        finite_q_exact=finite_q_metadata.get("finite_q_exact"),
+        finite_q_q_coord=(
+            None
+            if not finite_q_choice
+            else tuple(int(x) for x in finite_q_choice["q_coord"])
+        ),
+        finite_q_half_shift_coord=(
+            None
+            if not finite_q_choice
+            else tuple(int(x) for x in finite_q_choice["half_shift_coord"])
+        ),
+        finite_q_q_error_grid_units=finite_q_metadata.get("q_error_grid_units"),
+        finite_q_half_shift_error_grid_units=finite_q_metadata.get(
+            "half_shift_error_grid_units"
+        ),
+        finite_q_q_error_fractional_norm=finite_q_metadata.get("q_error_fractional_norm"),
+        finite_q_half_shift_error_fractional_norm=finite_q_metadata.get(
+            "half_shift_error_fractional_norm"
+        ),
         texture_valid=bool(branch_selection.get("texture_valid", True)),
         texture_invalid_reason=branch_selection.get("texture_invalid_reason"),
         texture_nan_policy=bool(
