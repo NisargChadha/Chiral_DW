@@ -161,7 +161,10 @@ def test_ac_projected_notebook_is_paired_when_present():
     assert data["metadata"]["jupytext"]["formats"] == "ipynb,py:percent"
     assert script.exists()
     text = script.read_text()
-    assert "build_ac_projected_bundle" in text
+    assert "build_ac_active_space" in text
+    assert "build_ac_density_vertices" in text
+    assert "ContinuumHFBackend" in text
+    assert "allow_nonconverged_references" in text
     assert "TPrimeConstraint" in text
     assert "ValleyU1Constraint" in text
     assert "k_theta_from_projectors_with_basis" in text

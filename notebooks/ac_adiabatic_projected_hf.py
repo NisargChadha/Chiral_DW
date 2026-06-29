@@ -36,6 +36,7 @@ from __future__ import annotations
 import csv
 import json
 import sys
+import time
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -52,7 +53,6 @@ from chiral_dw.ac.nonideal import NonIdealACLLModel
 from chiral_dw.ac.projected import (
     build_ac_active_space,
     build_ac_density_vertices,
-    build_ac_projected_bundle,
 )
 from chiral_dw.config import (
     ACProjectedHFParams,
@@ -69,9 +69,12 @@ from chiral_dw.continuum import (
     TPrimeConstraint,
     ValleyU1Constraint,
     active_basis_frames,
+    build_seed,
     build_symmetric_hf_references,
+    mix_projector_seeds,
     order_diagnostics,
     projector_maps,
+    random_projector_like_seed,
     reference_diagnostics,
     symmetric_convex_path,
 )
@@ -97,15 +100,17 @@ from chiral_dw.response import k_theta_from_projectors_with_basis
 #
 # HF uses ODA mixing by default here because the IVC reference is a constrained
 # self-consistency problem and simple linear mixing can stall even when the final
-# projector is symmetry-clean.
+# projector is symmetry-clean. The notebook refuses to run the convex
+# interpolation and `cG` response from unconverged HF references unless
+# `allow_nonconverged_references` is set explicitly for diagnostics.
 
 # %%
-b1 = 0.0
-u1 = 0.0
+b1 = 0.2
+u1 = 0.05
 n_ll = 5
 active_band = 0
 
-n_k = 12
+n_k = 5
 q_shell = 1
 local_field_cutoff = 1
 interaction_strength_scale = 0.2
@@ -121,6 +126,7 @@ energy_unit_mev = 1.0
 hf_max_iter = 120
 hf_mixing_method = "oda"
 hf_mixing = 0.45
+allow_nonconverged_references = False
 n_theta = 21
 output_dir = ROOT / "results" / "ac_projected_hf"
 output_dir.mkdir(parents=True, exist_ok=True)
@@ -313,19 +319,22 @@ bundle = ContinuumBundle(
     form_factors=model,
 )
 
-# The convenience constructor used in scripts performs the same three steps:
-# finite-LL active space, density vertices, and HF backend. This assertion is a
-# guard against the explicit notebook path drifting from the reusable API.
-bundle_from_helper = build_ac_projected_bundle(params)
-assert np.allclose(bundle_from_helper.active.h0, bundle.active.h0)
-assert np.allclose(bundle_from_helper.vertices.lambda_blocks, bundle.vertices.lambda_blocks)
-
 q0 = vertices.q_shifts.index((0, 0))
 g0 = vertices.g_channels.index((0, 0))
 lambda_q0_g0 = vertices.lambda_blocks[q0, g0]
 interaction_scale = float(np.max(np.abs(vertices.v_over_a)))
 min_direct_gap = float(band_data.diagnostics["min_direct_gap"])
 interaction_gap_ratio = interaction_scale / max(min_direct_gap, 1e-15)
+backend_diagnostics = {
+    "n_blocks": int(backend.n_blocks),
+    "dim": int(backend.dim),
+    "n_q": int(backend.n_q),
+    "n_g": int(backend.n_g),
+    "exchange_tVE_shape": list(backend.tVE.shape),
+    "h0_norm": float(np.linalg.norm(backend.h0)),
+    "exchange_tVE_norm": float(np.linalg.norm(backend.tVE)),
+    "hartree_channel_count": int(len(backend.hartree_channels)),
+}
 
 print("q transfers:", vertices.q_shifts)
 print("local-field G channels:", vertices.g_channels)
@@ -333,6 +342,25 @@ print("Lambda shape:", vertices.lambda_blocks.shape)
 print("v_over_a range:", float(np.min(vertices.v_over_a)), float(np.max(vertices.v_over_a)))
 print("q=0,G=0 Lambda diagonal mean:", np.mean(np.diagonal(lambda_q0_g0, axis1=-2, axis2=-1), axis=0))
 print("max interaction / min direct gap:", interaction_gap_ratio)
+print("HF backend diagnostics:")
+for key, value in backend_diagnostics.items():
+    print(f"  {key}: {value}")
+
+with (output_dir / "interaction_projection_diagnostics.json").open("w") as f:
+    json.dump(
+        {
+            "q_shifts": vertices.q_shifts,
+            "g_channels": vertices.g_channels,
+            "lambda_shape": list(vertices.lambda_blocks.shape),
+            "v_over_a_min": float(np.min(vertices.v_over_a)),
+            "v_over_a_max": float(np.max(vertices.v_over_a)),
+            "q0_g0_identity_error": float(np.max(np.abs(lambda_q0_g0 - np.eye(active.dim)[None, :, :]))),
+            "interaction_gap_ratio": float(interaction_gap_ratio),
+            "backend": backend_diagnostics,
+        },
+        f,
+        indent=2,
+    )
 
 # %% [markdown]
 # ## Symmetry Checks
@@ -384,20 +412,103 @@ with (output_dir / "symmetry_checks.json").open("w") as f:
 # even though the symmetry constraint itself may be exactly satisfied. In that
 # case increase `hf_max_iter`, reduce the interaction scale, or adjust the ODA
 # controls before trusting the reference energetics.
+#
+# For small meshes this section can run quickly because the exchange operator is
+# already stored as a dense tensor `tVE`. The timing is therefore not the
+# convergence criterion; the residual history and final `converged` flag are.
 
 # %%
+hf_constraints = {
+    "vp_plus": ValleyU1Constraint(active),
+    "vp_minus": ValleyU1Constraint(active),
+    "ivc": TPrimeConstraint(active),
+}
+hf_seed_names = {
+    "vp_plus": "vp_plus",
+    "vp_minus": "vp_minus",
+    "ivc": "ivc",
+}
+
+
+def make_reference_seed(seed_name: str, constraint) -> np.ndarray:
+    P0 = build_seed(
+        seed_name,
+        active,
+        n_occ_per_k=params.hf.n_occ_per_k,
+        ivc_angle=params.hf.ivc_angle,
+        ivc_phase=params.hf.ivc_phase,
+        random_seed_value=params.hf.random_seed,
+    )
+    if params.hf.seed_random_weight > 0.0:
+        P_noise = random_projector_like_seed(P0, seed=params.hf.random_seed)
+        P_noise = constraint.project_density(P_noise)
+        P0 = mix_projector_seeds(
+            P0,
+            P_noise,
+            ordered_weight=params.hf.seed_ordered_weight,
+            random_weight=params.hf.seed_random_weight,
+        )
+    return constraint.project_density(P0)
+
+
+initial_projectors = {
+    name: make_reference_seed(seed_name, hf_constraints[name])
+    for name, seed_name in hf_seed_names.items()
+}
+initial_hf_rows = []
+for name, P0 in initial_projectors.items():
+    constraint = hf_constraints[name]
+    H0 = backend.hf_hamiltonian(P0)
+    H0_projected = constraint.project_operator(H0)
+    P_aufbau, _evals, direct_gap, _indirect_gap = backend.update_density_per_k(
+        H0_projected,
+        params.hf.n_occ_per_k,
+        constraint,
+    )
+    components = backend.energy(P0)
+    row = {
+        "reference": name,
+        "seed_energy": float(components.total),
+        "seed_one_body": float(components.one_body),
+        "seed_hartree": float(components.hartree),
+        "seed_fock": float(components.fock),
+        "seed_hf_minus_h0_norm": float(np.linalg.norm(H0 - backend.h0)),
+        "seed_aufbau_residual_norm": float(np.linalg.norm(P_aufbau - P0)),
+        "seed_direct_gap_min": float(direct_gap),
+    }
+    initial_hf_rows.append(row)
+    print(
+        f"{name} seed: E={row['seed_energy']:.8g}, "
+        f"H_hf-h0={row['seed_hf_minus_h0_norm']:.3e}, "
+        f"Aufbau residual={row['seed_aufbau_residual_norm']:.3e}, "
+        f"Fock={row['seed_fock']:.8g}"
+    )
+
+with (output_dir / "hf_initial_summary.json").open("w") as f:
+    json.dump(initial_hf_rows, f, indent=2)
+
+hf_start = time.perf_counter()
 refs = build_symmetric_hf_references(bundle, params.hf)
+hf_elapsed_s = time.perf_counter() - hf_start
 ref_rows = {
     "vp_plus": refs.vp_plus,
     "vp_minus": refs.vp_minus,
     "ivc": refs.ivc,
 }
 hf_summary_rows = []
+print(f"HF reference solve wall time: {hf_elapsed_s:.3f} s")
 for name, result in ref_rows.items():
     diag = result.diagnostics
     order = order_diagnostics(result.P, active, n_occ_per_k=params.hf.n_occ_per_k)
     components = backend.energy(result.P)
     energy_per_k = result.energy / active.n_k
+    seed_motion = float(np.linalg.norm(result.P - initial_projectors[name]))
+    history_initial_residual = (
+        float(result.history[0].aufbau_residual_norm) if result.history else float("nan")
+    )
+    history_final_residual = (
+        float(result.history[-1].aufbau_residual_norm) if result.history else float("nan")
+    )
     hf_summary_rows.append(
         {
             "reference": name,
@@ -412,6 +523,10 @@ for name, result in ref_rows.items():
             "constraint_error": float(diag.constraint_error),
             "aufbau_residual_norm": float(diag.aufbau_residual_norm),
             "commutator_norm": float(diag.commutator_norm),
+            "projector_motion_from_seed": seed_motion,
+            "history_initial_aufbau_residual_norm": history_initial_residual,
+            "history_final_aufbau_residual_norm": history_final_residual,
+            "history_iterations": len(result.history),
             "Nz": float(order.Nz_block),
             "IVC_amplitude": float(order.IVC_amplitude_block),
         }
@@ -421,6 +536,7 @@ for name, result in ref_rows.items():
         f"converged={result.converged}, it={result.n_iter}, "
         f"gap={diag.direct_gap_min:.6g}, residual={diag.aufbau_residual_norm:.3e}, "
         f"comm={diag.commutator_norm:.3e}, constraint={diag.constraint_error:.3e}, "
+        f"||P-P_seed||={seed_motion:.3e}, "
         f"Nz={order.Nz_block:.5g}, IVC={order.IVC_amplitude_block:.5g}"
     )
     if not result.converged:
@@ -430,7 +546,36 @@ channel_diagnostics = reference_diagnostics(refs)
 with (output_dir / "reference_channel_diagnostics.json").open("w") as f:
     json.dump({k: v.model_dump() for k, v in channel_diagnostics.items()}, f, indent=2)
 with (output_dir / "hf_reference_summary.json").open("w") as f:
-    json.dump(hf_summary_rows, f, indent=2)
+    json.dump(
+        {
+            "wall_time_s": float(hf_elapsed_s),
+            "rows": hf_summary_rows,
+        },
+        f,
+        indent=2,
+    )
+
+fig, ax = plt.subplots(figsize=(5.8, 3.8))
+for name, result in ref_rows.items():
+    if not result.history:
+        continue
+    residuals = [row.aufbau_residual_norm for row in result.history]
+    ax.semilogy(range(1, len(residuals) + 1), residuals, label=name)
+ax.axhline(params.hf.tolerance, color="0.25", ls="--", lw=0.9, label="solver tolerance")
+ax.axhline(
+    params.hf.final_residual_tolerance,
+    color="0.55",
+    ls=":",
+    lw=0.9,
+    label="final residual tolerance",
+)
+ax.set_xlabel("HF iteration")
+ax.set_ylabel("Aufbau residual norm")
+ax.set_title("HF self-consistency residuals")
+ax.legend()
+fig.tight_layout()
+fig.savefig(output_dir / "hf_residual_history.png", dpi=180)
+plt.show()
 
 # %% [markdown]
 # The following maps visualize the final projectors. VP references should put
@@ -461,6 +606,22 @@ for name, result in ref_rows.items():
     fig = plot_projector_maps(result.P, name)
     fig.savefig(output_dir / f"{name}_projector_maps.png", dpi=180)
     plt.show()
+
+nonconverged_references = [name for name, result in ref_rows.items() if not result.converged]
+if nonconverged_references:
+    message = (
+        "HF references did not converge: "
+        + ", ".join(nonconverged_references)
+        + ". The convex interpolation and cG response are disabled by default "
+        "because they should be built from self-consistent reference Hamiltonians."
+    )
+    print("WARNING:", message)
+    if not allow_nonconverged_references:
+        raise RuntimeError(
+            message
+            + " Increase hf_max_iter, reduce the interaction strength, or set "
+            "allow_nonconverged_references=True only for diagnostic runs."
+        )
 
 # %% [markdown]
 # ## Convex HF Interpolation And cG
@@ -533,7 +694,11 @@ summary = {
     "params": params.model_dump(mode="json"),
     "band_diagnostics": band_data.diagnostics,
     "symmetry_checks": symmetry_checks,
+    "interaction_projection_diagnostics": backend_diagnostics,
+    "hf_initial_summary": initial_hf_rows,
     "hf_reference_summary": hf_summary_rows,
+    "hf_wall_time_s": float(hf_elapsed_s),
+    "allow_nonconverged_references": bool(allow_nonconverged_references),
     "cG": float(response.cG),
     "cG_dimension": "dimensionless",
 }
