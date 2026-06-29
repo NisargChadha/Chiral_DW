@@ -23,12 +23,13 @@
 # 3. project the density-density interaction into that active space by building
 #    the `Lambda(q,G,k)` density vertices;
 # 4. run the same symmetry-constrained HF references, convex interpolation, and
-#    embedded `cG` response used by the continuum notebook.
+#    an AC-specific link-variable `cG` response with magnetic-Bloch overlaps.
 #
 # The key point is that the interaction problem is not inferred from the band
 # dispersion alone. The HF backend only sees the one-body blocks `h0(k)` plus
 # the projected density vertices built from finite-LL wave-function form
-# factors.
+# factors. The response step also needs the AC orbital overlap matrix; ordinary
+# LL-coefficient dot products miss the LLL Chern number.
 
 # %%
 from __future__ import annotations
@@ -54,6 +55,11 @@ from chiral_dw.ac.projected import (
     build_ac_active_space,
     build_ac_density_vertices,
 )
+from chiral_dw.ac.response import (
+    ACBandOverlapProvider,
+    ac_projector_chern,
+    k_theta_from_ac_projectors,
+)
 from chiral_dw.config import (
     ACProjectedHFParams,
     ContinuumGridParams,
@@ -68,7 +74,6 @@ from chiral_dw.continuum import (
     MomentumGrid,
     TPrimeConstraint,
     ValleyU1Constraint,
-    active_basis_frames,
     build_seed,
     build_symmetric_hf_references,
     mix_projector_seeds,
@@ -78,7 +83,6 @@ from chiral_dw.continuum import (
     reference_diagnostics,
     symmetric_convex_path,
 )
-from chiral_dw.response import k_theta_from_projectors_with_basis
 
 # %% [markdown]
 # ## Parameters and Conventions
@@ -102,12 +106,15 @@ from chiral_dw.response import k_theta_from_projectors_with_basis
 # self-consistency problem and simple linear mixing can stall even when the final
 # projector is symmetry-clean. The notebook refuses to run the convex
 # interpolation and `cG` response from unconverged HF references unless
-# `allow_nonconverged_references` is set explicitly for diagnostics.
+# `allow_nonconverged_references` is set explicitly for diagnostics. The
+# default parameters below are the ideal LLL benchmark because that is the
+# limit where the AC response should reproduce the analytic opposite-Chern
+# result `cG ~= -1/(4*pi)` in the current sign convention.
 
 # %%
-b1 = 0.2
-u1 = 0.05
-n_ll = 5
+b1 = 0.0
+u1 = 0.0
+n_ll = 1
 active_band = 0
 
 n_k = 5
@@ -123,11 +130,13 @@ smear_length_nm = 0.347
 moire_length_nm = 1.0
 energy_unit_mev = 1.0
 
-hf_max_iter = 120
+hf_max_iter = 220
 hf_mixing_method = "oda"
 hf_mixing = 0.45
 allow_nonconverged_references = False
-n_theta = 21
+n_theta = 20
+n_phi = 2
+phi_step = 0.2
 output_dir = ROOT / "results" / "ac_projected_hf"
 output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -149,7 +158,7 @@ params = ACProjectedHFParams(
         mixing_method=hf_mixing_method,
         mixing=hf_mixing,
     ),
-    response=ResponseParams(n_theta=n_theta),
+    response=ResponseParams(n_theta=n_theta, n_phi=n_phi, phi_step=phi_step),
     active_band=active_band,
     moire_length_nm=moire_length_nm,
     energy_unit_mev=energy_unit_mev,
@@ -487,6 +496,7 @@ for name, P0 in initial_projectors.items():
 with (output_dir / "hf_initial_summary.json").open("w") as f:
     json.dump(initial_hf_rows, f, indent=2)
 
+overlap_provider = ACBandOverlapProvider(model, active_band=params.active_band)
 hf_start = time.perf_counter()
 refs = build_symmetric_hf_references(bundle, params.hf)
 hf_elapsed_s = time.perf_counter() - hf_start
@@ -496,6 +506,7 @@ ref_rows = {
     "ivc": refs.ivc,
 }
 hf_summary_rows = []
+hf_chern_rows = []
 print(f"HF reference solve wall time: {hf_elapsed_s:.3f} s")
 for name, result in ref_rows.items():
     diag = result.diagnostics
@@ -509,6 +520,8 @@ for name, result in ref_rows.items():
     history_final_residual = (
         float(result.history[-1].aufbau_residual_norm) if result.history else float("nan")
     )
+    ac_chern = ac_projector_chern(overlap_provider, active.grid, result.P)
+    hf_chern_rows.append({"reference": name, "ac_overlap_chern": float(ac_chern)})
     hf_summary_rows.append(
         {
             "reference": name,
@@ -527,6 +540,7 @@ for name, result in ref_rows.items():
             "history_initial_aufbau_residual_norm": history_initial_residual,
             "history_final_aufbau_residual_norm": history_final_residual,
             "history_iterations": len(result.history),
+            "ac_overlap_chern": float(ac_chern),
             "Nz": float(order.Nz_block),
             "IVC_amplitude": float(order.IVC_amplitude_block),
         }
@@ -537,6 +551,7 @@ for name, result in ref_rows.items():
         f"gap={diag.direct_gap_min:.6g}, residual={diag.aufbau_residual_norm:.3e}, "
         f"comm={diag.commutator_norm:.3e}, constraint={diag.constraint_error:.3e}, "
         f"||P-P_seed||={seed_motion:.3e}, "
+        f"C_AC={ac_chern:.6g}, "
         f"Nz={order.Nz_block:.5g}, IVC={order.IVC_amplitude_block:.5g}"
     )
     if not result.converged:
@@ -554,6 +569,8 @@ with (output_dir / "hf_reference_summary.json").open("w") as f:
         f,
         indent=2,
     )
+with (output_dir / "hf_chern_diagnostics.json").open("w") as f:
+    json.dump(hf_chern_rows, f, indent=2)
 
 fig, ax = plt.subplots(figsize=(5.8, 3.8))
 for name, result in ref_rows.items():
@@ -631,27 +648,29 @@ if nonconverged_references:
 #
 # `H_var(theta,phi) = w_+ H_VP+ + w_- H_VP- + w_IVC U_phi H_IVC U_phi^dagger`.
 #
-# For each `theta`, the occupied projector is the fixed-per-k Aufbau projector
-# of this trial Hamiltonian. The `cG` calculation then embeds those active-space
-# projectors into the finite-LL AC Bloch basis via `active_basis_frames(active)`.
-# That embedding is essential: it lets the momentum derivatives see the Chern
-# geometry and finite-LL wave-function form factors of the selected AC bands.
+# For each `theta` edge, the occupied projector is the fixed-per-k Aufbau
+# projector of this trial Hamiltonian. The AC `cG` calculation must then use
+# magnetic-Bloch orbital overlaps, not ordinary LL-coefficient dot products.
+# This is essential in the LLL: the coefficient vector is k-independent, but
+# the magnetic-translation overlap still carries Chern number. The link-variable
+# evaluator below interleaves active projectors with
+# `diag(S_K(k,p), S_Kprime(k,p))`, where `S_Kprime(k,p)=conj(S_K(-k,-p))`.
 
 # %%
-theta_nodes = np.linspace(
-    params.response.endpoint_eps,
-    np.pi - params.response.endpoint_eps,
-    params.response.n_theta,
-)
-projectors, path_diagnostics = symmetric_convex_path(refs, theta_nodes)
-frames = active_basis_frames(active).reshape(n_k, n_k, -1, active.dim)
-projector_grid = projectors.reshape(len(theta_nodes), n_k, n_k, active.dim, active.dim)
-response = k_theta_from_projectors_with_basis(projector_grid, theta_nodes, frames)
+response_method = "ac_link_variable_orbital_overlap"
+ideal_lll_cg_expected = -1.0 / (4.0 * np.pi)
+theta_edges = np.linspace(params.response.theta_min, params.response.theta_max, params.response.n_theta + 1)
+phi_nodes = np.arange(params.response.n_phi, dtype=float) * params.response.phi_step
+projectors, path_diagnostics = symmetric_convex_path(refs, theta_edges)
+projector_grid = projectors.reshape(len(theta_edges), n_k, n_k, active.dim, active.dim)
+response = k_theta_from_ac_projectors(overlap_provider, projector_grid, theta_edges, phi_nodes)
 
 print("cG:", response.cG)
+print("ideal LLL expected cG:", ideal_lll_cg_expected)
 print("K(theta) min/max:", float(np.min(response.K)), float(np.max(response.K)))
 print("projector grid shape:", projector_grid.shape)
-print("embedded basis frame shape:", frames.shape)
+print("phi nodes:", phi_nodes)
+print("response method:", response_method)
 
 fig, ax = plt.subplots(figsize=(5.8, 3.8))
 ax.plot(response.theta / np.pi, response.K, marker="o", ms=3)
@@ -685,6 +704,8 @@ with (output_dir / "response_K_theta.csv").open("w", newline="") as f:
 np.savez_compressed(
     output_dir / "ac_projected_hf_response.npz",
     theta=response.theta,
+    theta_edges=theta_edges,
+    phi_nodes=phi_nodes,
     K=response.K,
     cG=np.array(response.cG),
     projectors=projector_grid,
@@ -697,8 +718,12 @@ summary = {
     "interaction_projection_diagnostics": backend_diagnostics,
     "hf_initial_summary": initial_hf_rows,
     "hf_reference_summary": hf_summary_rows,
+    "hf_chern_summary": hf_chern_rows,
     "hf_wall_time_s": float(hf_elapsed_s),
     "allow_nonconverged_references": bool(allow_nonconverged_references),
+    "response_method": response_method,
+    "response_phi_nodes": [float(x) for x in phi_nodes],
+    "ideal_lll_cg_expected_current_sign": float(ideal_lll_cg_expected),
     "cG": float(response.cG),
     "cG_dimension": "dimensionless",
 }

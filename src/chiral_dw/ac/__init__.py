@@ -16,6 +16,11 @@ from chiral_dw.ac.projected import (
     build_ac_density_vertices,
     build_ac_projected_bundle,
 )
+from chiral_dw.ac.response import (
+    ACBandOverlapProvider,
+    ac_projector_chern,
+    k_theta_from_ac_projectors,
+)
 from chiral_dw.ac.energy import EnergyBreakdown, ProjectedPhysicalEnergy
 from chiral_dw.ac.source import (
     PAULI,
@@ -32,6 +37,7 @@ from chiral_dw.ac.workflow import ACCGWorkflowResult, run_ac_cg_workflow
 __all__ = [
     "AdiabaticMoireFields",
     "ACProjectedBandStructure",
+    "ACBandOverlapProvider",
     "BandSolution",
     "ChiSolution",
     "EnergyBreakdown",
@@ -48,10 +54,12 @@ __all__ = [
     "build_ac_active_space",
     "build_ac_density_vertices",
     "build_ac_projected_bundle",
+    "ac_projector_chern",
     "first_shell_magnetic_coefficients",
     "first_shell_potential_coefficients",
     "fourier_params_from_first_shell",
     "landau_polynomial",
+    "k_theta_from_ac_projectors",
     "spinor_from_angles",
     "target_vector",
     "run_ac_cg_workflow",

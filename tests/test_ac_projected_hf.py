@@ -10,12 +10,18 @@ from chiral_dw.ac.projected import (
     build_ac_density_vertices,
     build_ac_projected_bundle,
 )
+from chiral_dw.ac.response import (
+    ACBandOverlapProvider,
+    ac_projector_chern,
+    k_theta_from_ac_projectors,
+)
 from chiral_dw.config import (
     ACProjectedHFParams,
     ContinuumGridParams,
     ContinuumHFParams,
     ContinuumInteractionParams,
     FirstShellACParams,
+    ResponseParams,
 )
 from chiral_dw.continuum import (
     ContinuumHFBackend,
@@ -43,6 +49,38 @@ def _small_params() -> ACProjectedHFParams:
         hf=ContinuumHFParams(max_iter=4, min_iter=1, mixing=0.6, tolerance=1e-9),
         band_diagnostics_n_k=3,
     )
+
+
+def _ideal_lll_params(n_k: int = 5, n_theta: int = 20) -> ACProjectedHFParams:
+    return ACProjectedHFParams(
+        grid=ContinuumGridParams(n_k=n_k),
+        ac=FirstShellACParams(b1=0.0, u1=0.0, n_ll=1),
+        interaction=ContinuumInteractionParams(
+            coulomb_kind="dimensionless_screened",
+            v0=0.2,
+            q_shell=1,
+            local_field_cutoff=1,
+            gate_distance=2.0,
+        ),
+        hf=ContinuumHFParams(
+            max_iter=220,
+            min_iter=2,
+            mixing_method="oda",
+            mixing=0.45,
+            tolerance=1e-8,
+            final_residual_tolerance=1e-7,
+        ),
+        band_diagnostics_n_k=max(5, n_k),
+        response=ResponseParams(n_theta=n_theta),
+    )
+
+
+def _uniform_vp_ivc_path(theta_edges: np.ndarray, n_k: int) -> np.ndarray:
+    projectors = np.zeros((len(theta_edges), n_k, n_k, 2, 2), dtype=complex)
+    for it, theta in enumerate(theta_edges):
+        spinor = np.array([np.cos(0.5 * theta), np.sin(0.5 * theta)], dtype=complex)
+        projectors[it, :, :] = spinor[:, None] * spinor.conj()[None, :]
+    return projectors
 
 
 def test_kahler_chi_solves_periodic_poisson_equation():
@@ -128,6 +166,56 @@ def test_explicit_active_space_and_vertex_path_matches_bundle_builder():
     assert np.allclose(backend.h0, bundle.backend.h0)
 
 
+def test_ac_overlap_provider_has_opposite_cherns_and_tprime_overlaps():
+    model = NonIdealACLLModel(FirstShellACParams(b1=0.0, u1=0.0, n_ll=1))
+    provider = ACBandOverlapProvider(model)
+    up_chern, down_chern = provider.band_cherns(n_k=5)
+    k = 0.13 * model.fields.G_shell[0] + 0.21 * model.fields.G_shell[1]
+    p = -0.17 * model.fields.G_shell[0] + 0.08 * model.fields.G_shell[1]
+    boundary = provider.up_overlap(k, k + model.fields.G_shell[0])
+
+    assert np.isclose(up_chern, 1.0, atol=5e-3)
+    assert np.isclose(down_chern, -1.0, atol=5e-3)
+    assert np.allclose(provider.down_overlap(k, p), np.conj(provider.up_overlap(-k, -p)))
+    assert abs(boundary) > 1e-12
+
+
+def test_ideal_lll_hf_reference_cherns_use_ac_overlaps():
+    params = _ideal_lll_params(n_k=5, n_theta=12)
+    bundle = build_ac_projected_bundle(params)
+    provider = ACBandOverlapProvider(bundle.form_factors)
+    refs = build_symmetric_hf_references(bundle, params.hf)
+
+    assert refs.vp_plus.converged
+    assert refs.vp_minus.converged
+    assert refs.ivc.converged
+    assert np.isclose(ac_projector_chern(provider, bundle.grid, refs.vp_plus.P), 1.0, atol=5e-3)
+    assert np.isclose(ac_projector_chern(provider, bundle.grid, refs.vp_minus.P), -1.0, atol=5e-3)
+    assert abs(ac_projector_chern(provider, bundle.grid, refs.ivc.P)) < 5e-3
+
+
+def test_ideal_lll_ac_response_is_nonzero_and_coefficient_response_is_zero():
+    params = _ideal_lll_params(n_k=5, n_theta=20)
+    bundle = build_ac_projected_bundle(params)
+    provider = ACBandOverlapProvider(bundle.form_factors)
+    theta_edges = np.linspace(0.0, np.pi, params.response.n_theta + 1)
+    phi_nodes = np.arange(2, dtype=float) * params.response.phi_step
+    projectors = _uniform_vp_ivc_path(theta_edges, params.grid.n_k)
+
+    response = k_theta_from_ac_projectors(provider, projectors, theta_edges, phi_nodes)
+    frames = active_basis_frames(bundle.active).reshape(
+        params.grid.n_k,
+        params.grid.n_k,
+        -1,
+        bundle.active.dim,
+    )
+    coefficient_response = k_theta_from_projectors_with_basis(projectors, theta_edges, frames)
+
+    assert abs(response.cG + 1.0 / (4.0 * np.pi)) < 1e-2
+    assert abs(coefficient_response.cG) < 1e-12
+    assert np.allclose(response.K + response.K[::-1], 0.0, atol=1e-10)
+
+
 def test_ac_projected_bundle_runs_symmetric_hf_and_embedded_response():
     params = _small_params()
     bundle = build_ac_projected_bundle(params)
@@ -151,6 +239,31 @@ def test_ac_projected_bundle_runs_symmetric_hf_and_embedded_response():
     assert np.isfinite(response.cG)
 
 
+def test_ac_projected_bundle_runs_overlap_response_smoke():
+    params = _ideal_lll_params(n_k=3, n_theta=8)
+    bundle = build_ac_projected_bundle(params)
+    refs = build_symmetric_hf_references(bundle, params.hf)
+    provider = ACBandOverlapProvider(bundle.form_factors)
+    theta_edges = np.linspace(0.0, np.pi, params.response.n_theta + 1)
+    projectors, _diag = symmetric_convex_path(refs, theta_edges)
+    projector_grid = projectors.reshape(
+        len(theta_edges),
+        params.grid.n_k,
+        params.grid.n_k,
+        bundle.active.dim,
+        bundle.active.dim,
+    )
+    phi_nodes = np.arange(2, dtype=float) * params.response.phi_step
+    response = k_theta_from_ac_projectors(provider, projector_grid, theta_edges, phi_nodes)
+
+    assert refs.vp_plus.converged
+    assert refs.vp_minus.converged
+    assert refs.ivc.converged
+    assert np.all(np.isfinite(response.K))
+    assert np.isfinite(response.cG)
+    assert abs(response.cG) > 1e-3
+
+
 def test_ac_projected_notebook_is_paired_when_present():
     root = Path(__file__).resolve().parents[1]
     notebook = root / "notebooks" / "ac_adiabatic_projected_hf.ipynb"
@@ -167,4 +280,6 @@ def test_ac_projected_notebook_is_paired_when_present():
     assert "allow_nonconverged_references" in text
     assert "TPrimeConstraint" in text
     assert "ValleyU1Constraint" in text
-    assert "k_theta_from_projectors_with_basis" in text
+    assert "ACBandOverlapProvider" in text
+    assert "k_theta_from_ac_projectors" in text
+    assert "ac_projector_chern" in text

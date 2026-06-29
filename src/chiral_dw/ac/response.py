@@ -1,0 +1,320 @@
+"""AC-specific projector response with magnetic-Bloch orbital overlaps."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+import numpy as np
+
+from chiral_dw.ac.nonideal import NonIdealACLLModel
+from chiral_dw.continuum.models import MomentumGrid, hermitize
+from chiral_dw.response import KThetaResult, compute_cG, rotate_projector_phi
+
+
+def _safe_unit(value: complex, eps: float = 1e-14) -> complex:
+    magnitude = abs(value)
+    if magnitude < eps:
+        return 1.0 + 0.0j
+    return complex(value / magnitude)
+
+
+@dataclass
+class ACBandOverlapProvider:
+    """Cached orbital overlaps for one AC active band and its T' partner."""
+
+    model: NonIdealACLLModel
+    active_band: int = 0
+    key_decimals: int = 12
+    _coeff_cache: dict[tuple[float, float], np.ndarray] = field(
+        default_factory=dict,
+        init=False,
+        repr=False,
+    )
+    _up_overlap_cache: dict[
+        tuple[tuple[float, float], tuple[float, float]],
+        complex,
+    ] = field(default_factory=dict, init=False, repr=False)
+
+    def _key(self, k: np.ndarray) -> tuple[float, float]:
+        arr = np.asarray(k, dtype=float)
+        rounded = np.round(arr, decimals=int(self.key_decimals))
+        return float(rounded[0]), float(rounded[1])
+
+    def k_from_fractional(self, frac: tuple[float, float] | np.ndarray) -> np.ndarray:
+        f = np.asarray(frac, dtype=float)
+        b1, b2 = self.model.fields.G_shell[0], self.model.fields.G_shell[1]
+        return f[0] * b1 + f[1] * b2
+
+    def up_coefficients(self, k: np.ndarray) -> np.ndarray:
+        key = self._key(k)
+        cached = self._coeff_cache.get(key)
+        if cached is not None:
+            return cached
+        sol = self.model.solve(k, active_band=int(self.active_band))
+        coeffs = sol.eigenvectors[:, int(self.active_band)]
+        self._coeff_cache[key] = coeffs
+        return coeffs
+
+    def up_overlap(self, k: np.ndarray, p: np.ndarray) -> complex:
+        key = (self._key(k), self._key(p))
+        cached = self._up_overlap_cache.get(key)
+        if cached is not None:
+            return cached
+        overlap = complex(
+            self.model.state_overlap(
+                np.asarray(k, dtype=float),
+                self.up_coefficients(k),
+                np.asarray(p, dtype=float),
+                self.up_coefficients(p),
+            )
+        )
+        self._up_overlap_cache[key] = overlap
+        self._up_overlap_cache[(key[1], key[0])] = np.conj(overlap)
+        return overlap
+
+    def down_overlap(self, k: np.ndarray, p: np.ndarray) -> complex:
+        return complex(
+            np.conj(
+                self.up_overlap(
+                    -np.asarray(k, dtype=float),
+                    -np.asarray(p, dtype=float),
+                )
+            )
+        )
+
+    def active_overlap(self, k: np.ndarray, p: np.ndarray) -> np.ndarray:
+        return np.diag(
+            [
+                self.up_overlap(k, p),
+                self.down_overlap(k, p),
+            ]
+        ).astype(complex)
+
+    def active_overlap_fractional(
+        self,
+        frac_k: tuple[float, float] | np.ndarray,
+        frac_p: tuple[float, float] | np.ndarray,
+    ) -> np.ndarray:
+        return self.active_overlap(
+            self.k_from_fractional(frac_k),
+            self.k_from_fractional(frac_p),
+        )
+
+    def band_cherns(self, n_k: int = 9) -> tuple[float, float]:
+        up = self.model.berry_curvature_fukui(
+            n_k=int(n_k),
+            active_band=int(self.active_band),
+        )[2]
+        return float(up), float(-up)
+
+
+def _occupied_spinor(projector: np.ndarray) -> np.ndarray:
+    vals, vecs = np.linalg.eigh(hermitize(np.asarray(projector, dtype=complex)))
+    return vecs[:, int(np.argmax(vals))]
+
+
+def _coord_fractional(coord: tuple[int, int], n_k: int) -> tuple[float, float]:
+    return float(coord[0]) / float(n_k), float(coord[1]) / float(n_k)
+
+
+def _spinor_link(
+    provider: ACBandOverlapProvider,
+    za: np.ndarray,
+    zb: np.ndarray,
+    coord_a: tuple[int, int],
+    coord_b: tuple[int, int],
+    n_k: int,
+) -> complex:
+    overlap = provider.active_overlap_fractional(
+        _coord_fractional(coord_a, n_k),
+        _coord_fractional(coord_b, n_k),
+    )
+    return _safe_unit(za.conj() @ overlap @ zb)
+
+
+def ac_projector_chern(
+    provider: ACBandOverlapProvider,
+    grid: MomentumGrid,
+    P: np.ndarray,
+) -> float:
+    """Return the occupied-projector Chern number using AC orbital overlaps."""
+
+    arr = hermitize(np.asarray(P, dtype=complex))
+    if arr.shape == (grid.n_k, grid.n_k, 2, 2):
+        arr = arr.reshape(grid.size, 2, 2)
+    if arr.shape != (grid.size, 2, 2):
+        raise ValueError("P must have shape (grid.size,2,2) or (n_k,n_k,2,2)")
+    spinors = np.asarray([_occupied_spinor(arr[ik]) for ik in range(grid.size)])
+    total = 0.0
+    n = grid.n_k
+    for i in range(n):
+        for j in range(n):
+            a = (i, j)
+            b = (i + 1, j)
+            c = (i + 1, j + 1)
+            d = (i, j + 1)
+            za = spinors[grid.index_of(a)]
+            zb = spinors[grid.index_of(b)]
+            zc = spinors[grid.index_of(c)]
+            zd = spinors[grid.index_of(d)]
+            product = (
+                _spinor_link(provider, za, zb, a, b, n)
+                * _spinor_link(provider, zb, zc, b, c, n)
+                * _spinor_link(provider, zc, zd, c, d, n)
+                * _spinor_link(provider, zd, za, d, a, n)
+            )
+            total += float(np.angle(product))
+    return float(total / (2.0 * np.pi))
+
+
+def _validate_projector_grid(P_theta: np.ndarray, theta: np.ndarray) -> np.ndarray:
+    P = hermitize(np.asarray(P_theta, dtype=complex))
+    if P.ndim != 5 or P.shape[-2:] != (2, 2):
+        raise ValueError("P_theta must have shape (n_theta,n_k,n_k,2,2)")
+    if P.shape[1] != P.shape[2]:
+        raise ValueError("momentum grid must be square")
+    if P.shape[0] != len(theta):
+        raise ValueError("theta_edges length must match P_theta leading dimension")
+    return P
+
+
+def _phi_projector_grid(P_theta: np.ndarray, phi_nodes: np.ndarray) -> np.ndarray:
+    n_theta, n_k, _, dim, _ = P_theta.shape
+    out = np.zeros((n_k + 1, n_k + 1, n_theta, len(phi_nodes), dim, dim), dtype=complex)
+    for i in range(n_k + 1):
+        for j in range(n_k + 1):
+            base = P_theta[:, i % n_k, j % n_k]
+            for ip, phi in enumerate(phi_nodes):
+                out[i, j, :, ip] = rotate_projector_phi(base, float(phi))
+    return hermitize(out)
+
+
+def k_theta_from_ac_projectors(
+    provider: ACBandOverlapProvider,
+    P_theta_edges: np.ndarray,
+    theta_edges: np.ndarray,
+    phi_nodes: np.ndarray,
+) -> KThetaResult:
+    """Compute K(theta) and cG from AC projectors using link-variable overlaps."""
+
+    theta = np.asarray(theta_edges, dtype=float)
+    phi = np.asarray(phi_nodes, dtype=float)
+    P = _validate_projector_grid(P_theta_edges, theta)
+    if len(theta) < 2:
+        raise ValueError("theta_edges must contain at least two values")
+    if len(phi) < 2:
+        raise ValueError("phi_nodes must contain at least two values")
+    if np.any(np.diff(theta) <= 0.0):
+        raise ValueError("theta_edges must be strictly increasing")
+    if np.any(np.diff(phi) <= 0.0):
+        raise ValueError("phi_nodes must be strictly increasing")
+
+    projectors = _phi_projector_grid(P, phi)
+    n_k = P.shape[1]
+    n_theta = len(theta)
+    n_phi = len(phi)
+    overlap_cache: dict[tuple[tuple[int, int], tuple[int, int]], np.ndarray] = {}
+
+    def shifted(idx: tuple[int, int, int, int], dim: int) -> tuple[int, int, int, int]:
+        vals = list(idx)
+        vals[dim] += 1
+        return tuple(vals)  # type: ignore[return-value]
+
+    def projector(idx: tuple[int, int, int, int]) -> np.ndarray:
+        i, j, it, ip = idx
+        return projectors[i, j, it, ip]
+
+    def orbital_overlap(
+        idx_a: tuple[int, int, int, int],
+        idx_b: tuple[int, int, int, int],
+    ) -> np.ndarray:
+        coord_a = (idx_a[0], idx_a[1])
+        coord_b = (idx_b[0], idx_b[1])
+        key = (coord_a, coord_b)
+        cached = overlap_cache.get(key)
+        if cached is not None:
+            return cached
+        overlap = provider.active_overlap_fractional(
+            _coord_fractional(coord_a, n_k),
+            _coord_fractional(coord_b, n_k),
+        )
+        overlap_cache[key] = overlap
+        overlap_cache[(coord_b, coord_a)] = overlap.conj().T
+        return overlap
+
+    def plaquette_phase(
+        idx0: tuple[int, int, int, int],
+        idx1: tuple[int, int, int, int],
+        idx2: tuple[int, int, int, int],
+        idx3: tuple[int, int, int, int],
+    ) -> float:
+        product = np.trace(
+            projector(idx0)
+            @ orbital_overlap(idx0, idx1)
+            @ projector(idx1)
+            @ orbital_overlap(idx1, idx2)
+            @ projector(idx2)
+            @ orbital_overlap(idx2, idx3)
+            @ projector(idx3)
+            @ orbital_overlap(idx3, idx0)
+        )
+        return float(np.angle(product))
+
+    def curvature_phase_raw(dim_a: int, dim_b: int) -> np.ndarray:
+        uses_theta = dim_a == 2 or dim_b == 2
+        uses_phi = dim_a == 3 or dim_b == 3
+        shape = (
+            n_k,
+            n_k,
+            n_theta - int(uses_theta),
+            n_phi - int(uses_phi),
+        )
+        phases = np.zeros(shape, dtype=float)
+        for i in range(shape[0]):
+            for j in range(shape[1]):
+                for it in range(shape[2]):
+                    for ip in range(shape[3]):
+                        idx = (i, j, it, ip)
+                        idx_a = shifted(idx, dim_a)
+                        idx_b = shifted(idx, dim_b)
+                        idx_ab = shifted(idx_a, dim_b)
+                        phases[i, j, it, ip] = plaquette_phase(idx, idx_a, idx_ab, idx_b)
+        return phases
+
+    f_k1k2_site = curvature_phase_raw(0, 1)
+    f_thk2_edge = curvature_phase_raw(2, 1)
+    f_phk1_edge = curvature_phase_raw(3, 0)
+    f_thk1_edge = curvature_phase_raw(2, 0)
+    f_phk2_edge = curvature_phase_raw(3, 1)
+    f_thph = curvature_phase_raw(2, 3)
+    components = {
+        "Fk1k2": 0.25
+        * (
+            f_k1k2_site[:, :, :-1, :-1]
+            + f_k1k2_site[:, :, 1:, :-1]
+            + f_k1k2_site[:, :, :-1, 1:]
+            + f_k1k2_site[:, :, 1:, 1:]
+        ),
+        "Fthk2": 0.5 * (f_thk2_edge[:, :, :, :-1] + f_thk2_edge[:, :, :, 1:]),
+        "Fphk1": 0.5 * (f_phk1_edge[:, :, :-1, :] + f_phk1_edge[:, :, 1:, :]),
+        "Fthk1": 0.5 * (f_thk1_edge[:, :, :, :-1] + f_thk1_edge[:, :, :, 1:]),
+        "Fphk2": 0.5 * (f_phk2_edge[:, :, :-1, :] + f_phk2_edge[:, :, 1:, :]),
+        "Fthph": f_thph,
+    }
+    density = (
+        components["Fthph"] * components["Fk1k2"]
+        - components["Fthk1"] * components["Fphk2"]
+        + components["Fthk2"] * components["Fphk1"]
+    ) / (4.0 * np.pi**2)
+    theta_centers = 0.5 * (theta[:-1] + theta[1:])
+    dtheta = np.diff(theta)
+    dphi_total = float(phi[-1] - phi[0])
+    K = np.sum(density, axis=(0, 1, 3)) / (dtheta * dphi_total)
+    return KThetaResult(theta=theta_centers, K=np.asarray(K, dtype=float), cG=compute_cG(theta_centers, K))
+
+
+__all__ = [
+    "ACBandOverlapProvider",
+    "ac_projector_chern",
+    "k_theta_from_ac_projectors",
+]

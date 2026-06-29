@@ -148,6 +148,7 @@ class ResponseParams(BaseModel):
 
     n_theta: int = Field(default=41, ge=3)
     n_phi: int = Field(default=5, ge=1)
+    phi_step: float = Field(default=0.2, gt=0.0)
     theta_min: float = Field(default=0.0, ge=0.0)
     theta_max: float = Field(default=pi, gt=0.0)
     endpoint_eps: float = Field(default=1e-5, ge=0.0)
