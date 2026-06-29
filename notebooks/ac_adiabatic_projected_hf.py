@@ -16,10 +16,19 @@
 # %% [markdown]
 # # Finite-LL Aharonov-Casher Projected HF
 #
-# This notebook builds the adiabatic finite-LL Aharonov-Casher band structure,
-# checks the band isolation diagnostics, projects the interaction into the
-# lowest hole band per valley, and reuses the symmetric HF and response
-# machinery from the continuum workflow.
+# The workflow is deliberately split into four visible stages:
+#
+# 1. diagonalize the K-valley finite-LL adiabatic Hamiltonian;
+# 2. construct the K' valley by T' and form the two-valley active space;
+# 3. project the density-density interaction into that active space by building
+#    the `Lambda(q,G,k)` density vertices;
+# 4. run the same symmetry-constrained HF references, convex interpolation, and
+#    embedded `cG` response used by the continuum notebook.
+#
+# The key point is that the interaction problem is not inferred from the band
+# dispersion alone. The HF backend only sees the one-body blocks `h0(k)` plus
+# the projected density vertices built from finite-LL wave-function form
+# factors.
 
 # %%
 from __future__ import annotations
@@ -39,7 +48,12 @@ if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
 from chiral_dw.ac.kahler import IdealACKahlerModel
-from chiral_dw.ac.projected import build_ac_projected_bundle
+from chiral_dw.ac.nonideal import NonIdealACLLModel
+from chiral_dw.ac.projected import (
+    build_ac_active_space,
+    build_ac_density_vertices,
+    build_ac_projected_bundle,
+)
 from chiral_dw.config import (
     ACProjectedHFParams,
     ContinuumGridParams,
@@ -49,6 +63,9 @@ from chiral_dw.config import (
     ResponseParams,
 )
 from chiral_dw.continuum import (
+    ContinuumBundle,
+    ContinuumHFBackend,
+    MomentumGrid,
     TPrimeConstraint,
     ValleyU1Constraint,
     active_basis_frames,
@@ -61,15 +78,34 @@ from chiral_dw.continuum import (
 from chiral_dw.response import k_theta_from_projectors_with_basis
 
 # %% [markdown]
-# ## Parameters
+# ## Parameters and Conventions
+#
+# The first cell fixes the phenomenological AC model and the numerical controls.
+# The two physical knobs are the first-shell Fourier amplitudes used by the
+# finite-LL Hamiltonian:
+#
+# - `b1` controls the first-shell variation of the effective magnetic field in
+#   the convention `-B'(r) A_M/(2*pi)`.
+# - `u1` controls the first-shell residual scalar potential `U(r)/omega_c`,
+#   where the adiabatic paper defines `U = Delta_+ - omega_c xi`.
+#
+# Energies in the first-shell AC model are measured in units of the average
+# cyclotron energy `omega_c`. The default interaction below is therefore the
+# dimensionless screened interaction used by the HF backend. To use physical
+# dual-gate Coulomb matrix elements, switch `coulomb_kind` to `"dual_gate"` and
+# set `moire_length_nm` and `energy_unit_mev` consistently.
+#
+# HF uses ODA mixing by default here because the IVC reference is a constrained
+# self-consistency problem and simple linear mixing can stall even when the final
+# projector is symmetry-clean.
 
 # %%
-b1 = 0.2
-u1 = 0.05
+b1 = 0.0
+u1 = 0.0
 n_ll = 5
 active_band = 0
 
-n_k = 5
+n_k = 12
 q_shell = 1
 local_field_cutoff = 1
 interaction_strength_scale = 0.2
@@ -82,7 +118,8 @@ smear_length_nm = 0.347
 moire_length_nm = 1.0
 energy_unit_mev = 1.0
 
-hf_max_iter = 60
+hf_max_iter = 120
+hf_mixing_method = "oda"
 hf_mixing = 0.45
 n_theta = 21
 output_dir = ROOT / "results" / "ac_projected_hf"
@@ -101,7 +138,11 @@ params = ACProjectedHFParams(
         gate_distance_nm=gate_distance_nm,
         smear_length_nm=smear_length_nm,
     ),
-    hf=ContinuumHFParams(max_iter=hf_max_iter, mixing=hf_mixing),
+    hf=ContinuumHFParams(
+        max_iter=hf_max_iter,
+        mixing_method=hf_mixing_method,
+        mixing=hf_mixing,
+    ),
     response=ResponseParams(n_theta=n_theta),
     active_band=active_band,
     moire_length_nm=moire_length_nm,
@@ -112,21 +153,41 @@ params
 
 # %% [markdown]
 # ## Single-Particle Finite-LL Band
+#
+# This section only solves the one-body adiabatic Hamiltonian. The K-valley
+# Hamiltonian is diagonalized in a truncated average-field LL basis. The
+# selected active hole band is `active_band=0`, and the K' valley is generated
+# from the K valley by the non-Kramers T' relation
+# `u_Kprime(k) = conj(u_K(-k))`.
+#
+# The output `active` contains the two-valley one-body blocks `h0(k)`, the
+# active-band wave-function coefficients, and the T'-related K' data. No
+# interaction has been projected yet in this cell.
 
 # %%
-bundle = build_ac_projected_bundle(params)
-active = bundle.active
-model = bundle.form_factors
-band_data = bundle.bands
+model = NonIdealACLLModel(params.ac)
+momentum_grid = MomentumGrid(params.grid.n_k)
+active, band_data = build_ac_active_space(
+    model,
+    momentum_grid,
+    active_band=params.active_band,
+    diagnostics_n_k=params.band_diagnostics_n_k,
+)
 
 print("active h0 shape:", active.h0.shape)
-print("density vertex shape:", bundle.vertices.lambda_blocks.shape)
+print("active basis coefficients shape:", active.band_vectors.shape)
 print("band diagnostics:")
 for key, value in band_data.diagnostics.items():
     print(f"  {key}: {value:.8g}")
 
 with (output_dir / "single_particle_band_diagnostics.json").open("w") as f:
     json.dump(band_data.diagnostics, f, indent=2)
+
+# %% [markdown]
+# The next plot is a conventional high-symmetry-path view of the finite-LL
+# Hamiltonian itself. It is not the interacting HF spectrum. Its role is to show
+# whether the selected active band is well separated from the other LL-derived
+# minibands before we trust a one-band projection.
 
 # %%
 def high_symmetry_path(b1_vec: np.ndarray, b2_vec: np.ndarray, n_per_segment: int = 80):
@@ -165,6 +226,12 @@ ax.set_title("finite-LL AC band structure")
 fig.tight_layout()
 fig.savefig(output_dir / "single_particle_band_structure.png", dpi=180)
 plt.show()
+
+# %% [markdown]
+# The Chern number and Berry-curvature spread are computed from the finite-LL
+# eigenvectors using the backend's Fukui-link calculation. The projection used
+# later is meaningful only when the active band has the expected Chern number
+# and a direct gap large compared with the interaction scale.
 
 # %%
 centers, berry_dimless, chern = model.berry_curvature_fukui(
@@ -206,7 +273,79 @@ fig.savefig(output_dir / "kahler_diagnostic.png", dpi=180)
 plt.show()
 
 # %% [markdown]
+# ## Project the Interaction
+#
+# This is the missing bridge between the single-particle band and the HF/cG
+# calculation. The projected density operator is represented by vertices
+#
+# `Lambda[q_index, G_index, k_index, alpha, beta]`.
+#
+# For this first AC workflow the microscopic density is valley diagonal, so the
+# K and K' blocks are filled while intervalley density vertices are zero. For K,
+# each vertex is computed from the finite-LL coefficients as
+#
+# `c_target^dagger M(k_target, k_source, -q + G) c_source`,
+#
+# where `M` is the LL-basis matrix element of `exp(iG.r)` and `k_source =
+# k_target - q` on the discrete mesh. The K' block is built from the T'-related
+# active states. The HF backend combines these vertices with `v_over_a(q,G)` to
+# build Hartree and Fock terms. Only after this cell do we have an interacting
+# projected Hamiltonian problem.
+
+# %%
+vertices = build_ac_density_vertices(
+    model,
+    active,
+    params.interaction,
+    moire_length_nm=params.moire_length_nm,
+    energy_unit_mev=params.energy_unit_mev,
+)
+backend = ContinuumHFBackend(active.h0, vertices, params.interaction)
+bundle = ContinuumBundle(
+    grid=active.grid,
+    active=active,
+    vertices=vertices,
+    backend=backend,
+    params=active.model,
+    interaction=params.interaction,
+    bands=band_data,
+    geometry=None,
+    form_factors=model,
+)
+
+# The convenience constructor used in scripts performs the same three steps:
+# finite-LL active space, density vertices, and HF backend. This assertion is a
+# guard against the explicit notebook path drifting from the reusable API.
+bundle_from_helper = build_ac_projected_bundle(params)
+assert np.allclose(bundle_from_helper.active.h0, bundle.active.h0)
+assert np.allclose(bundle_from_helper.vertices.lambda_blocks, bundle.vertices.lambda_blocks)
+
+q0 = vertices.q_shifts.index((0, 0))
+g0 = vertices.g_channels.index((0, 0))
+lambda_q0_g0 = vertices.lambda_blocks[q0, g0]
+interaction_scale = float(np.max(np.abs(vertices.v_over_a)))
+min_direct_gap = float(band_data.diagnostics["min_direct_gap"])
+interaction_gap_ratio = interaction_scale / max(min_direct_gap, 1e-15)
+
+print("q transfers:", vertices.q_shifts)
+print("local-field G channels:", vertices.g_channels)
+print("Lambda shape:", vertices.lambda_blocks.shape)
+print("v_over_a range:", float(np.min(vertices.v_over_a)), float(np.max(vertices.v_over_a)))
+print("q=0,G=0 Lambda diagonal mean:", np.mean(np.diagonal(lambda_q0_g0, axis1=-2, axis2=-1), axis=0))
+print("max interaction / min direct gap:", interaction_gap_ratio)
+
+# %% [markdown]
 # ## Symmetry Checks
+#
+# These checks are before HF. They verify that the one-body projected problem
+# respects the two symmetries we rely on later:
+#
+# - valley U(1): the one-body Hamiltonian and density vertices have no
+#   intervalley density blocks;
+# - T': the K' one-body data is the T'-conjugate of the K data.
+#
+# A small number here is a convention check. It is not a statement that the HF
+# solution has converged.
 
 # %%
 tprime = TPrimeConstraint(active)
@@ -214,7 +353,9 @@ valley_u1 = ValleyU1Constraint(active)
 symmetry_checks = {
     "h0_tprime_error": tprime.symmetry_error(active.h0),
     "h0_valley_u1_error": valley_u1.symmetry_error(active.h0),
-    "sample_vertex_valley_u1_error": valley_u1.symmetry_error(bundle.vertices.lambda_blocks[0, 0]),
+    "sample_vertex_valley_u1_error": valley_u1.symmetry_error(vertices.lambda_blocks[q0, g0]),
+    "q0_g0_identity_error": float(np.max(np.abs(lambda_q0_g0 - np.eye(active.dim)[None, :, :]))),
+    "interaction_gap_ratio": interaction_gap_ratio,
 }
 for key, value in symmetry_checks.items():
     print(f"{key}: {value:.3e}")
@@ -224,6 +365,25 @@ with (output_dir / "symmetry_checks.json").open("w") as f:
 
 # %% [markdown]
 # ## Symmetry-Constrained Hartree-Fock References
+#
+# The three reference states are solved with the same projected interaction
+# vertices constructed above:
+#
+# - `vp_plus`: valley-polarized seed biased toward K, with valley-U(1)
+#   projection applied during HF;
+# - `vp_minus`: valley-polarized seed biased toward K', with the same U(1)
+#   projection;
+# - `ivc`: Q=0 intervalley-coherent seed, with T' projection applied during HF.
+#
+# The reported energy is the full mesh HF energy in the dimensionless units of
+# this projected problem. The per-momentum value is printed alongside it because
+# that is easier to compare across mesh sizes. `Nz` is the average valley
+# polarization and `IVC` is the intervalley-coherence amplitude from the final
+# projector. `converged=False` is not harmless: it means the final idempotent
+# Aufbau projector did not satisfy the requested commutator/residual tolerance,
+# even though the symmetry constraint itself may be exactly satisfied. In that
+# case increase `hf_max_iter`, reduce the interaction scale, or adjust the ODA
+# controls before trusting the reference energetics.
 
 # %%
 refs = build_symmetric_hf_references(bundle, params.hf)
@@ -232,18 +392,52 @@ ref_rows = {
     "vp_minus": refs.vp_minus,
     "ivc": refs.ivc,
 }
+hf_summary_rows = []
 for name, result in ref_rows.items():
     diag = result.diagnostics
     order = order_diagnostics(result.P, active, n_occ_per_k=params.hf.n_occ_per_k)
+    components = backend.energy(result.P)
+    energy_per_k = result.energy / active.n_k
+    hf_summary_rows.append(
+        {
+            "reference": name,
+            "energy_total": float(result.energy),
+            "energy_per_k": float(energy_per_k),
+            "one_body": float(components.one_body),
+            "hartree": float(components.hartree),
+            "fock": float(components.fock),
+            "converged": bool(result.converged),
+            "iterations": int(result.n_iter),
+            "direct_gap_min": float(diag.direct_gap_min),
+            "constraint_error": float(diag.constraint_error),
+            "aufbau_residual_norm": float(diag.aufbau_residual_norm),
+            "commutator_norm": float(diag.commutator_norm),
+            "Nz": float(order.Nz_block),
+            "IVC_amplitude": float(order.IVC_amplitude_block),
+        }
+    )
     print(
-        f"{name}: E={result.energy:.8g}, converged={result.converged}, "
-        f"gap={diag.direct_gap_min:.6g}, constraint={diag.constraint_error:.3e}, "
+        f"{name}: E={result.energy:.8g}, E/Nk={energy_per_k:.8g}, "
+        f"converged={result.converged}, it={result.n_iter}, "
+        f"gap={diag.direct_gap_min:.6g}, residual={diag.aufbau_residual_norm:.3e}, "
+        f"comm={diag.commutator_norm:.3e}, constraint={diag.constraint_error:.3e}, "
         f"Nz={order.Nz_block:.5g}, IVC={order.IVC_amplitude_block:.5g}"
     )
+    if not result.converged:
+        print(f"  WARNING: {name} did not meet the HF convergence tolerances.")
 
 channel_diagnostics = reference_diagnostics(refs)
 with (output_dir / "reference_channel_diagnostics.json").open("w") as f:
     json.dump({k: v.model_dump() for k, v in channel_diagnostics.items()}, f, indent=2)
+with (output_dir / "hf_reference_summary.json").open("w") as f:
+    json.dump(hf_summary_rows, f, indent=2)
+
+# %% [markdown]
+# The following maps visualize the final projectors. VP references should put
+# nearly all weight in one valley block. The IVC reference should show balanced
+# valley occupation and nonzero intervalley coherence. These plots are a
+# qualitative check on the labels above, not a substitute for the convergence
+# diagnostics.
 
 # %%
 def plot_projector_maps(P: np.ndarray, title: str):
@@ -270,6 +464,17 @@ for name, result in ref_rows.items():
 
 # %% [markdown]
 # ## Convex HF Interpolation And cG
+#
+# The response calculation starts only after the three HF references exist. We
+# form the same convex trial Hamiltonian used in the continuum workflow:
+#
+# `H_var(theta,phi) = w_+ H_VP+ + w_- H_VP- + w_IVC U_phi H_IVC U_phi^dagger`.
+#
+# For each `theta`, the occupied projector is the fixed-per-k Aufbau projector
+# of this trial Hamiltonian. The `cG` calculation then embeds those active-space
+# projectors into the finite-LL AC Bloch basis via `active_basis_frames(active)`.
+# That embedding is essential: it lets the momentum derivatives see the Chern
+# geometry and finite-LL wave-function form factors of the selected AC bands.
 
 # %%
 theta_nodes = np.linspace(
@@ -284,6 +489,8 @@ response = k_theta_from_projectors_with_basis(projector_grid, theta_nodes, frame
 
 print("cG:", response.cG)
 print("K(theta) min/max:", float(np.min(response.K)), float(np.max(response.K)))
+print("projector grid shape:", projector_grid.shape)
+print("embedded basis frame shape:", frames.shape)
 
 fig, ax = plt.subplots(figsize=(5.8, 3.8))
 ax.plot(response.theta / np.pi, response.K, marker="o", ms=3)
@@ -293,6 +500,12 @@ ax.set_title(f"dimensionless cG = {response.cG:.6g}")
 fig.tight_layout()
 fig.savefig(output_dir / "K_theta_cG.png", dpi=180)
 plt.show()
+
+# %% [markdown]
+# The final cell writes the numerical response and enough metadata to audit the
+# run later. JSON summaries are generated artifacts under `results/`, not source
+# configuration. The dimensionless `cG` is reported first, following the repo
+# convention.
 
 # %%
 with (output_dir / "response_K_theta.csv").open("w", newline="") as f:
@@ -320,6 +533,7 @@ summary = {
     "params": params.model_dump(mode="json"),
     "band_diagnostics": band_data.diagnostics,
     "symmetry_checks": symmetry_checks,
+    "hf_reference_summary": hf_summary_rows,
     "cG": float(response.cG),
     "cG_dimension": "dimensionless",
 }

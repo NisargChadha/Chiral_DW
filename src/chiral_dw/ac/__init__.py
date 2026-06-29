@@ -12,6 +12,7 @@ from chiral_dw.ac.nonideal import (
 from chiral_dw.ac.kahler import ChiSolution, IdealACKahlerModel
 from chiral_dw.ac.projected import (
     ACProjectedBandStructure,
+    build_ac_active_space,
     build_ac_density_vertices,
     build_ac_projected_bundle,
 )
@@ -44,6 +45,7 @@ __all__ = [
     "SIGMA_Z",
     "SourceProjectorResult",
     "ACCGWorkflowResult",
+    "build_ac_active_space",
     "build_ac_density_vertices",
     "build_ac_projected_bundle",
     "first_shell_magnetic_coefficients",

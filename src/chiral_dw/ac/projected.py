@@ -93,13 +93,15 @@ def _cart_from_coord(model: NonIdealACLLModel, coord: tuple[float, float]) -> np
     return float(coord[0]) * b1 + float(coord[1]) * b2
 
 
-def _build_active_space(
+def build_ac_active_space(
     model: NonIdealACLLModel,
     grid: MomentumGrid,
     *,
     active_band: int,
     diagnostics_n_k: int,
 ) -> tuple[ContinuumActiveSpace, ACProjectedBandStructure]:
+    """Build the two-valley AC active space before adding interactions."""
+
     frac = _mesh_fractional(grid)
     k_points = _cart_from_fractional(model, frac)
     n_ll = model.n_ll
@@ -388,7 +390,7 @@ def build_ac_projected_bundle(
     interaction_controls = interaction or controls.interaction
     model = NonIdealACLLModel(ac_controls)
     momentum_grid = MomentumGrid(grid_controls.n_k)
-    active, bands = _build_active_space(
+    active, bands = build_ac_active_space(
         model,
         momentum_grid,
         active_band=controls.active_band,
@@ -417,6 +419,7 @@ def build_ac_projected_bundle(
 
 __all__ = [
     "ACProjectedBandStructure",
+    "build_ac_active_space",
     "build_ac_density_vertices",
     "build_ac_projected_bundle",
 ]

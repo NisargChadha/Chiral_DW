@@ -5,7 +5,11 @@ import numpy as np
 
 from chiral_dw.ac.kahler import IdealACKahlerModel
 from chiral_dw.ac.nonideal import NonIdealACLLModel
-from chiral_dw.ac.projected import build_ac_projected_bundle
+from chiral_dw.ac.projected import (
+    build_ac_active_space,
+    build_ac_density_vertices,
+    build_ac_projected_bundle,
+)
 from chiral_dw.config import (
     ACProjectedHFParams,
     ContinuumGridParams,
@@ -14,6 +18,8 @@ from chiral_dw.config import (
     FirstShellACParams,
 )
 from chiral_dw.continuum import (
+    ContinuumHFBackend,
+    MomentumGrid,
     TPrimeConstraint,
     ValleyU1Constraint,
     active_basis_frames,
@@ -95,6 +101,31 @@ def test_ac_projected_bundle_shapes_tprime_and_density_identities():
         lhs = vertices.lambda_blocks[q_plus, g0, ik]
         rhs = vertices.lambda_blocks[q_minus, g0, jk].conj().T
         assert np.allclose(lhs, rhs, atol=1e-10)
+
+
+def test_explicit_active_space_and_vertex_path_matches_bundle_builder():
+    params = _small_params()
+    model = NonIdealACLLModel(params.ac)
+    grid = MomentumGrid(params.grid.n_k)
+    active, _bands = build_ac_active_space(
+        model,
+        grid,
+        active_band=params.active_band,
+        diagnostics_n_k=params.band_diagnostics_n_k,
+    )
+    vertices = build_ac_density_vertices(
+        model,
+        active,
+        params.interaction,
+        moire_length_nm=params.moire_length_nm,
+        energy_unit_mev=params.energy_unit_mev,
+    )
+    backend = ContinuumHFBackend(active.h0, vertices, params.interaction)
+    bundle = build_ac_projected_bundle(params)
+
+    assert np.allclose(active.h0, bundle.active.h0)
+    assert np.allclose(vertices.lambda_blocks, bundle.vertices.lambda_blocks)
+    assert np.allclose(backend.h0, bundle.backend.h0)
 
 
 def test_ac_projected_bundle_runs_symmetric_hf_and_embedded_response():
