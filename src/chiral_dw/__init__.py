@@ -2,6 +2,7 @@
 
 from chiral_dw.config import (
     ACConventionParams,
+    ACProjectedHFParams,
     ACResponseWorkflowParams,
     ContinuumGridParams,
     ContinuumHFParams,
@@ -26,6 +27,7 @@ from chiral_dw.config import (
     TMoTe2ACParams,
     UnitsParams,
 )
+from chiral_dw.ac.projected import build_ac_projected_bundle
 from chiral_dw.continuum import (
     build_continuum_bundle,
     build_symmetric_hf_references,
@@ -47,6 +49,7 @@ from chiral_dw.qhfm_benchmark import run_qhfm_charge_benchmark
 
 __all__ = [
     "ACConventionParams",
+    "ACProjectedHFParams",
     "ACResponseWorkflowParams",
     "ContinuumGridParams",
     "ContinuumHFParams",
@@ -71,6 +74,7 @@ __all__ = [
     "TMoTe2ACParams",
     "UnitsParams",
     "KThetaResult",
+    "build_ac_projected_bundle",
     "build_continuum_bundle",
     "build_symmetric_hf_references",
     "compute_cG",

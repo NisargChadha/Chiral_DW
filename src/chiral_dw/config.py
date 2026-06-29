@@ -241,7 +241,7 @@ class ContinuumModelParams(BaseModel):
     plane_wave_shell: int = Field(default=1, ge=0)
     n_bands: int = Field(default=2, ge=1)
     n_active_bands_per_valley: int = Field(default=1, ge=1)
-    active_model: Literal["qiwuzhang", "taige"] = "qiwuzhang"
+    active_model: Literal["qiwuzhang", "taige", "ac_finite_ll"] = "qiwuzhang"
 
 
 class ContinuumInteractionParams(BaseModel):
@@ -309,6 +309,33 @@ class ContinuumWorkflowParams(BaseModel):
     response: ResponseParams = Field(default_factory=ResponseParams)
     domain_wall: DomainWallParams = Field(default_factory=DomainWallParams)
     output_dir: str = "results/continuum_symmetric_hf"
+
+
+class ACProjectedHFParams(BaseModel):
+    """Top-level finite-LL AC projected symmetric-HF response controls."""
+
+    model_config = ConfigDict(frozen=True)
+
+    grid: ContinuumGridParams = Field(default_factory=lambda: ContinuumGridParams(n_k=5))
+    ac: FirstShellACParams | FourierACParams | TMoTe2ACParams = Field(
+        default_factory=lambda: FirstShellACParams(b1=0.2, u1=0.05, n_ll=5)
+    )
+    interaction: ContinuumInteractionParams = Field(
+        default_factory=lambda: ContinuumInteractionParams(
+            coulomb_kind="dimensionless_screened",
+            v0=0.2,
+            q_shell=1,
+            local_field_cutoff=1,
+            gate_distance=2.0,
+        )
+    )
+    hf: ContinuumHFParams = Field(default_factory=ContinuumHFParams)
+    response: ResponseParams = Field(default_factory=lambda: ResponseParams(n_theta=21))
+    active_band: int = Field(default=0, ge=0)
+    band_diagnostics_n_k: int = Field(default=9, ge=2)
+    moire_length_nm: float = Field(default=1.0, gt=0.0)
+    energy_unit_mev: float = Field(default=1.0, gt=0.0)
+    output_dir: str = "results/ac_projected_hf"
 
 
 class GatedInteractionParams(BaseModel):
@@ -549,6 +576,7 @@ class ChargeResponseSummary(BaseModel):
 
 __all__ = [
     "ACConventionParams",
+    "ACProjectedHFParams",
     "ACResponseWorkflowParams",
     "ChargeResponseSummary",
     "ConjugateACBiasSweepParams",
