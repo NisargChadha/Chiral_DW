@@ -7,6 +7,8 @@ from chiral_dw.ac.nonideal import (
     first_shell_potential_coefficients,
     fourier_params_from_first_shell,
     landau_polynomial,
+    second_harmonic_magnetic_coefficients,
+    second_harmonic_potential_coefficients,
 )
 from chiral_dw.config import FirstShellACParams, TMoTe2ACParams
 
@@ -30,6 +32,15 @@ def test_first_shell_coefficients_are_real_c3_and_break_c6():
     assert np.allclose(coeffs[[1, 3, 5]], coeffs[1])
     assert not np.allclose(coeffs[0], coeffs[1])
     assert np.allclose(first_shell_magnetic_coefficients(0.02, 0.11), coeffs)
+
+
+def test_second_harmonic_coefficients_are_real_c3_without_c6_bias():
+    coeffs = second_harmonic_potential_coefficients(u2=-0.07)
+
+    for idx, partner in [(0, 3), (1, 4), (2, 5)]:
+        assert np.allclose(coeffs[partner], coeffs[idx].conjugate())
+    assert np.allclose(coeffs, -0.07)
+    assert np.allclose(second_harmonic_magnetic_coefficients(0.05), 0.05)
 
 
 def test_first_shell_field_has_zero_average_and_coulomb_gauge():
@@ -57,6 +68,28 @@ def test_fourier_params_reproduce_first_shell_hamiltonian():
     model_fourier = NonIdealACLLModel(fourier_params_from_first_shell(first_shell))
     k = np.array([0.13, -0.27])
 
+    assert np.allclose(model_first.hamiltonian(k), model_fourier.hamiltonian(k), atol=1e-12)
+
+
+def test_fourier_params_reproduce_second_harmonic_hamiltonian():
+    first_shell = FirstShellACParams(
+        b1=0.15,
+        b2=-0.04,
+        b1_c3=0.03,
+        u1=-0.08,
+        u2=0.06,
+        u1_c3=0.04,
+        n_ll=5,
+    )
+    model_first = NonIdealACLLModel(first_shell)
+    model_fourier = NonIdealACLLModel(fourier_params_from_first_shell(first_shell))
+    G, U, B = model_first.fourier_coefficients()
+    k = np.array([0.13, -0.27])
+
+    assert len(G) == 12
+    assert np.allclose(G[6:], 2.0 * model_first.fields.G_shell)
+    assert np.allclose(U[6:], first_shell.u2)
+    assert np.allclose(B[6:], -0.5 * first_shell.b2)
     assert np.allclose(model_first.hamiltonian(k), model_fourier.hamiltonian(k), atol=1e-12)
 
 

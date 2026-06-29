@@ -87,12 +87,14 @@ class FourierCoefficient(BaseModel):
 
 
 class FirstShellACParams(BaseModel):
-    """First-shell nonideal AC parameters in units of omega_c."""
+    """Low-harmonic nonideal AC parameters in units of omega_c."""
 
     model_config = ConfigDict(frozen=True)
 
     b1: float = 0.0
     u1: float = 0.0
+    b2: float = 0.0
+    u2: float = 0.0
     b1_c3: float = 0.0
     u1_c3: float = 0.0
     n_ll: int = Field(default=5, ge=1)
@@ -440,9 +442,16 @@ class IdealConjugateLLLChargeBenchmarkParams(BaseModel):
             raise ValueError("real_space.n_r must be at least 3 for open-patch plaquettes")
         if self.ac.n_ll != 1:
             raise ValueError("the ideal conjugate LLL benchmark requires ac.n_ll=1")
-        harmonics = (self.ac.b1, self.ac.u1, self.ac.b1_c3, self.ac.u1_c3)
+        harmonics = (
+            self.ac.b1,
+            self.ac.u1,
+            self.ac.b2,
+            self.ac.u2,
+            self.ac.b1_c3,
+            self.ac.u1_c3,
+        )
         if any(abs(float(value)) > 1e-15 for value in harmonics):
-            raise ValueError("ideal conjugate LLL benchmark requires b1=u1=b1_c3=u1_c3=0")
+            raise ValueError("ideal conjugate LLL benchmark requires b1=u1=b2=u2=b1_c3=u1_c3=0")
         if self.width_lB >= self.radius_lB:
             raise ValueError("width_lB must be smaller than radius_lB")
         if self.radius_lB + 3.0 * self.width_lB >= 0.5 * self.patch_length_lB:

@@ -88,15 +88,21 @@ from chiral_dw.continuum import (
 # ## Parameters and Conventions
 #
 # The first cell fixes the phenomenological AC model and the numerical controls.
-# The two physical knobs are the first-shell Fourier amplitudes used by the
-# finite-LL Hamiltonian:
+# The noninteracting Hamiltonian is parameterized by low Fourier harmonics of
+# the magnetic-field variation and residual scalar potential:
 #
 # - `b1` controls the first-shell variation of the effective magnetic field in
 #   the convention `-B'(r) A_M/(2*pi)`.
 # - `u1` controls the first-shell residual scalar potential `U(r)/omega_c`,
 #   where the adiabatic paper defines `U = Delta_+ - omega_c xi`.
+# - `b2` and `u2` are the corresponding second harmonics on the six vectors
+#   `2*G_j`.
 #
-# Energies in the first-shell AC model are measured in units of the average
+# This notebook evaluates one fixed point `(b1,u1,b2,u2)`. The companion cluster
+# script `scripts/scan_ac_projected_hf_b2_u2.py` sweeps the `b2,u2` plane while
+# holding `b1,u1` fixed.
+#
+# Energies in this low-harmonic AC model are measured in units of the average
 # cyclotron energy `omega_c`. The default interaction below is therefore the
 # dimensionless screened interaction used by the HF backend. To use physical
 # dual-gate Coulomb matrix elements, switch `coulomb_kind` to `"dual_gate"` and
@@ -112,12 +118,14 @@ from chiral_dw.continuum import (
 # result `cG ~= -1/(4*pi)` in the current sign convention.
 
 # %%
-b1 = 0.0
+b1 = 0.3
 u1 = 0.0
-n_ll = 1
+b2 = 0.0
+u2 = 0.0
+n_ll = 8
 active_band = 0
 
-n_k = 5
+n_k = 12
 q_shell = 1
 local_field_cutoff = 1
 interaction_strength_scale = 0.2
@@ -130,19 +138,19 @@ smear_length_nm = 0.347
 moire_length_nm = 1.0
 energy_unit_mev = 1.0
 
-hf_max_iter = 220
+hf_max_iter = 800
 hf_mixing_method = "oda"
 hf_mixing = 0.45
 allow_nonconverged_references = False
-n_theta = 20
-n_phi = 2
+n_theta = 81
+n_phi = 5
 phi_step = 0.2
 output_dir = ROOT / "results" / "ac_projected_hf"
 output_dir.mkdir(parents=True, exist_ok=True)
 
 params = ACProjectedHFParams(
     grid=ContinuumGridParams(n_k=n_k),
-    ac=FirstShellACParams(b1=b1, u1=u1, n_ll=n_ll),
+    ac=FirstShellACParams(b1=b1, u1=u1, b2=b2, u2=u2, n_ll=n_ll),
     interaction=ContinuumInteractionParams(
         coulomb_kind=coulomb_kind,
         v0=interaction_strength_scale,
@@ -165,6 +173,29 @@ params = ACProjectedHFParams(
     output_dir=str(output_dir),
 )
 params
+
+# %% [markdown]
+# ## Optional b2-u2 Cluster Sweep
+#
+# The single-point notebook above is useful for inspecting one Hamiltonian and
+# its projected HF references. For a phase diagram, submit the Slurm array below
+# from the cluster checkout. It keeps the first harmonics fixed at the notebook
+# values `b1,u1` and sweeps the second harmonics over the `B2_*` and `U2_*`
+# ranges.
+
+# %%
+b2_u2_sweep_command = (
+    "sbatch --export=ALL,"
+    f"B1_FIXED={b1},U1_FIXED={u1},"
+    "B2_MIN=-0.3,B2_MAX=0.3,N_B2=11,"
+    "U2_MIN=-0.3,U2_MAX=0.3,N_U2=11 "
+    "jobs/scan_ac_projected_hf_b2_u2_array.sh"
+)
+print(b2_u2_sweep_command)
+print(
+    "merge with: python scripts/scan_ac_projected_hf_b2_u2.py "
+    "--output-root results/ac_projected_hf_b2_u2_n11_nk12_nll8 --merge-only"
+)
 
 # %% [markdown]
 # ## Single-Particle Finite-LL Band
@@ -237,7 +268,7 @@ for tick in path_ticks:
 ax.set_xticks([path_x[t] for t in path_ticks])
 ax.set_xticklabels(path_labels)
 ax.set_ylabel("energy / omega_c")
-ax.set_title("finite-LL AC band structure")
+ax.set_title(f"finite-LL AC bands: b1={b1:g}, u1={u1:g}, b2={b2:g}, u2={u2:g}")
 fig.tight_layout()
 fig.savefig(output_dir / "single_particle_band_structure.png", dpi=180)
 plt.show()

@@ -58,16 +58,42 @@ def first_shell_magnetic_coefficients(b1: float, b1_c3: float = 0.0) -> np.ndarr
     return first_shell_potential_coefficients(b1, b1_c3)
 
 
+def second_harmonic_vectors(fields: AdiabaticMoireFields) -> np.ndarray:
+    """Return the six second-harmonic reciprocal vectors 2*G_j."""
+    return 2.0 * fields.G_shell.copy()
+
+
+def second_harmonic_potential_coefficients(u2: float) -> np.ndarray:
+    """Return real-space-real C3 second-harmonic potential coefficients."""
+    return first_shell_potential_coefficients(u2, 0.0)
+
+
+def second_harmonic_magnetic_coefficients(b2: float) -> np.ndarray:
+    """Return second-harmonic coefficients for -B'(r) A_M/(2*pi)."""
+    return first_shell_potential_coefficients(b2, 0.0)
+
+
+def _low_harmonic_dimensionless_coefficients(
+    fields: AdiabaticMoireFields, params: FirstShellACParams
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    G_parts = [fields.G_shell.copy()]
+    U_parts = [first_shell_potential_coefficients(params.u1, params.u1_c3)]
+    b_parts = [first_shell_magnetic_coefficients(params.b1, params.b1_c3)]
+    if abs(params.u2) > 0.0 or abs(params.b2) > 0.0:
+        G_parts.append(second_harmonic_vectors(fields))
+        U_parts.append(second_harmonic_potential_coefficients(params.u2))
+        b_parts.append(second_harmonic_magnetic_coefficients(params.b2))
+    return np.concatenate(G_parts), np.concatenate(U_parts), np.concatenate(b_parts)
+
+
 def fourier_params_from_first_shell(params: FirstShellACParams) -> FourierACParams:
     """Convert first-shell parameters to explicit physical Fourier coefficients."""
     fields = AdiabaticMoireFields(TMoTe2ACParams(a_m=params.a_m, n_ll=params.n_ll))
-    G = fields.G_shell.copy()
-    B_coeff = -(2.0 * np.pi / fields.unit_cell_area) * first_shell_magnetic_coefficients(
-        params.b1, params.b1_c3
-    )
+    G, U_coeff, b_dimless_coeff = _low_harmonic_dimensionless_coefficients(fields, params)
+    B_coeff = -(2.0 * np.pi / fields.unit_cell_area) * b_dimless_coeff
     return FourierACParams(
         g_vectors=tuple((float(g[0]), float(g[1])) for g in G),
-        u_coefficients=tuple(FourierCoefficient.from_complex(z) for z in first_shell_potential_coefficients(params.u1, params.u1_c3)),
+        u_coefficients=tuple(FourierCoefficient.from_complex(z) for z in U_coeff),
         b_coefficients=tuple(FourierCoefficient.from_complex(z) for z in B_coeff),
         n_ll=params.n_ll,
         material=params.material,
@@ -98,11 +124,10 @@ class NonIdealACLLModel:
     def first_shell_fourier_coefficients(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         if not isinstance(self.params, FirstShellACParams):
             raise TypeError("first_shell_fourier_coefficients requires FirstShellACParams")
-        G = self.first_shell
-        U_coeff = first_shell_potential_coefficients(self.params.u1, self.params.u1_c3)
-        B_over_2m_coeff = -0.5 * first_shell_magnetic_coefficients(
-            self.params.b1, self.params.b1_c3
+        G, U_coeff, b_dimless_coeff = _low_harmonic_dimensionless_coefficients(
+            self.fields, self.params
         )
+        B_over_2m_coeff = -0.5 * b_dimless_coeff
         return G, U_coeff, B_over_2m_coeff
 
     @staticmethod
@@ -155,10 +180,10 @@ class NonIdealACLLModel:
     def vector_potential_coefficients(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Return G, B'_G, and Coulomb-gauge A'_G."""
         if isinstance(self.params, FirstShellACParams):
-            G = self.first_shell
-            B_coeff = -(2.0 * np.pi / self.fields.unit_cell_area) * first_shell_magnetic_coefficients(
-                self.params.b1, self.params.b1_c3
+            G, _, b_dimless_coeff = _low_harmonic_dimensionless_coefficients(
+                self.fields, self.params
             )
+            B_coeff = -(2.0 * np.pi / self.fields.unit_cell_area) * b_dimless_coeff
         else:
             self.fourier_coefficients()
             assert self._fourier_cache is not None

@@ -283,3 +283,8 @@ def test_ac_projected_notebook_is_paired_when_present():
     assert "ACBandOverlapProvider" in text
     assert "k_theta_from_ac_projectors" in text
     assert "ac_projector_chern" in text
+    assert "b2 = 0.0" in text
+    assert "u2 = 0.0" in text
+    assert "FirstShellACParams(b1=b1, u1=u1, b2=b2, u2=u2, n_ll=n_ll)" in text
+    assert "scan_ac_projected_hf_b2_u2.py" in text
+    assert "jobs/scan_ac_projected_hf_b2_u2_array.sh" in text

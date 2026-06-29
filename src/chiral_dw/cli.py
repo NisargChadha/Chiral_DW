@@ -33,6 +33,8 @@ def _ac_cg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", default="results/ac_cg")
     parser.add_argument("--b1", type=float, default=0.0)
     parser.add_argument("--u1", type=float, default=0.0)
+    parser.add_argument("--b2", type=float, default=0.0)
+    parser.add_argument("--u2", type=float, default=0.0)
     parser.add_argument("--b1-c3", type=float, default=0.0)
     parser.add_argument("--u1-c3", type=float, default=0.0)
     parser.add_argument("--n-ll", type=int, default=3)
@@ -56,6 +58,8 @@ def run_ac_cg_console() -> None:
         ac=FirstShellACParams(
             b1=args.b1,
             u1=args.u1,
+            b2=args.b2,
+            u2=args.u2,
             b1_c3=args.b1_c3,
             u1_c3=args.u1_c3,
             n_ll=args.n_ll,
@@ -125,6 +129,8 @@ def _qhfm_charge_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", default="results/qhfm_charge_benchmark")
     parser.add_argument("--b1", type=float, default=0.2)
     parser.add_argument("--u1", type=float, default=0.1)
+    parser.add_argument("--b2", type=float, default=0.0)
+    parser.add_argument("--u2", type=float, default=0.0)
     parser.add_argument("--b1-c3", type=float, default=0.0)
     parser.add_argument("--u1-c3", type=float, default=0.0)
     parser.add_argument("--n-ll", type=int, default=5)
@@ -145,6 +151,8 @@ def run_qhfm_charge_console() -> None:
         ac=FirstShellACParams(
             b1=args.b1,
             u1=args.u1,
+            b2=args.b2,
+            u2=args.u2,
             b1_c3=args.b1_c3,
             u1_c3=args.u1_c3,
             n_ll=args.n_ll,

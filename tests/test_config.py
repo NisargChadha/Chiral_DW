@@ -117,6 +117,10 @@ def test_ideal_conjugate_lll_params_enforce_flat_opposite_chern_limit():
     with pytest.raises(ValidationError):
         IdealConjugateLLLChargeBenchmarkParams(ac=FirstShellACParams(u1=0.1, n_ll=1))
     with pytest.raises(ValidationError):
+        IdealConjugateLLLChargeBenchmarkParams(ac=FirstShellACParams(b2=0.1, n_ll=1))
+    with pytest.raises(ValidationError):
+        IdealConjugateLLLChargeBenchmarkParams(ac=FirstShellACParams(u2=0.1, n_ll=1))
+    with pytest.raises(ValidationError):
         IdealConjugateLLLChargeBenchmarkParams(ac=FirstShellACParams(n_ll=2))
     with pytest.raises(ValidationError):
         IdealConjugateLLLChargeBenchmarkParams(real_space=RealSpaceGridParams(n_r=2))
