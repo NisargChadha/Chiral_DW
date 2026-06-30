@@ -36,8 +36,32 @@ from chiral_dw.continuum.taige import taige_interaction_params, taige_model_para
 from chiral_dw.continuum.workflow import run_taige_branch_selected_symmetric_hf_workflow  # noqa: E402
 
 
+class TaigeFiniteSizePhasePoint(BaseModel):
+    """One displacement/twist point in the finite-size phase diagram."""
+
+    model_config = ConfigDict(frozen=True)
+
+    u_index: int = Field(ge=0)
+    theta_index: int = Field(ge=0)
+    u_D: float
+    theta_deg: float
+
+    @computed_field
+    @property
+    def label(self) -> str:
+        return f"u_{self.u_index:03d}_theta_{self.theta_index:03d}"
+
+    def as_taige_point(self) -> TaigeSweepPoint:
+        return TaigeSweepPoint(
+            u_index=self.u_index,
+            theta_index=self.theta_index,
+            u_D=self.u_D,
+            theta_deg=self.theta_deg,
+        )
+
+
 class TaigeFiniteSizePoint(BaseModel):
-    """One finite-size sweep point."""
+    """One mesh evaluation inside a finite-size phase point."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -50,8 +74,18 @@ class TaigeFiniteSizePoint(BaseModel):
 
     @computed_field
     @property
+    def phase_label(self) -> str:
+        return f"u_{self.u_index:03d}_theta_{self.theta_index:03d}"
+
+    @computed_field
+    @property
+    def mesh_label(self) -> str:
+        return f"nk_{self.n_k:03d}"
+
+    @computed_field
+    @property
     def label(self) -> str:
-        return f"nk_{self.n_k:03d}_u_{self.u_index:03d}_theta_{self.theta_index:03d}"
+        return f"{self.phase_label}_{self.mesh_label}"
 
     def as_taige_point(self) -> TaigeSweepPoint:
         return TaigeSweepPoint(
@@ -75,19 +109,19 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--output-root",
-        default="results/taige_cg_finite_size_nk12_20_u0_theta3p5",
+        default="results/taige_cg_finite_size_nk18_24_u0_15_theta2_4p2",
     )
 
-    parser.add_argument("--n-k-list", default="12,13,14,15,16,17,18,19,20")
+    parser.add_argument("--n-k-list", default="18,20,22,24")
     parser.add_argument("--u-d", type=float, default=None, help="Run one explicit displacement value in meV.")
     parser.add_argument("--theta-deg", type=float, default=None, help="Run one explicit twist angle in degrees.")
     parser.add_argument("--u-d-min", type=float, default=0.0)
-    parser.add_argument("--u-d-max", type=float, default=0.0)
-    parser.add_argument("--n-u-d", type=int, default=1)
-    parser.add_argument("--theta-min-deg", type=float, default=3.5)
-    parser.add_argument("--theta-max-deg", type=float, default=3.5)
-    parser.add_argument("--n-twist", type=int, default=1)
-    parser.add_argument("--task-id", type=int, default=None, help="SLURM-style flat grid index.")
+    parser.add_argument("--u-d-max", type=float, default=15.0)
+    parser.add_argument("--n-u-d", type=int, default=21)
+    parser.add_argument("--theta-min-deg", type=float, default=2.0)
+    parser.add_argument("--theta-max-deg", type=float, default=4.2)
+    parser.add_argument("--n-twist", type=int, default=21)
+    parser.add_argument("--task-id", type=int, default=None, help="SLURM-style flat phase-grid index.")
 
     parser.add_argument("--plane-wave-shell", type=int, default=5)
     parser.add_argument("--n-bands", type=int, default=2)
@@ -122,6 +156,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--domain-winding", type=int, default=1)
 
     parser.add_argument("--no-chern", action="store_true", help="Skip noninteracting and HF Chern diagnostics.")
+    parser.add_argument("--compute-finite-q-ivc", action="store_true", help="Opt into the Taige IVC- finite-Q diagnostic branch.")
     parser.add_argument("--no-finite-q-ivc", action="store_true", help="Skip the Taige IVC- finite-Q diagnostic branch.")
     parser.add_argument(
         "--finite-q-shift-policy",
@@ -161,10 +196,9 @@ def _axis_values(single: float | None, lower: float, upper: float, count: int, n
     return np.linspace(float(lower), float(upper), n)
 
 
-def _all_points(args: argparse.Namespace) -> list[TaigeFiniteSizePoint]:
+def _all_phase_points(args: argparse.Namespace) -> list[TaigeFiniteSizePhasePoint]:
     if (args.u_d is None) ^ (args.theta_deg is None):
         raise ValueError("--u-d and --theta-deg must be supplied together for an explicit single point")
-    nks = _parse_int_list(args.n_k_list)
     u_values = _axis_values(args.u_d, args.u_d_min, args.u_d_max, args.n_u_d, "u_D")
     theta_values = _axis_values(
         args.theta_deg,
@@ -174,31 +208,55 @@ def _all_points(args: argparse.Namespace) -> list[TaigeFiniteSizePoint]:
         "theta",
     )
     return [
-        TaigeFiniteSizePoint(
-            n_k_index=ink,
-            n_k=int(n_k),
+        TaigeFiniteSizePhasePoint(
             u_index=iu,
             theta_index=it,
             u_D=float(u),
             theta_deg=float(theta),
         )
-        for ink, n_k in enumerate(nks)
         for iu, u in enumerate(u_values)
         for it, theta in enumerate(theta_values)
     ]
 
 
-def _selected_points(args: argparse.Namespace) -> list[TaigeFiniteSizePoint]:
-    points = _all_points(args)
+def _mesh_points_for_phases(
+    args: argparse.Namespace,
+    phases: list[TaigeFiniteSizePhasePoint],
+) -> list[TaigeFiniteSizePoint]:
+    nks = _parse_int_list(args.n_k_list)
+    return [
+        TaigeFiniteSizePoint(
+            n_k_index=ink,
+            n_k=int(n_k),
+            u_index=phase.u_index,
+            theta_index=phase.theta_index,
+            u_D=phase.u_D,
+            theta_deg=phase.theta_deg,
+        )
+        for phase in phases
+        for ink, n_k in enumerate(nks)
+    ]
+
+
+def _all_points(args: argparse.Namespace) -> list[TaigeFiniteSizePoint]:
+    return _mesh_points_for_phases(args, _all_phase_points(args))
+
+
+def _selected_phase_points(args: argparse.Namespace) -> list[TaigeFiniteSizePhasePoint]:
+    phases = _all_phase_points(args)
     if args.task_id is None:
-        return points
+        return phases
     task_id = int(args.task_id)
     if task_id < 0:
         raise ValueError("--task-id must be nonnegative")
-    if task_id >= len(points):
-        print(f"Task {task_id} is outside mesh size {len(points)}; exiting.")
+    if task_id >= len(phases):
+        print(f"Task {task_id} is outside phase-grid size {len(phases)}; exiting.")
         return []
-    return [points[task_id]]
+    return [phases[task_id]]
+
+
+def _selected_points(args: argparse.Namespace) -> list[TaigeFiniteSizePoint]:
+    return _mesh_points_for_phases(args, _selected_phase_points(args))
 
 
 def _normalize_policy(text: str) -> str:
@@ -268,11 +326,12 @@ def _params_for_point(
 
 def _diagnostic_params(args: argparse.Namespace) -> TaigeSweepDiagnosticsParams:
     branch_policy = str(args.ivc_branch_policy).replace("-", "_")
-    if args.no_finite_q_ivc:
+    compute_finite_q = bool(args.compute_finite_q_ivc and not args.no_finite_q_ivc)
+    if not compute_finite_q:
         branch_policy = "q0"
     return TaigeSweepDiagnosticsParams(
         compute_chern_numbers=not args.no_chern,
-        compute_finite_q_ivc=not args.no_finite_q_ivc,
+        compute_finite_q_ivc=compute_finite_q,
         finite_q_shift_policy=_normalize_policy(args.finite_q_shift_policy),  # type: ignore[arg-type]
         ivc_branch_policy=branch_policy,  # type: ignore[arg-type]
         ivc_branch_tie_atol=float(args.ivc_branch_tie_atol),
@@ -284,7 +343,7 @@ def _diagnostic_params(args: argparse.Namespace) -> TaigeSweepDiagnosticsParams:
 
 
 def _point_dir(output_root: Path, point: TaigeFiniteSizePoint) -> Path:
-    return output_root / "points" / point.label
+    return output_root / "points" / point.phase_label / point.mesh_label
 
 
 def _write_json(path: Path, payload: Any) -> None:
@@ -327,6 +386,8 @@ def _finite_size_fields(point: TaigeFiniteSizePoint) -> dict[str, Any]:
         "n_k_index": int(point.n_k_index),
         "n_k": int(point.n_k),
         "inv_n_k": float(1.0 / point.n_k),
+        "inv_n_k_squared": float(1.0 / (point.n_k * point.n_k)),
+        "phase_point_label": point.phase_label,
         "finite_size_point_label": point.label,
     }
 
@@ -341,10 +402,38 @@ def _add_finite_size_fields(
 
 def _stack_point_table(output_root: Path, filename: str, output_name: str) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    for path in sorted((output_root / "points").glob(f"*/{filename}")):
+    for path in sorted((output_root / "points").rglob(filename)):
         rows.extend(_read_csv(path))
     _write_csv(output_root / output_name, rows)
     return rows
+
+
+def _float_or_nan(value: Any) -> float:
+    if value is None or value == "":
+        return float("nan")
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float("nan")
+
+
+def _bool_or_false(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y"}
+    return False
+
+
+def _largest_mesh_row(group: list[dict[str, Any]]) -> dict[str, Any]:
+    return max(group, key=lambda row: int(row["n_k"]))
+
+
+def _finite_min(values: list[float]) -> float:
+    finite = [value for value in values if np.isfinite(value)]
+    return float(min(finite)) if finite else float("nan")
 
 
 def _fit_cg_rows(rows: list[dict[str, Any]], fit_degree: int) -> list[dict[str, Any]]:
@@ -354,52 +443,93 @@ def _fit_cg_rows(rows: list[dict[str, Any]], fit_degree: int) -> list[dict[str, 
 
     fit_rows: list[dict[str, Any]] = []
     for (u_index, theta_index), group in sorted(grouped.items()):
+        group = sorted(group, key=lambda row: int(row["n_k"]))
+        largest = _largest_mesh_row(group)
         usable = []
         for row in group:
-            try:
-                cG = float(row["cG"])
-                inv_n = float(row["inv_n_k"])
-            except (KeyError, TypeError, ValueError):
-                continue
+            cG = _float_or_nan(row.get("cG"))
+            inv_n = _float_or_nan(row.get("inv_n_k"))
             if np.isfinite(cG) and np.isfinite(inv_n):
                 usable.append((inv_n, cG, row))
-        if not usable:
-            continue
-        usable.sort(key=lambda item: item[0])
-        x = np.asarray([item[0] for item in usable], dtype=float)
-        y = np.asarray([item[1] for item in usable], dtype=float)
-        degree = min(max(int(fit_degree), 0), max(x.size - 1, 0))
-        coeffs = np.polyfit(x, y, degree) if degree > 0 else np.asarray([float(np.mean(y))])
-        fit = np.poly1d(coeffs)
-        residual = y - fit(x)
-        template = usable[0][2]
-        fit_rows.append(
-            {
-                "u_index": u_index,
-                "theta_index": theta_index,
-                "u_D_meV": float(template["u_D_meV"]),
-                "theta_deg": float(template["theta_deg"]),
-                "fit_degree": int(degree),
-                "n_fit": int(x.size),
-                "n_k_min": int(min(int(item[2]["n_k"]) for item in usable)),
-                "n_k_max": int(max(int(item[2]["n_k"]) for item in usable)),
-                "cG_extrapolated_inv_n0": float(fit(0.0)),
-                "cG_at_largest_nk": float(
-                    usable[min(range(len(usable)), key=lambda idx: usable[idx][0])][1]
-                ),
-                "rmse": float(np.sqrt(np.mean(residual * residual))),
-                "coefficients_descending_json": json.dumps([float(c) for c in coeffs]),
-            }
-        )
+        texture_valid_count = sum(_bool_or_false(row.get("texture_valid")) for row in group)
+        texture_invalid_count = len(group) - texture_valid_count
+        degree = 0
+        coeffs = np.asarray([], dtype=float)
+        cG_extrapolated = float("nan")
+        cG_slope = float("nan")
+        rmse = float("nan")
+        if usable:
+            usable.sort(key=lambda item: item[0])
+            x = np.asarray([item[0] for item in usable], dtype=float)
+            y = np.asarray([item[1] for item in usable], dtype=float)
+            degree = min(max(int(fit_degree), 0), max(x.size - 1, 0))
+            coeffs = np.polyfit(x, y, degree) if degree > 0 else np.asarray([float(np.mean(y))])
+            fit = np.poly1d(coeffs)
+            residual = y - fit(x)
+            cG_extrapolated = float(fit(0.0))
+            cG_slope = float(coeffs[-2]) if degree >= 1 else 0.0
+            rmse = float(np.sqrt(np.mean(residual * residual)))
+
+        vp_plus_largest = _float_or_nan(largest.get("vp_plus_energy_per_cell"))
+        vp_minus_largest = _float_or_nan(largest.get("vp_minus_energy_per_cell"))
+        row_out: dict[str, Any] = {
+            "u_index": u_index,
+            "theta_index": theta_index,
+            "u_D_meV": _float_or_nan(largest.get("u_D_meV")),
+            "theta_deg": _float_or_nan(largest.get("theta_deg")),
+            "fit_degree": int(degree),
+            "fit_degree_requested": int(fit_degree),
+            "n_mesh": int(len(group)),
+            "n_fit": int(len(usable)),
+            "n_texture_valid": int(texture_valid_count),
+            "n_texture_invalid": int(texture_invalid_count),
+            "n_k_min": int(min(int(row["n_k"]) for row in group)),
+            "n_k_max": int(max(int(row["n_k"]) for row in group)),
+            "largest_n_k": int(largest["n_k"]),
+            "cG_extrapolated_inv_n0": cG_extrapolated,
+            "cG_fit_slope_inv_n": cG_slope,
+            "cG_at_largest_nk": _float_or_nan(largest.get("cG")),
+            "rmse": rmse,
+            "coefficients_descending_json": json.dumps([float(c) for c in coeffs]),
+            "texture_valid_largest_nk": _bool_or_false(largest.get("texture_valid")),
+            "texture_invalid_reason_largest_nk": largest.get("texture_invalid_reason"),
+            "hf_ground_state_largest_nk": largest.get("hf_ground_state"),
+            "gap_min_largest_nk": _float_or_nan(largest.get("gap_min")),
+            "gap_min_over_meshes": _finite_min([_float_or_nan(row.get("gap_min")) for row in group]),
+            "vp_reference_name_largest_nk": largest.get("vp_reference_name"),
+            "vp_reference_energy_per_cell_largest_nk": _float_or_nan(
+                largest.get("vp_reference_energy_per_cell")
+            ),
+            "vp_plus_energy_per_cell_largest_nk": vp_plus_largest,
+            "vp_minus_energy_per_cell_largest_nk": vp_minus_largest,
+            "vp_plus_minus_vp_minus_energy_per_cell_largest_nk": (
+                float(vp_plus_largest - vp_minus_largest)
+                if np.isfinite(vp_plus_largest) and np.isfinite(vp_minus_largest)
+                else float("nan")
+            ),
+            "ivc_q0_energy_per_cell_largest_nk": _float_or_nan(
+                largest.get("ivc_q0_energy_per_cell")
+            ),
+            "ivc_q0_minus_vp_energy_per_cell_largest_nk": _float_or_nan(
+                largest.get("ivc_q0_minus_vp_energy_per_cell")
+            ),
+            "selected_ivc_minus_vp_energy_per_cell_largest_nk": _float_or_nan(
+                largest.get("selected_ivc_minus_vp_energy_per_cell")
+            ),
+        }
+        for key, value in largest.items():
+            if str(key).startswith("chern_"):
+                row_out[f"largest_nk_{key}"] = value
+        fit_rows.append(row_out)
     return fit_rows
 
 
 def merge_point_summaries(output_root: Path, *, fit_degree: int) -> list[dict[str, Any]]:
     rows = [
         _load_point_summary(path)
-        for path in sorted((output_root / "points").glob("*/point_summary.json"))
+        for path in sorted((output_root / "points").rglob("point_summary.json"))
     ]
-    rows.sort(key=lambda row: (int(row["n_k_index"]), int(row["u_index"]), int(row["theta_index"])))
+    rows.sort(key=lambda row: (int(row["u_index"]), int(row["theta_index"]), int(row["n_k_index"])))
     _write_csv(output_root / "sweep.csv", rows)
     fit_rows = _fit_cg_rows(rows, fit_degree)
     _write_csv(output_root / "finite_size_fits.csv", fit_rows)
@@ -453,22 +583,45 @@ def merge_point_summaries(output_root: Path, *, fit_degree: int) -> list[dict[st
     return rows
 
 
-def _write_plan(output_root: Path, points: list[TaigeFiniteSizePoint], args: argparse.Namespace) -> None:
-    rows = [
+def _write_plan(
+    output_root: Path,
+    phases: list[TaigeFiniteSizePhasePoint],
+    points: list[TaigeFiniteSizePoint],
+    args: argparse.Namespace,
+) -> None:
+    phase_rows = [
+        phase.model_dump(mode="json") | {"phase_dir": str(output_root / "points" / phase.label)}
+        for phase in phases
+    ]
+    mesh_rows = [
         point.model_dump(mode="json") | {"point_dir": str(_point_dir(output_root, point))}
         for point in points
     ]
-    _write_csv(output_root / "sweep_plan.csv", rows)
+    _write_csv(output_root / "sweep_phase_plan.csv", phase_rows)
+    _write_csv(output_root / "sweep_plan.csv", mesh_rows)
+    args_json = {
+        key: value
+        for key, value in vars(args).items()
+        if isinstance(value, (str, int, float, bool, type(None)))
+    }
+    _write_json(
+        output_root / "sweep_phase_plan.json",
+        {
+            "phase_points": phase_rows,
+            "n_phase_points": len(phase_rows),
+            "args": args_json,
+        },
+    )
     _write_json(
         output_root / "sweep_plan.json",
         {
-            "points": rows,
-            "n_points": len(rows),
-            "args": {
-                key: value
-                for key, value in vars(args).items()
-                if isinstance(value, (str, int, float, bool, type(None)))
-            },
+            "points": mesh_rows,
+            "mesh_points": mesh_rows,
+            "phase_points": phase_rows,
+            "n_points": len(mesh_rows),
+            "n_mesh_points": len(mesh_rows),
+            "n_phase_points": len(phase_rows),
+            "args": args_json,
         },
     )
 
@@ -515,13 +668,13 @@ def run_point(
 
     params = _params_for_point(args, point, point_dir)
     _write_json(point_dir / "point_params.json", params.model_dump(mode="json"))
+    diagnostic_controls = _diagnostic_params(args)
     print(
         "Running Taige finite-size cG "
         f"n_k={point.n_k} u_D={point.u_D:.8g} meV theta={point.theta_deg:.8g} deg "
-        f"finite_q_shift_policy={args.finite_q_shift_policy}"
+        f"finite_q_enabled={diagnostic_controls.compute_finite_q_ivc}"
     )
     start = time.perf_counter()
-    diagnostic_controls = _diagnostic_params(args)
     result = run_taige_branch_selected_symmetric_hf_workflow(
         params,
         finite_q_enabled=diagnostic_controls.compute_finite_q_ivc,
@@ -565,7 +718,7 @@ def run_point(
     )
     print(
         f"Finished {point.label}: cG={row['cG']:.12g} "
-        f"finite_q_exact={row.get('finite_q_exact')} elapsed={seconds:.1f}s"
+        f"texture_valid={row.get('texture_valid')} elapsed={seconds:.1f}s"
     )
     return row
 
@@ -575,7 +728,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     finite_q_policy = _normalize_policy(args.finite_q_shift_policy)
     nks = _parse_int_list(args.n_k_list)
-    if not args.no_finite_q_ivc and finite_q_policy == "exact":
+    compute_finite_q = bool(args.compute_finite_q_ivc and not args.no_finite_q_ivc)
+    if compute_finite_q and finite_q_policy == "exact":
         bad = [n for n in nks if n % 6]
         if bad:
             parser.error(
@@ -593,10 +747,15 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Merged {len(rows)} point summaries into {output_root / 'sweep.csv'}")
         return 0
 
-    points = _selected_points(args)
-    _write_plan(output_root, points, args)
+    phases = _selected_phase_points(args)
+    points = _mesh_points_for_phases(args, phases)
+    _write_plan(output_root, phases, points, args)
     if args.dry_run:
-        print(f"Wrote dry-run plan with {len(points)} selected point(s) to {output_root}")
+        print(
+            "Wrote dry-run plan with "
+            f"{len(phases)} selected phase point(s) and {len(points)} mesh evaluation(s) "
+            f"to {output_root}"
+        )
         return 0
     if not points:
         return 0

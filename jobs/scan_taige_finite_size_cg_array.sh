@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH -J taige_fs_cG
 #SBATCH -p serial_requeue
-#SBATCH --array=0-8
+#SBATCH --array=0-440
 #SBATCH -t 24:00:00
 #SBATCH -c 1
 #SBATCH --mem=24G
@@ -20,15 +20,15 @@ mkdir -p logs
 
 # Override any value with:
 # sbatch --export=ALL,NAME=value jobs/scan_taige_finite_size_cg_array.sh
-OUTPUT_ROOT=${OUTPUT_ROOT:-"results/taige_cg_finite_size_nk12_20_u0_theta3p5"}
+OUTPUT_ROOT=${OUTPUT_ROOT:-"results/taige_cg_finite_size_nk18_24_u0_15_theta2_4p2"}
 
-N_K_LIST=${N_K_LIST:-"12,13,14,15,16,17,18,19,20"}
+N_K_LIST=${N_K_LIST:-"18,20,22,24"}
 U_D_MIN=${U_D_MIN:-"0.0"}
-U_D_MAX=${U_D_MAX:-"0.0"}
-N_U_D=${N_U_D:-"1"}
-THETA_MIN_DEG=${THETA_MIN_DEG:-"3.5"}
-THETA_MAX_DEG=${THETA_MAX_DEG:-"3.5"}
-N_TWIST=${N_TWIST:-"1"}
+U_D_MAX=${U_D_MAX:-"15.0"}
+N_U_D=${N_U_D:-"21"}
+THETA_MIN_DEG=${THETA_MIN_DEG:-"2.0"}
+THETA_MAX_DEG=${THETA_MAX_DEG:-"4.2"}
+N_TWIST=${N_TWIST:-"21"}
 
 PLANE_WAVE_SHELL=${PLANE_WAVE_SHELL:-"5"}
 N_BANDS=${N_BANDS:-"2"}
@@ -62,8 +62,8 @@ DOMAIN_RADIUS=${DOMAIN_RADIUS:-"20.0"}
 DOMAIN_WIDTH=${DOMAIN_WIDTH:-"3.0"}
 DOMAIN_WINDING=${DOMAIN_WINDING:-"1"}
 
-COMPUTE_CHERN=${COMPUTE_CHERN:-"0"}
-COMPUTE_FINITE_Q_IVC=${COMPUTE_FINITE_Q_IVC:-"1"}
+COMPUTE_CHERN=${COMPUTE_CHERN:-"1"}
+COMPUTE_FINITE_Q_IVC=${COMPUTE_FINITE_Q_IVC:-"0"}
 FINITE_Q_SHIFT_POLICY=${FINITE_Q_SHIFT_POLICY:-"nearest-half"}
 IVC_BRANCH_POLICY=${IVC_BRANCH_POLICY:-"q0"}
 IVC_BRANCH_TIE_ATOL=${IVC_BRANCH_TIE_ATOL:-"1e-9"}
@@ -74,11 +74,9 @@ HF_PATH_N_PER_SEGMENT=${HF_PATH_N_PER_SEGMENT:-"36"}
 FIT_DEGREE=${FIT_DEGREE:-"1"}
 
 TASK_ID=${SLURM_ARRAY_TASK_ID:-0}
-N_K_COUNT=$(python -c 'import sys
-print(len([x for x in sys.argv[1].split(",") if x.strip()]))' "$N_K_LIST")
-TOTAL_TASKS=$((N_K_COUNT * N_U_D * N_TWIST))
+TOTAL_TASKS=$((N_U_D * N_TWIST))
 if (( TASK_ID >= TOTAL_TASKS )); then
-  echo "Task ${TASK_ID} is outside mesh size ${TOTAL_TASKS}; exiting."
+  echo "Task ${TASK_ID} is outside phase-grid size ${TOTAL_TASKS}; exiting."
   exit 0
 fi
 
@@ -91,7 +89,9 @@ if [[ "$COMPUTE_CHERN" == "0" ]]; then
   CHERN_FLAG=(--no-chern)
 fi
 FINITE_Q_IVC_FLAG=()
-if [[ "$COMPUTE_FINITE_Q_IVC" == "0" ]]; then
+if [[ "$COMPUTE_FINITE_Q_IVC" == "1" ]]; then
+  FINITE_Q_IVC_FLAG=(--compute-finite-q-ivc)
+else
   FINITE_Q_IVC_FLAG=(--no-finite-q-ivc)
 fi
 HF_PATH_FLAG=()
@@ -103,7 +103,7 @@ if [[ "$NAN_TEXTURE_WHEN_IVC_LOWER" == "0" ]]; then
   TEXTURE_FLAG=(--allow-texture-in-ivc-ground-state)
 fi
 
-echo "Running Taige finite-size c_G task ${TASK_ID}/${TOTAL_TASKS} into ${OUTPUT_ROOT}"
+echo "Running Taige finite-size c_G phase task ${TASK_ID}/${TOTAL_TASKS} into ${OUTPUT_ROOT}"
 python scripts/scan_taige_finite_size_cg.py \
   --output-root "$OUTPUT_ROOT" \
   --n-k-list "$N_K_LIST" \

@@ -17,7 +17,7 @@ source .venv/bin/activate
 
 mkdir -p logs
 
-OUTPUT_ROOT=${OUTPUT_ROOT:-"results/taige_cg_finite_size_nk12_20_u0_theta3p5"}
+OUTPUT_ROOT=${OUTPUT_ROOT:-"results/taige_cg_finite_size_nk18_24_u0_15_theta2_4p2"}
 FIT_DEGREE=${FIT_DEGREE:-"1"}
 
 python scripts/scan_taige_finite_size_cg.py \
