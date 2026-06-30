@@ -174,7 +174,12 @@ def test_finite_q_taige_backend_matches_slow_hartree_fock_reference():
         rng.normal(size=bundle.active.h0.shape) + 1j * rng.normal(size=bundle.active.h0.shape)
     )
 
-    assert np.allclose(parallel_bundle.backend.tVE, bundle.backend.tVE)
+    assert bundle.backend.exchange_representation == "valley_sector"
+    assert parallel_bundle.backend.exchange_representation == "valley_sector"
+    assert np.allclose(
+        parallel_bundle.backend.dense_exchange_tve_for_debug(),
+        bundle.backend.dense_exchange_tve_for_debug(),
+    )
     assert np.allclose(
         parallel_bundle.backend.fock_hamiltonian(Q),
         bundle.backend.fock_hamiltonian(Q),
@@ -245,8 +250,21 @@ def test_taige_hartree_only_retention_preserves_backend_physics():
     full_channels = int(np.prod(dense_bundle.backend.lambda_blocks.shape[:2]))
     assert retained_channels < full_channels
 
-    assert np.allclose(compact_bundle.backend.tVE, dense_bundle.backend.tVE)
-    assert np.allclose(retained_bundle.backend.tVE, dense_bundle.backend.tVE)
+    assert dense_bundle.backend.exchange_representation == "dense"
+    assert compact_bundle.backend.exchange_representation == "valley_sector"
+    assert retained_bundle.backend.exchange_representation == "valley_sector"
+    assert compact_bundle.backend.tVE is None
+    assert retained_bundle.backend.tVE is None
+    assert compact_bundle.backend.valley_sector_exchange is not None
+    assert retained_bundle.backend.valley_sector_exchange is not None
+    assert np.allclose(
+        compact_bundle.backend.dense_exchange_tve_for_debug(),
+        dense_bundle.backend.dense_exchange_tve_for_debug(),
+    )
+    assert np.allclose(
+        retained_bundle.backend.dense_exchange_tve_for_debug(),
+        dense_bundle.backend.dense_exchange_tve_for_debug(),
+    )
     assert np.allclose(
         retained_bundle.backend.fock_hamiltonian(Q),
         dense_bundle.backend.fock_hamiltonian(Q),

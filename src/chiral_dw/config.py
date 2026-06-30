@@ -270,6 +270,7 @@ class ContinuumInteractionParams(BaseModel):
     exchange_workers: int = Field(default=1, ge=0)
     density_vertex_retention: Literal["full", "hartree_only"] = "full"
     density_vertex_layout: Literal["auto", "dense", "valley_compact"] = "auto"
+    exchange_representation: Literal["auto", "dense", "valley_sector"] = "auto"
 
 
 class ContinuumHFParams(BaseModel):

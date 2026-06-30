@@ -555,6 +555,7 @@ def test_taige_interaction_params_accept_screening_overrides():
         exchange_workers=3,
         density_vertex_retention="hartree_only",
         density_vertex_layout="dense",
+        exchange_representation="dense",
     )
 
     assert interaction.coulomb_kind == "dual_gate"
@@ -572,6 +573,7 @@ def test_taige_interaction_params_accept_screening_overrides():
     assert interaction.exchange_workers == 3
     assert interaction.density_vertex_retention == "hartree_only"
     assert interaction.density_vertex_layout == "dense"
+    assert interaction.exchange_representation == "dense"
 
 
 def test_taige_finite_q_density_vertices_use_shifted_physical_sources():

@@ -50,6 +50,7 @@ def test_taige_sweep_dry_run_writes_selected_plan(tmp_path):
     assert plan["args"]["exchange_workers"] == 1
     assert plan["args"]["density_vertex_retention"] == "hartree_only"
     assert plan["args"]["density_vertex_layout"] == "auto"
+    assert plan["args"]["exchange_representation"] == "auto"
     assert (output_root / "sweep_plan.csv").exists()
 
 
@@ -216,6 +217,7 @@ def test_taige_sweep_job_uses_array_task_and_results_root():
     assert "--exchange-workers" in script_text
     assert "--density-vertex-retention" in script_text
     assert "--density-vertex-layout" in script_text
+    assert "--exchange-representation" in script_text
 
     text = JOB.read_text()
     assert "#SBATCH --array=0-440" in text
@@ -236,10 +238,12 @@ def test_taige_sweep_job_uses_array_task_and_results_root():
     assert 'EXCHANGE_WORKERS=${EXCHANGE_WORKERS:-"${SLURM_CPUS_PER_TASK:-1}"}' in text
     assert 'DENSITY_VERTEX_RETENTION=${DENSITY_VERTEX_RETENTION:-"hartree_only"}' in text
     assert 'DENSITY_VERTEX_LAYOUT=${DENSITY_VERTEX_LAYOUT:-"auto"}' in text
+    assert 'EXCHANGE_REPRESENTATION=${EXCHANGE_REPRESENTATION:-"auto"}' in text
     assert "Resources: SLURM_CPUS_PER_TASK=" in text
     assert "SLURM_MEM_PER_NODE=" in text
     assert "DENSITY_VERTEX_RETENTION=" in text
     assert "DENSITY_VERTEX_LAYOUT=" in text
+    assert "EXCHANGE_REPRESENTATION=" in text
     assert "export OMP_NUM_THREADS=1" in text
     assert "export MKL_NUM_THREADS=1" in text
     assert "export OPENBLAS_NUM_THREADS=1" in text
@@ -262,4 +266,5 @@ def test_taige_sweep_job_uses_array_task_and_results_root():
     assert "--exchange-workers" in text
     assert "--density-vertex-retention" in text
     assert "--density-vertex-layout" in text
+    assert "--exchange-representation" in text
     assert "--merge-only" in text

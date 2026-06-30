@@ -34,6 +34,7 @@ from chiral_dw.continuum.builder import build_active_space
 from chiral_dw.continuum.hf import (
     ContinuumHFBackend,
     EnergyComponents,
+    ValleySectorExchange,
     _exchange_tve_q_slab,
     _hermitize_dense_in_place,
 )
@@ -66,6 +67,8 @@ BackendVariant = Literal[
     "fused",
     "compact",
     "fused_compact",
+    "compact_dense_exchange",
+    "sector_exchange",
     "packed",
     "matrix_free",
     "complex64",
@@ -77,6 +80,8 @@ _ALL_VARIANTS: tuple[BackendVariant, ...] = (
     "fused",
     "compact",
     "fused_compact",
+    "compact_dense_exchange",
+    "sector_exchange",
     "packed",
     "matrix_free",
     "complex64",
@@ -144,6 +149,7 @@ class TaigeBackendVariantSpec(BaseModel):
     description: str
     keeps_full_lambda_blocks: bool
     keeps_dense_tve: bool
+    uses_sector_tve: bool = False
     uses_packed_tve: bool = False
     uses_matrix_free_fock: bool = False
     dtype: Literal["complex128", "complex64"] = "complex128"
@@ -180,6 +186,7 @@ class TaigeArrayByteEstimate(BaseModel):
     target_minus_q_mb: float
     v_over_a_mb: float
     dense_tve_mb: float
+    sector_tve_mb: float
     packed_tve_mb: float
     one_projector_field_mb: float
     one_q_full_lambda_slab_mb: float
@@ -226,6 +233,7 @@ class TaigeVariantSummary(BaseModel):
     hf_smoke_ivc_energy: float | None = None
     keeps_full_lambda_blocks: bool
     keeps_dense_tve: bool
+    uses_sector_tve: bool = False
     uses_packed_tve: bool = False
     uses_matrix_free_fock: bool = False
     dtype: str
@@ -317,6 +325,7 @@ class BenchmarkHFBackend:
         v_over_a: np.ndarray,
         hartree_channels: Sequence[tuple[int, int, float]],
         tVE: np.ndarray | None = None,
+        sector_exchange: ValleySectorExchange | None = None,
         packed_tVE: PackedHermitianExchange | None = None,
         matrix_free: bool = False,
     ) -> None:
@@ -331,6 +340,7 @@ class BenchmarkHFBackend:
         self.n_g = int(self.lambda_blocks.shape[1]) if self.lambda_blocks.ndim >= 2 else 0
         self.hartree_channels = tuple((int(iq), int(ig), float(v)) for iq, ig, v in hartree_channels)
         self.tVE = None if tVE is None else np.asarray(tVE)
+        self.sector_exchange = sector_exchange
         self.packed_tVE = packed_tVE
         self.matrix_free = bool(matrix_free)
         self.p_ref = np.zeros_like(self.h0)
@@ -382,6 +392,18 @@ class BenchmarkHFBackend:
         flat = np.reshape(density, (-1,))
         if self.tVE is not None:
             out = -(self.tVE @ flat).reshape(density.shape)
+        elif self.sector_exchange is not None:
+            out = np.zeros_like(density)
+            n_active = self.sector_exchange.n_active
+            for iv in range(2):
+                a_slice = slice(iv * n_active, (iv + 1) * n_active)
+                for jv in range(2):
+                    b_slice = slice(jv * n_active, (jv + 1) * n_active)
+                    out[:, a_slice, b_slice] = -self.sector_exchange.matvec_sector(
+                        iv,
+                        jv,
+                        density[:, a_slice, b_slice],
+                    )
         elif self.packed_tVE is not None:
             out = -self.packed_tVE.matvec(flat).reshape(density.shape)
         else:
@@ -477,6 +499,19 @@ def variant_spec(name: BackendVariant) -> TaigeBackendVariantSpec:
             keeps_full_lambda_blocks=False,
             keeps_dense_tve=True,
         ),
+        "compact_dense_exchange": TaigeBackendVariantSpec(
+            name="compact_dense_exchange",
+            description="Production compact Taige vertices with Hartree retention and dense exchange.",
+            keeps_full_lambda_blocks=False,
+            keeps_dense_tve=True,
+        ),
+        "sector_exchange": TaigeBackendVariantSpec(
+            name="sector_exchange",
+            description="Production compact Taige vertices with Hartree retention and valley-sector exchange.",
+            keeps_full_lambda_blocks=False,
+            keeps_dense_tve=False,
+            uses_sector_tve=True,
+        ),
         "packed": TaigeBackendVariantSpec(
             name="packed",
             description="Hartree-only vertices plus packed Hermitian tVE storage and BLAS matvec.",
@@ -567,6 +602,8 @@ def estimate_taige_array_bytes(params: TaigeMemoryBenchmarkInput) -> TaigeArrayB
     compact_bytes = n_q * n_g * n_blocks * 2 * n_active * n_active * complex128_bytes
     block_dim = dim * dim
     tve_bytes = (n_blocks * block_dim) ** 2 * complex128_bytes
+    sector_block_dim = n_active * n_active
+    sector_tve_bytes = 4 * (n_blocks * sector_block_dim) ** 2 * complex128_bytes
     packed_elems = (n_blocks * block_dim) * (n_blocks * block_dim + 1) // 2
     projector_bytes = n_blocks * dim * dim * complex128_bytes
     return TaigeArrayByteEstimate(
@@ -581,6 +618,7 @@ def estimate_taige_array_bytes(params: TaigeMemoryBenchmarkInput) -> TaigeArrayB
         target_minus_q_mb=_bytes_to_mb(n_q * n_blocks * int_bytes),
         v_over_a_mb=_bytes_to_mb(n_q * n_g * float_bytes),
         dense_tve_mb=_bytes_to_mb(tve_bytes),
+        sector_tve_mb=_bytes_to_mb(sector_tve_bytes),
         packed_tve_mb=_bytes_to_mb(packed_elems * complex128_bytes),
         one_projector_field_mb=_bytes_to_mb(projector_bytes),
         one_q_full_lambda_slab_mb=_bytes_to_mb(n_g * n_blocks * dim * dim * complex128_bytes),
@@ -766,8 +804,9 @@ def hartree_only_backend_from_dense(
     dtype: np.dtype | type | None = None,
 ) -> BenchmarkHFBackend:
     target, lambdas, v_over_a, channels = _hartree_only_arrays_from_dense_backend(backend)
-    out_dtype = np.dtype(dtype or backend.tVE.dtype)
-    tVE = np.asarray(backend.tVE, dtype=out_dtype)
+    dense_tve = backend.dense_exchange_tve_for_debug()
+    out_dtype = np.dtype(dtype or dense_tve.dtype)
+    tVE = np.asarray(dense_tve, dtype=out_dtype)
     h0 = np.asarray(backend.h0, dtype=out_dtype)
     lambdas = np.asarray(lambdas, dtype=out_dtype)
     if packed:
@@ -1123,6 +1162,7 @@ def _variant_estimated_peak_mb(
     full = estimates.lambda_blocks_mb
     compact = estimates.compact_lambda_blocks_mb
     dense_tve = estimates.dense_tve_mb
+    sector_tve = estimates.sector_tve_mb
     packed = estimates.packed_tve_mb
     one_q = estimates.one_q_full_lambda_slab_mb
     one_q_compact = estimates.one_q_compact_lambda_slab_mb
@@ -1136,6 +1176,10 @@ def _variant_estimated_peak_mb(
         return full + compact + dense_tve
     if variant == "fused_compact":
         return dense_tve + one_q + one_q_compact
+    if variant == "compact_dense_exchange":
+        return compact + dense_tve
+    if variant == "sector_exchange":
+        return compact + sector_tve
     if variant == "packed":
         return full + dense_tve + packed
     if variant == "matrix_free":
@@ -1175,6 +1219,32 @@ def _build_variant_backend(
             rows=stages,
             fn=lambda: _build_fused_taige_backend(active, interaction, compact_slabs=True),
         )
+        return active, backend
+    if variant in {"compact_dense_exchange", "sector_exchange"}:
+        exchange_representation = "dense" if variant == "compact_dense_exchange" else "valley_sector"
+        compact_interaction = interaction.model_copy(
+            update={
+                "density_vertex_layout": "auto",
+                "density_vertex_retention": "hartree_only",
+                "exchange_representation": exchange_representation,
+            }
+        )
+        vertices = _measure_stage(
+            variant=variant,
+            n_k=params.n_k,
+            stage="compact_density_vertices",
+            rows=stages,
+            fn=lambda: build_taige_density_vertices(active, compact_interaction),
+        )
+        backend = _measure_stage(
+            variant=variant,
+            n_k=params.n_k,
+            stage=f"{exchange_representation}_exchange_backend",
+            rows=stages,
+            fn=lambda: ContinuumHFBackend(active.h0, vertices, compact_interaction),
+        )
+        del vertices
+        gc.collect()
         return active, backend
 
     dense_vertex_interaction = interaction.model_copy(update={"density_vertex_layout": "dense"})
@@ -1435,6 +1505,7 @@ def run_taige_memory_benchmark_worker(
             fock_repeats=params.fock_repeats,
             keeps_full_lambda_blocks=spec.keeps_full_lambda_blocks,
             keeps_dense_tve=spec.keeps_dense_tve,
+            uses_sector_tve=spec.uses_sector_tve,
             uses_packed_tve=spec.uses_packed_tve,
             uses_matrix_free_fock=spec.uses_matrix_free_fock,
             dtype=spec.dtype,
@@ -1517,6 +1588,7 @@ def run_taige_memory_benchmark_worker(
         hf_smoke_ivc_energy=hf_smoke.get("ivc_energy"),
         keeps_full_lambda_blocks=spec.keeps_full_lambda_blocks,
         keeps_dense_tve=spec.keeps_dense_tve,
+        uses_sector_tve=spec.uses_sector_tve,
         uses_packed_tve=spec.uses_packed_tve,
         uses_matrix_free_fock=spec.uses_matrix_free_fock,
         dtype=spec.dtype,
@@ -1644,6 +1716,7 @@ def write_taige_memory_benchmark_outputs(
                 "estimated_lambda_blocks_mb": result.estimates.lambda_blocks_mb,
                 "estimated_compact_lambda_blocks_mb": result.estimates.compact_lambda_blocks_mb,
                 "estimated_dense_tve_mb": result.estimates.dense_tve_mb,
+                "estimated_sector_tve_mb": result.estimates.sector_tve_mb,
                 "estimated_packed_tve_mb": result.estimates.packed_tve_mb,
                 "estimated_one_q_full_lambda_slab_mb": result.estimates.one_q_full_lambda_slab_mb,
                 "estimated_one_q_compact_lambda_slab_mb": result.estimates.one_q_compact_lambda_slab_mb,
@@ -1699,7 +1772,10 @@ def _write_markdown_report(path: Path, results: Sequence[TaigeMemoryBenchmarkWor
             )
         )
     lines.append("")
-    lines.append("Important interpretation: variants that build from the dense baseline can reduce retained RSS but not peak RSS. The fused variants are the ones designed to reduce peak vertex memory.")
+    lines.append(
+        "Important interpretation: Hartree retention and valley-sector exchange reduce retained backend RSS. "
+        "The fused variants are still the ones designed to reduce peak vertex-build memory."
+    )
     path.write_text("\n".join(lines) + "\n")
 
 

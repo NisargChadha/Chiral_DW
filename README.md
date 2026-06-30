@@ -40,6 +40,9 @@ moving back to the nonideal conjugate AC/domain-wall calculation:
   vertices after `tVE` construction in sweep scripts, and use valley-compact
   Taige density vertices by default to avoid storing zero intervalley form
   factor blocks.
+- The Taige HF backend now uses valley-sector exchange by default when Taige
+  vertices are valley-compact, storing four valley-pair exchange sectors instead
+  of one dense active-density `tVE` matrix.
 - The same-Chern QHFM benchmark validates the real-space 4D charge evaluator
   against `rho_top=-q_sk` in a controlled Chern-1 limit.
 - The ideal opposite-Chern conjugate LLL benchmark validates the circular
@@ -56,6 +59,17 @@ in magnetic-length units. It wrote artifacts under
 - `integrated_charge = 0.00272`
 - `integrated_analytic_charge = 0.00268`
 - `valid_analytic_charge = true`
+
+## Taige Backend Optimization Status
+
+The production sweep defaults are designed to preserve the complex128 HF
+physics while reducing retained backend memory.
+
+| Step | Backend mode | Status | Local smoke benchmark | Expected memory effect |
+|---|---|---|---|---|
+| 1 | Valley-sector exchange | Implemented | `n_k=4,6`, compact dense exchange vs sector exchange, fock/HF/energy errors `<1e-14` | Final exchange storage is reduced by `4x`; for two active bands per valley, `n_k=24` dense `tVE` is about `1.27 GiB` and sector exchange is about `0.32 GiB`. |
+| 2 | Cached form-factor gather maps | Planned | Not yet run | Expected negligible memory change and modest vertex-build speedup. |
+| 3 | Vectorized form-factor construction | Planned | Not yet run | Expected modest temporary memory overhead and larger vertex-build speedup if Python loop overhead dominates. |
 
 ## Setup
 

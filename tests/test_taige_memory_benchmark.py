@@ -66,12 +66,16 @@ def test_taige_memory_byte_estimator_matches_shapes():
     dim = 2 * params.n_active_bands_per_valley
     expected_lambda = n_q * n_g * grid_size * dim * dim * np.dtype(np.complex128).itemsize
     expected_tve = (grid_size * dim * dim) ** 2 * np.dtype(np.complex128).itemsize
+    expected_sector_tve = 4 * (grid_size * params.n_active_bands_per_valley**2) ** 2 * (
+        np.dtype(np.complex128).itemsize
+    )
 
     assert estimates.n_blocks == grid_size
     assert estimates.n_q == n_q
     assert estimates.n_g == n_g
     assert estimates.lambda_blocks_mb == expected_lambda / 1024**2
     assert estimates.dense_tve_mb == expected_tve / 1024**2
+    assert estimates.sector_tve_mb == expected_sector_tve / 1024**2
 
 
 def test_compact_lambdas_round_trip_valley_diagonal_blocks():
@@ -120,7 +124,16 @@ def test_benchmark_worker_variants_match_baseline_reference(tmp_path):
         reference_output=reference,
     )
     assert baseline.summary.skipped is False
-    for variant in ("hartree_only", "fused", "compact", "fused_compact", "packed", "matrix_free"):
+    for variant in (
+        "hartree_only",
+        "fused",
+        "compact",
+        "fused_compact",
+        "compact_dense_exchange",
+        "sector_exchange",
+        "packed",
+        "matrix_free",
+    ):
         result = run_taige_memory_benchmark_worker(
             params=params,
             variant=variant,

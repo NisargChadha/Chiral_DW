@@ -197,6 +197,7 @@ def taige_interaction_params(
     exchange_workers: int = 1,
     density_vertex_retention: Literal["full", "hartree_only"] = "full",
     density_vertex_layout: Literal["auto", "dense", "valley_compact"] = "auto",
+    exchange_representation: Literal["auto", "dense", "valley_sector"] = "auto",
 ) -> ContinuumInteractionParams:
     """Return dual-gated smeared Coulomb parameters for Taige MoTe2."""
 
@@ -217,6 +218,7 @@ def taige_interaction_params(
         exchange_workers=int(exchange_workers),
         density_vertex_retention=density_vertex_retention,
         density_vertex_layout=density_vertex_layout,
+        exchange_representation=exchange_representation,
     )
 
 

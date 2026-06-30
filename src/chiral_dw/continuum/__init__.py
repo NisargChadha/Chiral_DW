@@ -7,6 +7,7 @@ from chiral_dw.continuum.builder import (
 )
 from chiral_dw.continuum.hf import (
     ContinuumHFBackend,
+    ValleySectorExchange,
     compute_hf_diagnostics,
     reference_hamiltonian_diagnostics,
     solve_hf,
@@ -154,6 +155,7 @@ __all__ = [
     "TaigeFiniteQShiftChoice",
     "TaigeFiniteQShiftPolicy",
     "ValleyU1Constraint",
+    "ValleySectorExchange",
     "active_basis_frames",
     "build_active_space",
     "build_continuum_bundle",

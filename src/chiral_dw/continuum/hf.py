@@ -35,6 +35,67 @@ class EnergyComponents:
     fock: float
 
 
+@dataclass
+class ValleySectorExchange:
+    """Exchange superoperator stored by independent valley-pair density sectors."""
+
+    sectors: np.ndarray
+    n_blocks: int
+    n_active: int
+
+    def __post_init__(self) -> None:
+        self.sectors = np.asarray(self.sectors, dtype=complex)
+        self.n_blocks = int(self.n_blocks)
+        self.n_active = int(self.n_active)
+        sector_dim = self.n_blocks * self.n_active * self.n_active
+        if self.sectors.shape != (2, 2, sector_dim, sector_dim):
+            raise ValueError(
+                "valley-sector exchange must have shape "
+                f"(2, 2, {sector_dim}, {sector_dim})"
+            )
+
+    @property
+    def sector_block_dim(self) -> int:
+        return self.n_active * self.n_active
+
+    @property
+    def dim(self) -> int:
+        return 2 * self.n_active
+
+    def matvec_sector(self, iv: int, jv: int, sector_density: np.ndarray) -> np.ndarray:
+        flat = np.reshape(sector_density, (-1,))
+        return np.reshape(
+            self.sectors[int(iv), int(jv)] @ flat,
+            (self.n_blocks, self.n_active, self.n_active),
+        )
+
+    def to_dense(self) -> np.ndarray:
+        """Reconstruct the full dense exchange matrix for small debug comparisons."""
+
+        block_dim = self.dim * self.dim
+        sector_dim = self.sector_block_dim
+        dense = np.zeros((self.n_blocks * block_dim, self.n_blocks * block_dim), dtype=complex)
+        sector_local = np.arange(sector_dim)
+        sector_rows = np.arange(self.n_blocks)[:, None] * sector_dim + sector_local[None, :]
+        sector_flat = np.reshape(sector_rows, (-1,))
+        for iv in range(2):
+            for jv in range(2):
+                full_local = np.asarray(
+                    [
+                        (iv * self.n_active + a) * self.dim + (jv * self.n_active + b)
+                        for a in range(self.n_active)
+                        for b in range(self.n_active)
+                    ],
+                    dtype=int,
+                )
+                full_rows = np.arange(self.n_blocks)[:, None] * block_dim + full_local[None, :]
+                full_flat = np.reshape(full_rows, (-1,))
+                dense[np.ix_(full_flat, full_flat)] = self.sectors[iv, jv][
+                    np.ix_(sector_flat, sector_flat)
+                ]
+        return dense
+
+
 def _exchange_q_slab_ranges(n_q: int, exchange_workers: int) -> tuple[tuple[int, int], ...]:
     n_jobs = max(1, min(int(exchange_workers), int(n_q)))
     n_slabs = max(1, min(int(n_q), 16 * n_jobs))
@@ -128,6 +189,46 @@ def _exchange_tve_q_slab_compact(
     return tuple(rows)
 
 
+def _exchange_sector_tve_q_slab_compact(
+    *,
+    q_start: int,
+    q_stop: int,
+    lambda_compact: np.ndarray,
+    v_over_a: np.ndarray,
+    exchange_scale: float,
+) -> tuple[tuple[int, int, int, np.ndarray, np.ndarray], ...]:
+    """Return valley-sector exchange contributions from compact vertices."""
+
+    rows: list[tuple[int, int, int, np.ndarray, np.ndarray]] = []
+    scale = float(exchange_scale)
+    compact = np.asarray(lambda_compact)
+    for iq in range(int(q_start), int(q_stop)):
+        v = 0.5 * scale * v_over_a[iq]
+        if not np.any(v):
+            continue
+        lam_q = compact[iq]
+        for iv in range(2):
+            lam_left = lam_q[:, :, iv]
+            for jv in range(2):
+                lam_right = lam_q[:, :, jv]
+                forward = np.einsum(
+                    "g,gkac,gkbd->kabcd",
+                    v,
+                    lam_left,
+                    np.conj(lam_right),
+                    optimize=True,
+                )
+                reverse = np.einsum(
+                    "g,gkca,gkdb->kabcd",
+                    v,
+                    np.conj(lam_left),
+                    lam_right,
+                    optimize=True,
+                )
+                rows.append((iq, iv, jv, forward, reverse))
+    return tuple(rows)
+
+
 def _hermitize_dense_in_place(matrix: np.ndarray, *, tile_size: int = 1024) -> np.ndarray:
     """Replace ``matrix`` by ``0.5 * (matrix + matrix.conj().T)`` using tiles."""
 
@@ -197,6 +298,7 @@ class ContinuumHFBackend:
             self.n_q, self.n_g = self.lambda_blocks.shape[:2]
         else:
             raise ValueError("density vertex layout must be 'dense' or 'valley_compact'")
+        self.exchange_representation = self._resolve_exchange_representation()
         self.target_minus_q = np.asarray(vertices.target_minus_q, dtype=int)
         if self.target_minus_q.shape != (self.n_q, self.n_blocks):
             raise ValueError("target_minus_q must have shape (n_q, n_blocks)")
@@ -213,7 +315,12 @@ class ContinuumHFBackend:
             (int(iq), int(ig)): (int(iq), int(ig), float(v))
             for iq, ig, v in self.hartree_channels
         }
-        self.tVE = self._build_exchange_tve()
+        self.tVE: np.ndarray | None = None
+        self.valley_sector_exchange: ValleySectorExchange | None = None
+        if self.exchange_representation == "valley_sector":
+            self.valley_sector_exchange = self._build_valley_sector_exchange()
+        else:
+            self.tVE = self._build_exchange_tve()
         self._apply_density_vertex_retention()
 
     def as_block_density(self, P: np.ndarray) -> np.ndarray:
@@ -230,6 +337,18 @@ class ContinuumHFBackend:
             f"density must have shape {self.h0.shape} or {(self.n_total, self.n_total)}; "
             f"got {arr.shape}"
         )
+
+    def _resolve_exchange_representation(self) -> str:
+        requested = str(getattr(self.interaction, "exchange_representation", "auto"))
+        if requested == "auto":
+            return "valley_sector" if self.vertex_layout == "valley_compact" else "dense"
+        if requested == "dense":
+            return "dense"
+        if requested == "valley_sector":
+            if self.vertex_layout != "valley_compact":
+                raise ValueError("valley_sector exchange requires valley_compact density vertices")
+            return "valley_sector"
+        raise ValueError("exchange_representation must be 'auto', 'dense', or 'valley_sector'")
 
     def _find_hartree_channels(self) -> list[tuple[int, int, float]]:
         channels: list[tuple[int, int, float]] = []
@@ -378,6 +497,125 @@ class ContinuumHFBackend:
                     forward,
                     reverse,
                 )
+
+    def _build_valley_sector_exchange(self) -> ValleySectorExchange:
+        if self.lambda_compact is None:
+            raise ValueError("valley-sector exchange requires compact density vertices")
+        block_dim = self.n_active * self.n_active
+        size = self.n_blocks * block_dim
+        sectors = np.zeros((2, 2, size, size), dtype=complex)
+        scale = float(self.interaction.exchange_scale)
+        if scale == 0.0:
+            return ValleySectorExchange(sectors=sectors, n_blocks=self.n_blocks, n_active=self.n_active)
+        local = np.arange(block_dim)
+        block_rows = np.arange(self.n_blocks)[:, None] * block_dim + local[None, :]
+        if self.interaction.exchange_workers <= 1:
+            self._build_valley_sector_exchange_serial(sectors, block_rows, block_dim, scale)
+        else:
+            self._build_valley_sector_exchange_parallel(sectors, block_rows, block_dim, scale)
+        for iv in range(2):
+            for jv in range(2):
+                _hermitize_dense_in_place(sectors[iv, jv])
+        return ValleySectorExchange(sectors=sectors, n_blocks=self.n_blocks, n_active=self.n_active)
+
+    def _scatter_valley_sector_exchange_q_contribution(
+        self,
+        sectors: np.ndarray,
+        block_rows: np.ndarray,
+        block_dim: int,
+        iq: int,
+        iv: int,
+        jv: int,
+        forward: np.ndarray,
+        reverse: np.ndarray,
+    ) -> None:
+        local = np.arange(block_dim)
+        target_rows = self.target_minus_q[int(iq), :, None] * block_dim + local[None, :]
+        sectors[int(iv), int(jv)][block_rows[:, :, None], target_rows[:, None, :]] += (
+            forward.reshape(self.n_blocks, block_dim, block_dim)
+        )
+        sectors[int(iv), int(jv)][target_rows[:, :, None], block_rows[:, None, :]] += (
+            reverse.reshape(self.n_blocks, block_dim, block_dim)
+        )
+
+    def _build_valley_sector_exchange_serial(
+        self,
+        sectors: np.ndarray,
+        block_rows: np.ndarray,
+        block_dim: int,
+        scale: float,
+    ) -> None:
+        for iq in range(self.n_q):
+            rows = _exchange_sector_tve_q_slab_compact(
+                q_start=iq,
+                q_stop=iq + 1,
+                lambda_compact=self.lambda_compact,
+                v_over_a=self.v_over_a,
+                exchange_scale=scale,
+            )
+            for q_index, iv, jv, forward, reverse in rows:
+                self._scatter_valley_sector_exchange_q_contribution(
+                    sectors,
+                    block_rows,
+                    block_dim,
+                    q_index,
+                    iv,
+                    jv,
+                    forward,
+                    reverse,
+                )
+
+    def _build_valley_sector_exchange_parallel(
+        self,
+        sectors: np.ndarray,
+        block_rows: np.ndarray,
+        block_dim: int,
+        scale: float,
+    ) -> None:
+        from joblib import Parallel, delayed
+
+        n_jobs = max(1, min(int(self.interaction.exchange_workers), self.n_q))
+        ranges = _exchange_q_slab_ranges(self.n_q, n_jobs)
+        tasks = (
+            delayed(_exchange_sector_tve_q_slab_compact)(
+                q_start=start,
+                q_stop=stop,
+                lambda_compact=self.lambda_compact,
+                v_over_a=self.v_over_a,
+                exchange_scale=scale,
+            )
+            for start, stop in ranges
+        )
+        results = Parallel(
+            n_jobs=n_jobs,
+            backend="loky",
+            return_as="generator",
+            mmap_mode="r",
+            max_nbytes="32M",
+        )(tasks)
+        for slab_rows in results:
+            for q_index, iv, jv, forward, reverse in slab_rows:
+                self._scatter_valley_sector_exchange_q_contribution(
+                    sectors,
+                    block_rows,
+                    block_dim,
+                    q_index,
+                    iv,
+                    jv,
+                    forward,
+                    reverse,
+                )
+
+    def dense_exchange_tve_for_debug(self) -> np.ndarray:
+        """Return the dense exchange superoperator for tests and diagnostics."""
+
+        if self.exchange_representation == "valley_sector":
+            if self.valley_sector_exchange is None:
+                raise RuntimeError("missing valley-sector exchange object")
+            return self.valley_sector_exchange.to_dense()
+        if self.tVE is None:
+            raise RuntimeError("missing dense exchange matrix")
+        return self.tVE
 
     def _empty_retained_lambdas(self) -> np.ndarray:
         return np.zeros((0, 0, self.n_blocks, self.dim, self.dim), dtype=complex)
@@ -565,7 +803,23 @@ class ContinuumHFBackend:
 
     def fock_hamiltonian(self, Q: np.ndarray) -> np.ndarray:
         density = self.as_block_density(Q)
-        out = -np.reshape(self.tVE @ np.reshape(density, (-1,)), density.shape)
+        if self.exchange_representation == "valley_sector":
+            if self.valley_sector_exchange is None:
+                raise RuntimeError("missing valley-sector exchange object")
+            out = np.zeros_like(density, dtype=complex)
+            for iv in range(2):
+                a_slice = slice(iv * self.n_active, (iv + 1) * self.n_active)
+                for jv in range(2):
+                    b_slice = slice(jv * self.n_active, (jv + 1) * self.n_active)
+                    out[:, a_slice, b_slice] = -self.valley_sector_exchange.matvec_sector(
+                        iv,
+                        jv,
+                        density[:, a_slice, b_slice],
+                    )
+        else:
+            if self.tVE is None:
+                raise RuntimeError("missing dense exchange matrix")
+            out = -np.reshape(self.tVE @ np.reshape(density, (-1,)), density.shape)
         return hermitize(out)
 
     def hf_hamiltonian(self, P: np.ndarray) -> np.ndarray:
