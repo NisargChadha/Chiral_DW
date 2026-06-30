@@ -171,7 +171,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--form-factor-backend",
         choices=["auto", "scalar", "cached_gather", "vectorized"],
         default="auto",
-        help="Taige form-factor backend; auto uses cached gather maps in this version.",
+        help="Taige form-factor backend; auto uses vectorized form-factor construction.",
     )
 
     parser.add_argument("--n-occ-per-k", type=int, default=1)

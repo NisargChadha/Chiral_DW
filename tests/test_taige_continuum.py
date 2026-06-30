@@ -577,9 +577,19 @@ def test_taige_density_vertices_cached_gather_matches_scalar(finite_q_enabled):
         bundle.active,
         interaction.model_copy(update={"form_factor_backend": "cached_gather", "vertex_workers": 2}),
     )
+    vectorized = build_taige_density_vertices(
+        bundle.active,
+        interaction.model_copy(update={"form_factor_backend": "vectorized"}),
+    )
+    vectorized_parallel = build_taige_density_vertices(
+        bundle.active,
+        interaction.model_copy(update={"form_factor_backend": "vectorized", "vertex_workers": 2}),
+    )
 
     _assert_matching_density_vertices(scalar, cached)
     _assert_matching_density_vertices(scalar, cached_parallel)
+    _assert_matching_density_vertices(scalar, vectorized)
+    _assert_matching_density_vertices(scalar, vectorized_parallel)
 
 
 def test_taige_interaction_params_accept_screening_overrides():

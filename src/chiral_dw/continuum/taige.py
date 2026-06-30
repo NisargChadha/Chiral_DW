@@ -724,6 +724,31 @@ def _overlap(
     return out
 
 
+def _overlap_batch(
+    left: np.ndarray,
+    right: np.ndarray,
+    *,
+    src: np.ndarray,
+    tgt: np.ndarray,
+    n_plane_waves: int,
+) -> np.ndarray:
+    na_l = left.shape[-1]
+    na_r = right.shape[-1]
+    out = np.zeros((left.shape[0], na_l, na_r), dtype=complex)
+    if src.size == 0:
+        return out
+    left_blocks = left.reshape(left.shape[0], 2, n_plane_waves, na_l)
+    right_blocks = right.reshape(right.shape[0], 2, n_plane_waves, na_r)
+    for layer in range(2):
+        out += np.einsum(
+            "kxa,kxb->kab",
+            np.conj(left_blocks[:, layer, src, :]),
+            right_blocks[:, layer, tgt, :],
+            optimize=True,
+        )
+    return out
+
+
 def _channel_mask(
     geometry: MoireGeometry,
     grid: MomentumGrid,
@@ -919,6 +944,92 @@ def _taige_density_vertex_q_slab_compact(
     return int(q_start), target_minus_q, q_is_zero, lambdas
 
 
+def _taige_density_vertex_q_slab_compact_vectorized(
+    *,
+    q_start: int,
+    q_stop: int,
+    q_list: tuple[GridCoord, ...],
+    g_channels: tuple[GridCoord, ...],
+    channel_in_disk: np.ndarray,
+    n_k: int,
+    n_active: int,
+    shell: tuple[GridCoord, ...],
+    shell_index: dict[GridCoord, int],
+    gather_cache: GatherCache | None,
+    electron_vectors: np.ndarray,
+    source_index: np.ndarray | None,
+) -> tuple[int, np.ndarray, np.ndarray, np.ndarray]:
+    """Build one q-slab with batched k-point form-factor contractions."""
+
+    if gather_cache is None:
+        raise ValueError("vectorized Taige form factors require a gather cache")
+    q_slab = q_list[int(q_start) : int(q_stop)]
+    n_q_slab = len(q_slab)
+    n_g = len(g_channels)
+    grid_size = int(n_k) * int(n_k)
+    n_plane_waves = len(shell)
+    target_minus_q = np.empty((n_q_slab, grid_size), dtype=int)
+    q_is_zero = np.zeros(n_q_slab, dtype=bool)
+    lambdas = np.zeros((n_q_slab, n_g, grid_size, 2, n_active, n_active), dtype=complex)
+
+    def physical_source_for(iv: int) -> np.ndarray:
+        if source_index is None:
+            return np.arange(grid_size, dtype=int)
+        return np.asarray(source_index[:, int(iv)], dtype=int)
+
+    for local_iq, q in enumerate(q_slab):
+        q_is_zero[local_iq] = q == (0, 0)
+        for ik in range(grid_size):
+            k_coord = _grid_coord_of(ik, n_k)
+            folded, _shift = _fold_grid_coord(
+                (k_coord[0] - int(q[0]), k_coord[1] - int(q[1])),
+                n_k,
+            )
+            target_minus_q[local_iq, ik] = _grid_index_of(folded, n_k)
+
+        for iv in range(2):
+            sources = physical_source_for(iv)
+            left_indices = np.empty(grid_size, dtype=int)
+            right_indices = np.empty(grid_size, dtype=int)
+            rec_shifts = np.empty((grid_size, 2), dtype=int)
+            for ik, physical_source in enumerate(sources):
+                source_coord = _grid_coord_of(int(physical_source), n_k)
+                left_coord, _minus_shift = _fold_grid_coord(
+                    (source_coord[0] - int(q[0]), source_coord[1] - int(q[1])),
+                    n_k,
+                )
+                left_index = _grid_index_of(left_coord, n_k)
+                forward, rec_shift = _fold_grid_coord(
+                    (left_coord[0] + int(q[0]), left_coord[1] + int(q[1])),
+                    n_k,
+                )
+                left_indices[ik] = left_index
+                right_indices[ik] = _grid_index_of(forward, n_k)
+                rec_shifts[ik] = rec_shift
+
+            for ig, g in enumerate(g_channels):
+                if not channel_in_disk[int(q_start) + local_iq, ig]:
+                    continue
+                shifts = rec_shifts + np.asarray(g, dtype=int)[None, :]
+                groups: dict[GridCoord, list[int]] = {}
+                for ik, shift in enumerate(shifts):
+                    key = (int(shift[0]), int(shift[1]))
+                    groups.setdefault(key, []).append(ik)
+                for shift, indices in groups.items():
+                    src, tgt = gather_cache[shift]
+                    idx = np.asarray(indices, dtype=int)
+                    overlaps = _overlap_batch(
+                        electron_vectors[left_indices[idx], iv, :, :n_active],
+                        electron_vectors[right_indices[idx], iv, :, :n_active],
+                        src=src,
+                        tgt=tgt,
+                        n_plane_waves=n_plane_waves,
+                    )
+                    lambdas[local_iq, ig, idx, iv] = np.swapaxes(overlaps, -1, -2)
+
+    return int(q_start), target_minus_q, q_is_zero, lambdas
+
+
 def _taige_density_vertex_q_slab(
     *,
     q_start: int,
@@ -934,10 +1045,16 @@ def _taige_density_vertex_q_slab(
     gather_cache: GatherCache | None,
     electron_vectors: np.ndarray,
     source_index: np.ndarray | None,
+    form_factor_backend: str,
 ) -> tuple[int, np.ndarray, np.ndarray, np.ndarray]:
     """Build one contiguous q-slab of dense Taige density vertices."""
 
-    q_start_out, target_minus_q, q_is_zero, compact = _taige_density_vertex_q_slab_compact(
+    compact_builder = (
+        _taige_density_vertex_q_slab_compact_vectorized
+        if form_factor_backend == "vectorized"
+        else _taige_density_vertex_q_slab_compact
+    )
+    q_start_out, target_minus_q, q_is_zero, compact = compact_builder(
         q_start=q_start,
         q_stop=q_stop,
         q_list=q_list,
@@ -971,11 +1088,9 @@ def _q_slab_ranges(n_q: int, vertex_workers: int) -> tuple[tuple[int, int], ...]
 def _resolve_taige_form_factor_backend(interaction: ContinuumInteractionParams) -> str:
     requested = str(getattr(interaction, "form_factor_backend", "auto"))
     if requested == "auto":
-        return "cached_gather"
-    if requested in {"scalar", "cached_gather"}:
+        return "vectorized"
+    if requested in {"scalar", "cached_gather", "vectorized"}:
         return requested
-    if requested == "vectorized":
-        raise NotImplementedError("form_factor_backend='vectorized' is implemented in the next optimization slice")
     raise ValueError("form_factor_backend must be 'auto', 'scalar', 'cached_gather', or 'vectorized'")
 
 
@@ -1009,8 +1124,16 @@ def _build_taige_density_vertex_arrays_serial(
     gather_cache: GatherCache | None,
     electron_vectors: np.ndarray,
     compact: bool,
+    form_factor_backend: str,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    slab_builder = _taige_density_vertex_q_slab_compact if compact else _taige_density_vertex_q_slab
+    if compact:
+        slab_builder = (
+            _taige_density_vertex_q_slab_compact_vectorized
+            if form_factor_backend == "vectorized"
+            else _taige_density_vertex_q_slab_compact
+        )
+    else:
+        slab_builder = _taige_density_vertex_q_slab
     kwargs = {
         "q_start": 0,
         "q_stop": len(q_list),
@@ -1027,6 +1150,7 @@ def _build_taige_density_vertex_arrays_serial(
     }
     if not compact:
         kwargs["dim"] = active.dim
+        kwargs["form_factor_backend"] = form_factor_backend
     _q_start, target_minus_q, q_is_zero, lambdas = slab_builder(
         **kwargs,
     )
@@ -1045,6 +1169,7 @@ def _build_taige_density_vertex_arrays_parallel(
     electron_vectors: np.ndarray,
     vertex_workers: int,
     compact: bool,
+    form_factor_backend: str,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     from joblib import Parallel, delayed
 
@@ -1054,7 +1179,11 @@ def _build_taige_density_vertex_arrays_parallel(
     q_is_zero = np.zeros(n_q, dtype=bool)
     if compact:
         lambdas = np.zeros((n_q, n_g, grid.size, 2, active.n_active, active.n_active), dtype=complex)
-        slab_builder = _taige_density_vertex_q_slab_compact
+        slab_builder = (
+            _taige_density_vertex_q_slab_compact_vectorized
+            if form_factor_backend == "vectorized"
+            else _taige_density_vertex_q_slab_compact
+        )
     else:
         lambdas = np.zeros((n_q, n_g, grid.size, active.dim, active.dim), dtype=complex)
         slab_builder = _taige_density_vertex_q_slab
@@ -1078,6 +1207,7 @@ def _build_taige_density_vertex_arrays_parallel(
         }
         if not compact:
             kwargs["dim"] = active.dim
+            kwargs["form_factor_backend"] = form_factor_backend
         return slab_builder(**kwargs)
 
     tasks = (delayed(_task)(start, stop) for start, stop in ranges)
@@ -1147,6 +1277,7 @@ def build_taige_density_vertices(
             gather_cache=gather_cache,
             electron_vectors=electron_vectors,
             compact=compact,
+            form_factor_backend=form_factor_backend,
         )
     else:
         target_minus_q, q_is_zero, lambdas = _build_taige_density_vertex_arrays_parallel(
@@ -1160,6 +1291,7 @@ def build_taige_density_vertices(
             electron_vectors=electron_vectors,
             vertex_workers=interaction.vertex_workers,
             compact=compact,
+            form_factor_backend=form_factor_backend,
         )
 
     q_vectors_nm_inv = geometry.mesh_q_vectors_nm_inv(grid, q_list, g_channels)
