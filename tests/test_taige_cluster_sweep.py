@@ -230,6 +230,8 @@ def test_taige_sweep_job_uses_array_task_and_results_root():
     assert 'N_ACTIVE_BANDS_PER_VALLEY=${N_ACTIVE_BANDS_PER_VALLEY:-"2"}' in text
     assert 'VERTEX_WORKERS=${VERTEX_WORKERS:-"${SLURM_CPUS_PER_TASK:-1}"}' in text
     assert 'EXCHANGE_WORKERS=${EXCHANGE_WORKERS:-"${SLURM_CPUS_PER_TASK:-1}"}' in text
+    assert "Resources: SLURM_CPUS_PER_TASK=" in text
+    assert "SLURM_MEM_PER_NODE=" in text
     assert "export OMP_NUM_THREADS=1" in text
     assert "export MKL_NUM_THREADS=1" in text
     assert "export OPENBLAS_NUM_THREADS=1" in text

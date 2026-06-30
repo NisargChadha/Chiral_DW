@@ -1,5 +1,6 @@
 import csv
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -9,6 +10,9 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "scan_taige_finite_size_cg.py"
 SCAN_JOB = ROOT / "jobs" / "scan_taige_finite_size_cg_array.sh"
 MERGE_JOB = ROOT / "jobs" / "merge_taige_finite_size_cg.sh"
+SUBMIT_BY_NK_JOB = ROOT / "jobs" / "submit_taige_finite_size_by_nk.sh"
+MEMORY_PROBE_JOB = ROOT / "jobs" / "submit_taige_finite_size_memory_probe.sh"
+COLLECT_MEMORY_JOB = ROOT / "jobs" / "collect_taige_slurm_memory.sh"
 
 
 def test_taige_finite_size_dry_run_writes_default_nk_plan(tmp_path):
@@ -228,6 +232,8 @@ def test_taige_finite_size_job_scripts_expose_array_and_merge_controls():
     assert 'COMPUTE_FINITE_Q_IVC=${COMPUTE_FINITE_Q_IVC:-"0"}' in scan_text
     assert 'VERTEX_WORKERS=${VERTEX_WORKERS:-"${SLURM_CPUS_PER_TASK:-1}"}' in scan_text
     assert 'EXCHANGE_WORKERS=${EXCHANGE_WORKERS:-"${SLURM_CPUS_PER_TASK:-1}"}' in scan_text
+    assert "Resources: SLURM_CPUS_PER_TASK=" in scan_text
+    assert "SLURM_MEM_PER_NODE=" in scan_text
     assert "export OMP_NUM_THREADS=1" in scan_text
     assert "export MKL_NUM_THREADS=1" in scan_text
     assert "export OPENBLAS_NUM_THREADS=1" in scan_text
@@ -246,3 +252,83 @@ def test_taige_finite_size_job_scripts_expose_array_and_merge_controls():
     assert "scripts/scan_taige_finite_size_cg.py" in merge_text
     assert "--merge-only" in merge_text
     assert 'OUTPUT_ROOT=${OUTPUT_ROOT:-"results/taige_cg_finite_size_nk18_24_u0_15_theta2_4p2"}' in merge_text
+
+
+def test_taige_finite_size_by_nk_submitter_dry_run_builds_scaled_memory_commands(tmp_path):
+    output_root = tmp_path / "by_nk"
+    env = {
+        "DRY_RUN": "1",
+        "OUTPUT_ROOT": str(output_root),
+        "N_K_LIST": "18,20",
+        "N_U_D": "2",
+        "N_TWIST": "3",
+        "CPUS_PER_TASK": "4",
+        "MEMORY_GB_PER_NK": "1",
+        "MEMORY_GB_MIN": "8",
+        "MAX_CONCURRENT_PER_NK": "5",
+    }
+    completed = subprocess.run(
+        [str(SUBMIT_BY_NK_JOB)],
+        check=True,
+        capture_output=True,
+        text=True,
+        env={**os.environ, **env},
+    )
+
+    out = completed.stdout
+    assert "sbatch" in out
+    assert "--array=0-5%5" in out
+    assert "--mem=18G" in out
+    assert "--mem=20G" in out
+    assert "--cpus-per-task=4" in out
+    assert "N_K_LIST=18" in out
+    assert "N_K_LIST=20" in out
+    assert "VERTEX_WORKERS=4" in out
+    assert "EXCHANGE_WORKERS=4" in out
+    assert not (output_root / "slurm_jobs_finite_size_by_nk.csv").exists()
+
+
+def test_taige_finite_size_memory_probe_dry_run_builds_single_point_commands(tmp_path):
+    output_root = tmp_path / "probe"
+    env = {
+        "DRY_RUN": "1",
+        "OUTPUT_ROOT": str(output_root),
+        "N_K_LIST": "18,24",
+        "U_D": "1.25",
+        "THETA_DEG": "3.4",
+        "CPUS_PER_TASK": "4",
+        "MEMORY_GB_PER_NK": "1",
+        "MEMORY_GB_MIN": "8",
+    }
+    completed = subprocess.run(
+        [str(MEMORY_PROBE_JOB)],
+        check=True,
+        capture_output=True,
+        text=True,
+        env={**os.environ, **env},
+    )
+
+    out = completed.stdout
+    assert "sbatch" in out
+    assert "--array=0-0" in out
+    assert "--mem=18G" in out
+    assert "--mem=24G" in out
+    assert "N_K_LIST=18" in out
+    assert "N_K_LIST=24" in out
+    assert "U_D_MIN=1.25" in out
+    assert "U_D_MAX=1.25" in out
+    assert "N_U_D=1" in out
+    assert "THETA_MIN_DEG=3.4" in out
+    assert "THETA_MAX_DEG=3.4" in out
+    assert "N_TWIST=1" in out
+    assert "Q_MESH=full" in out
+    assert not (output_root / "slurm_jobs_memory_probe.csv").exists()
+
+
+def test_taige_finite_size_memory_collector_queries_sacct_and_writes_csv():
+    text = COLLECT_MEMORY_JOB.read_text()
+    assert "sacct" in text
+    assert "JobIDRaw,State,Elapsed,AllocCPUS,ReqMem,MaxRSS,MaxVMSize" in text
+    assert "slurm_memory_usage.csv" in text
+    assert "max_rss_mb" in text
+    assert "max_vmsize_mb" in text

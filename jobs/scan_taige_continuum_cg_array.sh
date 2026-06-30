@@ -107,6 +107,7 @@ if [[ "$NAN_TEXTURE_WHEN_IVC_LOWER" == "0" ]]; then
 fi
 
 echo "Running Taige continuum c_G task ${TASK_ID}/${TOTAL_TASKS} into ${OUTPUT_ROOT}"
+echo "Resources: SLURM_CPUS_PER_TASK=${SLURM_CPUS_PER_TASK:-unset} VERTEX_WORKERS=${VERTEX_WORKERS} EXCHANGE_WORKERS=${EXCHANGE_WORKERS} SLURM_MEM_PER_NODE=${SLURM_MEM_PER_NODE:-unset} SLURM_MEM_PER_CPU=${SLURM_MEM_PER_CPU:-unset}"
 python scripts/scan_taige_continuum_cg.py \
   --output-root "$OUTPUT_ROOT" \
   --u-d-min "$U_D_MIN" \
