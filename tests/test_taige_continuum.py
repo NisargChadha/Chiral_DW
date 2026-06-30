@@ -530,6 +530,7 @@ def test_taige_interaction_params_accept_screening_overrides():
         hartree_scale=0.9,
         exchange_scale=0.8,
         vertex_workers=2,
+        exchange_workers=3,
     )
 
     assert interaction.coulomb_kind == "dual_gate"
@@ -544,6 +545,7 @@ def test_taige_interaction_params_accept_screening_overrides():
     assert interaction.hartree_scale == 0.9
     assert interaction.exchange_scale == 0.8
     assert interaction.vertex_workers == 2
+    assert interaction.exchange_workers == 3
 
 
 def test_taige_finite_q_density_vertices_use_shifted_physical_sources():

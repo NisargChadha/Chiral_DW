@@ -193,6 +193,7 @@ def taige_interaction_params(
     hartree_scale: float = 1.0,
     exchange_scale: float = 1.0,
     vertex_workers: int = 1,
+    exchange_workers: int = 1,
 ) -> ContinuumInteractionParams:
     """Return dual-gated smeared Coulomb parameters for Taige MoTe2."""
 
@@ -210,6 +211,7 @@ def taige_interaction_params(
         hartree_scale=float(hartree_scale),
         exchange_scale=float(exchange_scale),
         vertex_workers=int(vertex_workers),
+        exchange_workers=int(exchange_workers),
     )
 
 

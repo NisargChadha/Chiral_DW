@@ -37,6 +37,7 @@ def test_taige_finite_size_dry_run_writes_default_nk_plan(tmp_path):
     assert plan["args"]["finite_q_shift_policy"] == "nearest-half"
     assert plan["args"]["ivc_branch_policy"] == "q0"
     assert plan["args"]["vertex_workers"] == 1
+    assert plan["args"]["exchange_workers"] == 1
     assert (output_root / "sweep_plan.csv").exists()
     assert (output_root / "sweep_phase_plan.csv").exists()
 
@@ -212,6 +213,7 @@ def test_taige_finite_size_smoke_runs_approximate_nk13_point(tmp_path):
 def test_taige_finite_size_job_scripts_expose_array_and_merge_controls():
     script_text = SCRIPT.read_text()
     assert "--vertex-workers" in script_text
+    assert "--exchange-workers" in script_text
 
     scan_text = SCAN_JOB.read_text()
     assert "#SBATCH --array=0-440" in scan_text
@@ -225,6 +227,7 @@ def test_taige_finite_size_job_scripts_expose_array_and_merge_controls():
     assert 'COMPUTE_CHERN=${COMPUTE_CHERN:-"1"}' in scan_text
     assert 'COMPUTE_FINITE_Q_IVC=${COMPUTE_FINITE_Q_IVC:-"0"}' in scan_text
     assert 'VERTEX_WORKERS=${VERTEX_WORKERS:-"${SLURM_CPUS_PER_TASK:-1}"}' in scan_text
+    assert 'EXCHANGE_WORKERS=${EXCHANGE_WORKERS:-"${SLURM_CPUS_PER_TASK:-1}"}' in scan_text
     assert "export OMP_NUM_THREADS=1" in scan_text
     assert "export MKL_NUM_THREADS=1" in scan_text
     assert "export OPENBLAS_NUM_THREADS=1" in scan_text
@@ -234,6 +237,7 @@ def test_taige_finite_size_job_scripts_expose_array_and_merge_controls():
     assert "TOTAL_TASKS=$((N_U_D * N_TWIST))" in scan_text
     assert "scripts/scan_taige_finite_size_cg.py" in scan_text
     assert "--vertex-workers" in scan_text
+    assert "--exchange-workers" in scan_text
     assert "--compute-finite-q-ivc" in scan_text
     assert "--finite-q-shift-policy" in scan_text
     assert "--merge_taige_finite_size_cg.sh" not in scan_text

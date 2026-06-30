@@ -267,6 +267,7 @@ class ContinuumInteractionParams(BaseModel):
     hartree_scale: float = Field(default=1.0, ge=0.0)
     reference_density: Literal["zero"] = "zero"
     vertex_workers: int = Field(default=1, ge=0)
+    exchange_workers: int = Field(default=1, ge=0)
 
 
 class ContinuumHFParams(BaseModel):

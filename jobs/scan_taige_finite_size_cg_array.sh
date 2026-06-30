@@ -45,6 +45,7 @@ V0=${V0:-"1.0"}
 EXCHANGE_SCALE=${EXCHANGE_SCALE:-"1.0"}
 HARTREE_SCALE=${HARTREE_SCALE:-"1.0"}
 VERTEX_WORKERS=${VERTEX_WORKERS:-"${SLURM_CPUS_PER_TASK:-1}"}
+EXCHANGE_WORKERS=${EXCHANGE_WORKERS:-"${SLURM_CPUS_PER_TASK:-1}"}
 
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
@@ -134,6 +135,7 @@ python scripts/scan_taige_finite_size_cg.py \
   --exchange-scale "$EXCHANGE_SCALE" \
   --hartree-scale "$HARTREE_SCALE" \
   --vertex-workers "$VERTEX_WORKERS" \
+  --exchange-workers "$EXCHANGE_WORKERS" \
   --n-occ-per-k "$N_OCC_PER_K" \
   --max-iter "$MAX_ITER" \
   --min-iter "$MIN_ITER" \

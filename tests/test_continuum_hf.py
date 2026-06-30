@@ -33,6 +33,7 @@ from chiral_dw.continuum import (
     taige_model_params,
 )
 from chiral_dw.continuum.models import SymmetricHFReferences, block_trace_product, hermitize
+from chiral_dw.continuum.hf import _hermitize_dense_in_place
 from chiral_dw.continuum.seeds import ivc_seed, valley_polarized_seed
 from chiral_dw.response import compute_cG, k_theta_from_projectors_with_basis
 
@@ -73,6 +74,18 @@ def _slow_fock(backend: ContinuumHFBackend, Q: np.ndarray) -> np.ndarray:
     return hermitize(out)
 
 
+def test_tiled_dense_hermitization_matches_full_expression():
+    rng = np.random.default_rng(17)
+    raw = rng.normal(size=(13, 13)) + 1j * rng.normal(size=(13, 13))
+    expected = 0.5 * (raw + raw.conj().T)
+    actual = raw.copy()
+
+    returned = _hermitize_dense_in_place(actual, tile_size=4)
+
+    assert returned is actual
+    assert np.allclose(actual, expected)
+
+
 def test_optimized_backend_matches_slow_hartree_fock_reference():
     rng = np.random.default_rng(11)
     h0 = np.stack(
@@ -94,10 +107,18 @@ def test_optimized_backend_matches_slow_hartree_fock_reference():
         g_channels=((0, 0), (1, 0)),
     )
     backend = ContinuumHFBackend(h0, vertices, ContinuumInteractionParams())
+    parallel_backend = ContinuumHFBackend(
+        h0,
+        vertices,
+        ContinuumInteractionParams(exchange_workers=2),
+    )
     raw = rng.normal(size=h0.shape) + 1j * rng.normal(size=h0.shape)
     Q = hermitize(raw)
 
     assert backend.tVE.shape == (backend.n_blocks * backend.dim**2, backend.n_blocks * backend.dim**2)
+    assert np.allclose(parallel_backend.tVE, backend.tVE)
+    assert np.allclose(parallel_backend.fock_hamiltonian(Q), backend.fock_hamiltonian(Q))
+    assert np.allclose(parallel_backend.hf_hamiltonian(Q), backend.hf_hamiltonian(Q))
     assert np.allclose(backend.hartree_hamiltonian(Q), _slow_hartree(backend, Q))
     assert np.allclose(backend.fock_hamiltonian(Q), _slow_fock(backend, Q))
     assert np.allclose(
@@ -114,6 +135,12 @@ def test_optimized_backend_matches_slow_hartree_fock_reference():
 
 
 def test_finite_q_taige_backend_matches_slow_hartree_fock_reference():
+    interaction = ContinuumInteractionParams(
+        coulomb_kind="dimensionless_screened",
+        v0=0.03,
+        q_shell=1,
+        local_field_cutoff=0,
+    )
     bundle = build_continuum_bundle(
         model=taige_model_params(theta_deg=3.5, u_D=0.0, plane_wave_shell=1, n_bands=1),
         grid=ContinuumGridParams(n_k=6),
@@ -122,18 +149,32 @@ def test_finite_q_taige_backend_matches_slow_hartree_fock_reference():
             q_coord=taige_ivc_minus_q_coord(6),
             half_shift_coord=taige_ivc_minus_half_shift_coord(6),
         ),
-        interaction=ContinuumInteractionParams(
-            coulomb_kind="dimensionless_screened",
-            v0=0.03,
-            q_shell=1,
-            local_field_cutoff=0,
+        interaction=interaction,
+    )
+    parallel_bundle = build_continuum_bundle(
+        model=taige_model_params(theta_deg=3.5, u_D=0.0, plane_wave_shell=1, n_bands=1),
+        grid=ContinuumGridParams(n_k=6),
+        finite_q=ContinuumFiniteQParams(
+            enabled=True,
+            q_coord=taige_ivc_minus_q_coord(6),
+            half_shift_coord=taige_ivc_minus_half_shift_coord(6),
         ),
+        interaction=interaction.model_copy(update={"exchange_workers": 2}),
     )
     rng = np.random.default_rng(13)
     Q = hermitize(
         rng.normal(size=bundle.active.h0.shape) + 1j * rng.normal(size=bundle.active.h0.shape)
     )
 
+    assert np.allclose(parallel_bundle.backend.tVE, bundle.backend.tVE)
+    assert np.allclose(
+        parallel_bundle.backend.fock_hamiltonian(Q),
+        bundle.backend.fock_hamiltonian(Q),
+    )
+    assert np.allclose(
+        parallel_bundle.backend.hf_hamiltonian(Q),
+        bundle.backend.hf_hamiltonian(Q),
+    )
     assert np.allclose(bundle.backend.hartree_hamiltonian(Q), _slow_hartree(bundle.backend, Q))
     assert np.allclose(bundle.backend.fock_hamiltonian(Q), _slow_fock(bundle.backend, Q))
 

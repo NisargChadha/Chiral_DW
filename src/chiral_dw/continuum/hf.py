@@ -34,6 +34,73 @@ class EnergyComponents:
     fock: float
 
 
+def _exchange_q_slab_ranges(n_q: int, exchange_workers: int) -> tuple[tuple[int, int], ...]:
+    n_jobs = max(1, min(int(exchange_workers), int(n_q)))
+    n_slabs = max(1, min(int(n_q), 16 * n_jobs))
+    bounds = np.linspace(0, int(n_q), n_slabs + 1, dtype=int)
+    return tuple(
+        (int(start), int(stop))
+        for start, stop in zip(bounds[:-1], bounds[1:])
+        if int(start) < int(stop)
+    )
+
+
+def _exchange_tve_q_slab(
+    *,
+    q_start: int,
+    q_stop: int,
+    lambda_blocks: np.ndarray,
+    v_over_a: np.ndarray,
+    exchange_scale: float,
+) -> tuple[tuple[int, np.ndarray, np.ndarray], ...]:
+    """Return dense block-exchange contributions for one q-slab."""
+
+    rows: list[tuple[int, np.ndarray, np.ndarray]] = []
+    scale = float(exchange_scale)
+    for iq in range(int(q_start), int(q_stop)):
+        v = 0.5 * scale * v_over_a[iq]
+        if not np.any(v):
+            continue
+        lam_q = lambda_blocks[iq]
+        forward = np.einsum(
+            "g,gkac,gkbd->kabcd",
+            v,
+            lam_q,
+            np.conj(lam_q),
+            optimize=True,
+        )
+        reverse = np.einsum(
+            "g,gkca,gkdb->kabcd",
+            v,
+            np.conj(lam_q),
+            lam_q,
+            optimize=True,
+        )
+        rows.append((iq, forward, reverse))
+    return tuple(rows)
+
+
+def _hermitize_dense_in_place(matrix: np.ndarray, *, tile_size: int = 1024) -> np.ndarray:
+    """Replace ``matrix`` by ``0.5 * (matrix + matrix.conj().T)`` using tiles."""
+
+    if matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1]:
+        raise ValueError("matrix must be square")
+    n = matrix.shape[0]
+    tile = max(1, int(tile_size))
+    for row_start in range(0, n, tile):
+        row_stop = min(row_start + tile, n)
+        diagonal = matrix[row_start:row_stop, row_start:row_stop]
+        diagonal[...] = 0.5 * (diagonal + diagonal.conj().T)
+        for col_start in range(row_stop, n, tile):
+            col_stop = min(col_start + tile, n)
+            upper = matrix[row_start:row_stop, col_start:col_stop].copy()
+            lower = matrix[col_start:col_stop, row_start:row_stop]
+            sym = 0.5 * (upper + lower.conj().T)
+            matrix[row_start:row_stop, col_start:col_stop] = sym
+            matrix[col_start:col_stop, row_start:row_stop] = sym.conj().T
+    return matrix
+
+
 class ContinuumHFBackend:
     """TMD_HF-style optimized block HF backend for native continuum vertices."""
 
@@ -119,29 +186,96 @@ class ContinuumHFBackend:
             return tVE
         local = np.arange(block_dim)
         block_rows = np.arange(self.n_blocks)[:, None] * block_dim + local[None, :]
+        if self.interaction.exchange_workers <= 1:
+            self._build_exchange_tve_serial(tVE, block_rows, block_dim, scale)
+        else:
+            self._build_exchange_tve_parallel(tVE, block_rows, block_dim, scale)
+        return _hermitize_dense_in_place(tVE)
+
+    def _scatter_exchange_tve_q_contribution(
+        self,
+        tVE: np.ndarray,
+        block_rows: np.ndarray,
+        block_dim: int,
+        iq: int,
+        forward: np.ndarray,
+        reverse: np.ndarray,
+    ) -> None:
+        local = np.arange(block_dim)
+        target_rows = self.target_minus_q[int(iq), :, None] * block_dim + local[None, :]
+        tVE[block_rows[:, :, None], target_rows[:, None, :]] += forward.reshape(
+            self.n_blocks,
+            block_dim,
+            block_dim,
+        )
+        tVE[target_rows[:, :, None], block_rows[:, None, :]] += reverse.reshape(
+            self.n_blocks,
+            block_dim,
+            block_dim,
+        )
+
+    def _build_exchange_tve_serial(
+        self,
+        tVE: np.ndarray,
+        block_rows: np.ndarray,
+        block_dim: int,
+        scale: float,
+    ) -> None:
         for iq in range(self.n_q):
-            target_rows = self.target_minus_q[iq, :, None] * block_dim + local[None, :]
-            v = 0.5 * scale * self.v_over_a[iq]
-            if not np.any(v):
-                continue
-            lam_q = self.lambda_blocks[iq]
-            forward = np.einsum(
-                "g,gkac,gkbd->kabcd",
-                v,
-                lam_q,
-                np.conj(lam_q),
-                optimize=True,
-            ).reshape(self.n_blocks, block_dim, block_dim)
-            reverse = np.einsum(
-                "g,gkca,gkdb->kabcd",
-                v,
-                np.conj(lam_q),
-                lam_q,
-                optimize=True,
-            ).reshape(self.n_blocks, block_dim, block_dim)
-            tVE[block_rows[:, :, None], target_rows[:, None, :]] += forward
-            tVE[target_rows[:, :, None], block_rows[:, None, :]] += reverse
-        return 0.5 * (tVE + tVE.conj().T)
+            for q_index, forward, reverse in _exchange_tve_q_slab(
+                q_start=iq,
+                q_stop=iq + 1,
+                lambda_blocks=self.lambda_blocks,
+                v_over_a=self.v_over_a,
+                exchange_scale=scale,
+            ):
+                self._scatter_exchange_tve_q_contribution(
+                    tVE,
+                    block_rows,
+                    block_dim,
+                    q_index,
+                    forward,
+                    reverse,
+                )
+
+    def _build_exchange_tve_parallel(
+        self,
+        tVE: np.ndarray,
+        block_rows: np.ndarray,
+        block_dim: int,
+        scale: float,
+    ) -> None:
+        from joblib import Parallel, delayed
+
+        n_jobs = max(1, min(int(self.interaction.exchange_workers), self.n_q))
+        ranges = _exchange_q_slab_ranges(self.n_q, n_jobs)
+        tasks = (
+            delayed(_exchange_tve_q_slab)(
+                q_start=start,
+                q_stop=stop,
+                lambda_blocks=self.lambda_blocks,
+                v_over_a=self.v_over_a,
+                exchange_scale=scale,
+            )
+            for start, stop in ranges
+        )
+        results = Parallel(
+            n_jobs=n_jobs,
+            backend="loky",
+            return_as="generator",
+            mmap_mode="r",
+            max_nbytes="32M",
+        )(tasks)
+        for slab_rows in results:
+            for q_index, forward, reverse in slab_rows:
+                self._scatter_exchange_tve_q_contribution(
+                    tVE,
+                    block_rows,
+                    block_dim,
+                    q_index,
+                    forward,
+                    reverse,
+                )
 
     def hartree_hamiltonian(self, Q: np.ndarray) -> np.ndarray:
         density = self.as_block_density(Q)

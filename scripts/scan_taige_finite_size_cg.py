@@ -143,6 +143,12 @@ def _build_parser() -> argparse.ArgumentParser:
         default=1,
         help="Number of joblib worker processes for Taige density-vertex q-slabs.",
     )
+    parser.add_argument(
+        "--exchange-workers",
+        type=int,
+        default=1,
+        help="Number of joblib worker processes for dense exchange-kernel q-slabs.",
+    )
 
     parser.add_argument("--n-occ-per-k", type=int, default=1)
     parser.add_argument("--max-iter", type=int, default=100)
@@ -295,6 +301,7 @@ def _params_for_point(
             "exchange_scale": float(args.exchange_scale),
             "hartree_scale": float(args.hartree_scale),
             "vertex_workers": int(args.vertex_workers),
+            "exchange_workers": int(args.exchange_workers),
         }
     )
     hf = ContinuumHFParams(
@@ -680,7 +687,8 @@ def run_point(
         "Running Taige finite-size cG "
         f"n_k={point.n_k} u_D={point.u_D:.8g} meV theta={point.theta_deg:.8g} deg "
         f"finite_q_enabled={diagnostic_controls.compute_finite_q_ivc} "
-        f"vertex_workers={args.vertex_workers}"
+        f"vertex_workers={args.vertex_workers} "
+        f"exchange_workers={args.exchange_workers}"
     )
     start = time.perf_counter()
     result = run_taige_branch_selected_symmetric_hf_workflow(
