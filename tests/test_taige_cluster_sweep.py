@@ -46,6 +46,7 @@ def test_taige_sweep_dry_run_writes_selected_plan(tmp_path):
     assert point["theta_deg"] == 3.25
     assert "points/u_001_theta_001" in point["point_dir"]
     assert plan["args"]["ivc_branch_policy"] == "lower-energy"
+    assert plan["args"]["vertex_workers"] == 1
     assert (output_root / "sweep_plan.csv").exists()
 
 
@@ -207,8 +208,12 @@ def test_taige_sweep_point_writes_scalar_rich_diagnostics(tmp_path):
 
 
 def test_taige_sweep_job_uses_array_task_and_results_root():
+    script_text = SCRIPT.read_text()
+    assert "--vertex-workers" in script_text
+
     text = JOB.read_text()
     assert "#SBATCH --array=0-440" in text
+    assert "#SBATCH -c 4" in text
     assert "#SBATCH --mem=24G" in text
     assert "SLURM_ARRAY_TASK_ID" in text
     assert "scripts/scan_taige_continuum_cg.py" in text
@@ -221,6 +226,11 @@ def test_taige_sweep_job_uses_array_task_and_results_root():
     assert 'N_K=${N_K:-"24"}' in text
     assert 'PLANE_WAVE_SHELL=${PLANE_WAVE_SHELL:-"5"}' in text
     assert 'N_ACTIVE_BANDS_PER_VALLEY=${N_ACTIVE_BANDS_PER_VALLEY:-"2"}' in text
+    assert 'VERTEX_WORKERS=${VERTEX_WORKERS:-"${SLURM_CPUS_PER_TASK:-1}"}' in text
+    assert "export OMP_NUM_THREADS=1" in text
+    assert "export MKL_NUM_THREADS=1" in text
+    assert "export OPENBLAS_NUM_THREADS=1" in text
+    assert "export NUMEXPR_NUM_THREADS=1" in text
     assert 'COMPUTE_CHERN=${COMPUTE_CHERN:-"1"}' in text
     assert 'COMPUTE_FINITE_Q_IVC=${COMPUTE_FINITE_Q_IVC:-"1"}' in text
     assert 'IVC_BRANCH_POLICY=${IVC_BRANCH_POLICY:-"lower-energy"}' in text
@@ -235,4 +245,5 @@ def test_taige_sweep_job_uses_array_task_and_results_root():
     assert "--allow-texture-in-ivc-ground-state" in text
     assert "--texture-energy-tie-atol" in text
     assert "--write-hf-path-spectra" in text
+    assert "--vertex-workers" in text
     assert "--merge-only" in text

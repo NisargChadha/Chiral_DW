@@ -39,7 +39,11 @@ from chiral_dw.continuum import (
 )
 import chiral_dw.continuum.workflow as workflow_mod
 from chiral_dw.continuum.seeds import build_seed, mix_projector_seeds
-from chiral_dw.continuum.taige import TaigeContinuumModel, coulomb_potential_mev_nm2
+from chiral_dw.continuum.taige import (
+    TaigeContinuumModel,
+    build_taige_density_vertices,
+    coulomb_potential_mev_nm2,
+)
 from chiral_dw.response import compute_cG, k_theta_from_projectors_with_basis
 
 
@@ -464,6 +468,55 @@ def test_taige_density_vertices_have_q0_identity_and_smeared_dual_gate_weights()
     assert coulomb_potential_mev_nm2(5.0, interaction) < coulomb_potential_mev_nm2(5.0, unsmeared)
 
 
+def _assert_matching_density_vertices(serial, parallel):
+    assert serial.q_shifts == parallel.q_shifts
+    assert serial.g_channels == parallel.g_channels
+    assert np.array_equal(serial.target_minus_q, parallel.target_minus_q)
+    assert np.array_equal(serial.q_is_zero, parallel.q_is_zero)
+    assert np.array_equal(serial.channel_in_disk, parallel.channel_in_disk)
+    assert np.allclose(serial.lambda_blocks, parallel.lambda_blocks, atol=1e-12)
+    assert np.allclose(serial.v_over_a, parallel.v_over_a, atol=1e-14)
+    assert np.allclose(serial.q_vectors_nm_inv, parallel.q_vectors_nm_inv, atol=1e-14)
+    assert np.allclose(serial.v_q, parallel.v_q, atol=1e-14)
+
+
+@pytest.mark.parametrize(
+    ("q_mesh", "q_shell", "local_field_cutoff", "n_k"),
+    [
+        ("shell", 1, 1, 3),
+        ("full", 0, 0, 3),
+    ],
+)
+def test_taige_density_vertices_parallel_q_slabs_match_serial(
+    q_mesh,
+    q_shell,
+    local_field_cutoff,
+    n_k,
+):
+    model = taige_model_params(theta_deg=3.5, u_D=0.0, plane_wave_shell=1, n_bands=1)
+    interaction = ContinuumInteractionParams(
+        coulomb_kind="dimensionless_screened",
+        v0=0.05,
+        q_mesh=q_mesh,
+        q_shell=q_shell,
+        local_field_cutoff=local_field_cutoff,
+        vertex_workers=1,
+    )
+    bundle = build_continuum_bundle(
+        model=model,
+        grid=ContinuumGridParams(n_k=n_k),
+        interaction=interaction,
+    )
+
+    serial = build_taige_density_vertices(bundle.active, interaction)
+    parallel = build_taige_density_vertices(
+        bundle.active,
+        interaction.model_copy(update={"vertex_workers": 2}),
+    )
+
+    _assert_matching_density_vertices(serial, parallel)
+
+
 def test_taige_interaction_params_accept_screening_overrides():
     interaction = taige_interaction_params(
         include_q0=False,
@@ -476,6 +529,7 @@ def test_taige_interaction_params_accept_screening_overrides():
         interaction_strength_scale=0.7,
         hartree_scale=0.9,
         exchange_scale=0.8,
+        vertex_workers=2,
     )
 
     assert interaction.coulomb_kind == "dual_gate"
@@ -489,6 +543,7 @@ def test_taige_interaction_params_accept_screening_overrides():
     assert interaction.v0 == 0.7
     assert interaction.hartree_scale == 0.9
     assert interaction.exchange_scale == 0.8
+    assert interaction.vertex_workers == 2
 
 
 def test_taige_finite_q_density_vertices_use_shifted_physical_sources():

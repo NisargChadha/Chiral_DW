@@ -64,6 +64,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--v0", type=float, default=1.0)
     parser.add_argument("--exchange-scale", type=float, default=1.0)
     parser.add_argument("--hartree-scale", type=float, default=1.0)
+    parser.add_argument(
+        "--vertex-workers",
+        type=int,
+        default=1,
+        help="Number of joblib worker processes for Taige density-vertex q-slabs.",
+    )
 
     parser.add_argument("--n-occ-per-k", type=int, default=1)
     parser.add_argument("--max-iter", type=int, default=100)
@@ -173,6 +179,7 @@ def _params_for_point(args: argparse.Namespace, point: TaigeSweepPoint, point_di
             "v0": float(args.v0),
             "exchange_scale": float(args.exchange_scale),
             "hartree_scale": float(args.hartree_scale),
+            "vertex_workers": int(args.vertex_workers),
         }
     )
     hf = ContinuumHFParams(
@@ -360,7 +367,8 @@ def run_point(args: argparse.Namespace, output_root: Path, point: TaigeSweepPoin
         "Running Taige continuum HF cG "
         f"u_D={point.u_D:.8g} meV theta={point.theta_deg:.8g} deg "
         f"n_k={args.n_k} q_mesh={args.q_mesh} q_shell={args.q_shell} "
-        f"local_field_cutoff={args.local_field_cutoff}"
+        f"local_field_cutoff={args.local_field_cutoff} "
+        f"vertex_workers={args.vertex_workers}"
     )
     start = time.perf_counter()
     diagnostic_controls = _diagnostic_params(args)

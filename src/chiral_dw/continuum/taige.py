@@ -192,6 +192,7 @@ def taige_interaction_params(
     interaction_strength_scale: float = 1.0,
     hartree_scale: float = 1.0,
     exchange_scale: float = 1.0,
+    vertex_workers: int = 1,
 ) -> ContinuumInteractionParams:
     """Return dual-gated smeared Coulomb parameters for Taige MoTe2."""
 
@@ -208,6 +209,7 @@ def taige_interaction_params(
         local_field_cutoff=int(local_field_cutoff),
         hartree_scale=float(hartree_scale),
         exchange_scale=float(exchange_scale),
+        vertex_workers=int(vertex_workers),
     )
 
 
@@ -757,6 +759,203 @@ def _dimensionless_v_over_a(
     return v.copy(), v, q_zero
 
 
+def _grid_coord_of(index: int, n_k: int) -> GridCoord:
+    idx = int(index)
+    n = int(n_k)
+    return idx // n, idx % n
+
+
+def _grid_index_of(coord: GridCoord, n_k: int) -> int:
+    n = int(n_k)
+    i, j = int(coord[0]) % n, int(coord[1]) % n
+    return i * n + j
+
+
+def _fold_grid_coord(coord: GridCoord, n_k: int) -> tuple[GridCoord, GridCoord]:
+    n = int(n_k)
+    i, j = int(coord[0]), int(coord[1])
+    fi = i % n
+    fj = j % n
+    return (fi, fj), ((i - fi) // n, (j - fj) // n)
+
+
+def _taige_density_vertex_q_slab(
+    *,
+    q_start: int,
+    q_stop: int,
+    q_list: tuple[GridCoord, ...],
+    g_channels: tuple[GridCoord, ...],
+    channel_in_disk: np.ndarray,
+    n_k: int,
+    n_active: int,
+    dim: int,
+    shell: tuple[GridCoord, ...],
+    shell_index: dict[GridCoord, int],
+    electron_vectors: np.ndarray,
+    source_index: np.ndarray | None,
+) -> tuple[int, np.ndarray, np.ndarray, np.ndarray]:
+    """Build one contiguous q-slab of Taige density-vertex arrays."""
+
+    q_slab = q_list[int(q_start) : int(q_stop)]
+    n_q_slab = len(q_slab)
+    n_g = len(g_channels)
+    grid_size = int(n_k) * int(n_k)
+    target_minus_q = np.empty((n_q_slab, grid_size), dtype=int)
+    q_is_zero = np.zeros(n_q_slab, dtype=bool)
+    lambdas = np.zeros((n_q_slab, n_g, grid_size, dim, dim), dtype=complex)
+
+    def electron_form_factor(
+        iv: int,
+        ik: int,
+        q_mesh: GridCoord,
+        g_channel: GridCoord,
+    ) -> np.ndarray:
+        k_coord = _grid_coord_of(ik, n_k)
+        forward, rec_shift = _fold_grid_coord(
+            (k_coord[0] + int(q_mesh[0]), k_coord[1] + int(q_mesh[1])),
+            n_k,
+        )
+        ikq = _grid_index_of(forward, n_k)
+        shift = (rec_shift[0] + int(g_channel[0]), rec_shift[1] + int(g_channel[1]))
+        left = electron_vectors[ik, iv, :, :n_active]
+        right = electron_vectors[ikq, iv, :, :n_active]
+        return _overlap(left, right, shell=shell, shell_index=shell_index, shift=shift)
+
+    def hole_form_factor(
+        iv: int,
+        ik: int,
+        q_mesh: GridCoord,
+        g_channel: GridCoord,
+    ) -> np.ndarray:
+        k_coord = _grid_coord_of(ik, n_k)
+        ik_minus_q = _grid_index_of(
+            _fold_grid_coord(
+                (k_coord[0] - int(q_mesh[0]), k_coord[1] - int(q_mesh[1])),
+                n_k,
+            )[0],
+            n_k,
+        )
+        return electron_form_factor(iv, ik_minus_q, q_mesh, g_channel).T
+
+    for local_iq, q in enumerate(q_slab):
+        q_is_zero[local_iq] = q == (0, 0)
+        for ik in range(grid_size):
+            k_coord = _grid_coord_of(ik, n_k)
+            folded, _shift = _fold_grid_coord(
+                (k_coord[0] - int(q[0]), k_coord[1] - int(q[1])),
+                n_k,
+            )
+            target_minus_q[local_iq, ik] = _grid_index_of(folded, n_k)
+        for ig, g in enumerate(g_channels):
+            if not channel_in_disk[int(q_start) + local_iq, ig]:
+                continue
+            for ik in range(grid_size):
+                for iv in range(2):
+                    start = iv * n_active
+                    stop = start + n_active
+                    physical_source = (
+                        int(source_index[ik, iv]) if source_index is not None else int(ik)
+                    )
+                    lambdas[local_iq, ig, ik, start:stop, start:stop] = hole_form_factor(
+                        iv,
+                        physical_source,
+                        q,
+                        g,
+                    )
+
+    return int(q_start), target_minus_q, q_is_zero, lambdas
+
+
+def _q_slab_ranges(n_q: int, vertex_workers: int) -> tuple[tuple[int, int], ...]:
+    n_jobs = max(1, min(int(vertex_workers), int(n_q)))
+    n_slabs = max(1, min(int(n_q), 4 * n_jobs))
+    bounds = np.linspace(0, int(n_q), n_slabs + 1, dtype=int)
+    return tuple(
+        (int(start), int(stop))
+        for start, stop in zip(bounds[:-1], bounds[1:])
+        if int(start) < int(stop)
+    )
+
+
+def _build_taige_density_vertex_arrays_serial(
+    *,
+    q_list: tuple[GridCoord, ...],
+    g_channels: tuple[GridCoord, ...],
+    channel_in_disk: np.ndarray,
+    grid: MomentumGrid,
+    active: ContinuumActiveSpace,
+    shell_index: dict[GridCoord, int],
+    electron_vectors: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    _q_start, target_minus_q, q_is_zero, lambdas = _taige_density_vertex_q_slab(
+        q_start=0,
+        q_stop=len(q_list),
+        q_list=q_list,
+        g_channels=g_channels,
+        channel_in_disk=channel_in_disk,
+        n_k=grid.n_k,
+        n_active=active.n_active,
+        dim=active.dim,
+        shell=active.shell,
+        shell_index=shell_index,
+        electron_vectors=electron_vectors,
+        source_index=active.source_index,
+    )
+    return target_minus_q, q_is_zero, lambdas
+
+
+def _build_taige_density_vertex_arrays_parallel(
+    *,
+    q_list: tuple[GridCoord, ...],
+    g_channels: tuple[GridCoord, ...],
+    channel_in_disk: np.ndarray,
+    grid: MomentumGrid,
+    active: ContinuumActiveSpace,
+    shell_index: dict[GridCoord, int],
+    electron_vectors: np.ndarray,
+    vertex_workers: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    from joblib import Parallel, delayed
+
+    n_q = len(q_list)
+    n_g = len(g_channels)
+    target_minus_q = np.empty((n_q, grid.size), dtype=int)
+    q_is_zero = np.zeros(n_q, dtype=bool)
+    lambdas = np.zeros((n_q, n_g, grid.size, active.dim, active.dim), dtype=complex)
+    n_jobs = max(1, min(int(vertex_workers), n_q))
+    ranges = _q_slab_ranges(n_q, n_jobs)
+    tasks = (
+        delayed(_taige_density_vertex_q_slab)(
+            q_start=start,
+            q_stop=stop,
+            q_list=q_list,
+            g_channels=g_channels,
+            channel_in_disk=channel_in_disk,
+            n_k=grid.n_k,
+            n_active=active.n_active,
+            dim=active.dim,
+            shell=active.shell,
+            shell_index=shell_index,
+            electron_vectors=electron_vectors,
+            source_index=active.source_index,
+        )
+        for start, stop in ranges
+    )
+    results = Parallel(
+        n_jobs=n_jobs,
+        backend="loky",
+        return_as="generator",
+        mmap_mode="r",
+        max_nbytes="32M",
+    )(tasks)
+    for q_start, target_slab, q_zero_slab, lambda_slab in results:
+        q_stop = q_start + target_slab.shape[0]
+        target_minus_q[q_start:q_stop] = target_slab
+        q_is_zero[q_start:q_stop] = q_zero_slab
+        lambdas[q_start:q_stop] = lambda_slab
+    return target_minus_q, q_is_zero, lambdas
+
+
 def build_taige_density_vertices(
     active: ContinuumActiveSpace,
     interaction: ContinuumInteractionParams,
@@ -768,11 +967,6 @@ def build_taige_density_vertices(
     grid = active.grid
     q_list = q_transfers(grid, interaction)
     g_channels = reciprocal_box(interaction.local_field_cutoff)
-    n_q = len(q_list)
-    n_g = len(g_channels)
-    target_minus_q = np.empty((n_q, grid.size), dtype=int)
-    q_is_zero = np.zeros(n_q, dtype=bool)
-    lambdas = np.zeros((n_q, n_g, grid.size, active.dim, active.dim), dtype=complex)
     shell = active.shell
     shell_index = {g: i for i, g in enumerate(shell)}
     bands = active.bands
@@ -785,42 +979,27 @@ def build_taige_density_vertices(
         g_channels,
         interaction.local_field_cutoff,
     )
-
-    def electron_form_factor(iv: int, ik: int, q_mesh: GridCoord, g_channel: GridCoord) -> np.ndarray:
-        forward, rec_shift = grid.shift_plus_q(grid.coord_of(ik), q_mesh)
-        ikq = grid.index_of(forward)
-        shift = (rec_shift[0] + int(g_channel[0]), rec_shift[1] + int(g_channel[1]))
-        left = electron_vectors[ik, iv, :, : active.n_active]
-        right = electron_vectors[ikq, iv, :, : active.n_active]
-        return _overlap(left, right, shell=shell, shell_index=shell_index, shift=shift)
-
-    def hole_form_factor(iv: int, ik: int, q_mesh: GridCoord, g_channel: GridCoord) -> np.ndarray:
-        ik_minus_q = grid.index_of(grid.shift_minus_q(grid.coord_of(ik), q_mesh)[0])
-        return electron_form_factor(iv, ik_minus_q, q_mesh, g_channel).T
-
-    for iq, q in enumerate(q_list):
-        q_is_zero[iq] = q == (0, 0)
-        for ik in range(grid.size):
-            folded, _shift = grid.shift_minus_q(grid.coord_of(ik), q)
-            target_minus_q[iq, ik] = grid.index_of(folded)
-        for ig, g in enumerate(g_channels):
-            if not channel_in_disk[iq, ig]:
-                continue
-            for ik in range(grid.size):
-                for iv in range(2):
-                    start = iv * active.n_active
-                    stop = start + active.n_active
-                    physical_source = (
-                        int(active.source_index[ik, iv])
-                        if active.source_index is not None
-                        else int(ik)
-                    )
-                    lambdas[iq, ig, ik, start:stop, start:stop] = hole_form_factor(
-                        iv,
-                        physical_source,
-                        q,
-                        g,
-                    )
+    if interaction.vertex_workers <= 1:
+        target_minus_q, q_is_zero, lambdas = _build_taige_density_vertex_arrays_serial(
+            q_list=q_list,
+            g_channels=g_channels,
+            channel_in_disk=channel_in_disk,
+            grid=grid,
+            active=active,
+            shell_index=shell_index,
+            electron_vectors=electron_vectors,
+        )
+    else:
+        target_minus_q, q_is_zero, lambdas = _build_taige_density_vertex_arrays_parallel(
+            q_list=q_list,
+            g_channels=g_channels,
+            channel_in_disk=channel_in_disk,
+            grid=grid,
+            active=active,
+            shell_index=shell_index,
+            electron_vectors=electron_vectors,
+            vertex_workers=interaction.vertex_workers,
+        )
 
     q_vectors_nm_inv = geometry.mesh_q_vectors_nm_inv(grid, q_list, g_channels)
     if interaction.coulomb_kind == "dual_gate":
@@ -839,7 +1018,7 @@ def build_taige_density_vertices(
     return DensityVertices(
         q_shifts=q_list,
         target_minus_q=target_minus_q,
-        q_is_zero=np.any(q_zero_channels, axis=-1),
+        q_is_zero=np.logical_or(q_is_zero, np.any(q_zero_channels, axis=-1)),
         lambda_blocks=lambdas,
         v_over_a=v_over_a,
         g_channels=g_channels,

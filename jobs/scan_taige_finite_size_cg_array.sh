@@ -3,7 +3,7 @@
 #SBATCH -p serial_requeue
 #SBATCH --array=0-440
 #SBATCH -t 24:00:00
-#SBATCH -c 1
+#SBATCH -c 4
 #SBATCH --mem=24G
 #SBATCH -o logs/taige_finite_size_cG_%A_%a.out
 #SBATCH -e logs/taige_finite_size_cG_%A_%a.err
@@ -44,6 +44,12 @@ SMEAR_LENGTH_NM=${SMEAR_LENGTH_NM:-"0.347"}
 V0=${V0:-"1.0"}
 EXCHANGE_SCALE=${EXCHANGE_SCALE:-"1.0"}
 HARTREE_SCALE=${HARTREE_SCALE:-"1.0"}
+VERTEX_WORKERS=${VERTEX_WORKERS:-"${SLURM_CPUS_PER_TASK:-1}"}
+
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
 
 N_OCC_PER_K=${N_OCC_PER_K:-"1"}
 MAX_ITER=${MAX_ITER:-"100"}
@@ -127,6 +133,7 @@ python scripts/scan_taige_finite_size_cg.py \
   --v0 "$V0" \
   --exchange-scale "$EXCHANGE_SCALE" \
   --hartree-scale "$HARTREE_SCALE" \
+  --vertex-workers "$VERTEX_WORKERS" \
   --n-occ-per-k "$N_OCC_PER_K" \
   --max-iter "$MAX_ITER" \
   --min-iter "$MIN_ITER" \

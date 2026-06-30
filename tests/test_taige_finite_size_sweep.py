@@ -36,6 +36,7 @@ def test_taige_finite_size_dry_run_writes_default_nk_plan(tmp_path):
     assert phase_plan["phase_points"][0]["label"] == "u_000_theta_000"
     assert plan["args"]["finite_q_shift_policy"] == "nearest-half"
     assert plan["args"]["ivc_branch_policy"] == "q0"
+    assert plan["args"]["vertex_workers"] == 1
     assert (output_root / "sweep_plan.csv").exists()
     assert (output_root / "sweep_phase_plan.csv").exists()
 
@@ -209,8 +210,12 @@ def test_taige_finite_size_smoke_runs_approximate_nk13_point(tmp_path):
 
 
 def test_taige_finite_size_job_scripts_expose_array_and_merge_controls():
+    script_text = SCRIPT.read_text()
+    assert "--vertex-workers" in script_text
+
     scan_text = SCAN_JOB.read_text()
     assert "#SBATCH --array=0-440" in scan_text
+    assert "#SBATCH -c 4" in scan_text
     assert 'N_K_LIST=${N_K_LIST:-"18,20,22,24"}' in scan_text
     assert 'U_D_MAX=${U_D_MAX:-"15.0"}' in scan_text
     assert 'N_U_D=${N_U_D:-"21"}' in scan_text
@@ -219,10 +224,16 @@ def test_taige_finite_size_job_scripts_expose_array_and_merge_controls():
     assert 'N_TWIST=${N_TWIST:-"21"}' in scan_text
     assert 'COMPUTE_CHERN=${COMPUTE_CHERN:-"1"}' in scan_text
     assert 'COMPUTE_FINITE_Q_IVC=${COMPUTE_FINITE_Q_IVC:-"0"}' in scan_text
+    assert 'VERTEX_WORKERS=${VERTEX_WORKERS:-"${SLURM_CPUS_PER_TASK:-1}"}' in scan_text
+    assert "export OMP_NUM_THREADS=1" in scan_text
+    assert "export MKL_NUM_THREADS=1" in scan_text
+    assert "export OPENBLAS_NUM_THREADS=1" in scan_text
+    assert "export NUMEXPR_NUM_THREADS=1" in scan_text
     assert 'FINITE_Q_SHIFT_POLICY=${FINITE_Q_SHIFT_POLICY:-"nearest-half"}' in scan_text
     assert 'IVC_BRANCH_POLICY=${IVC_BRANCH_POLICY:-"q0"}' in scan_text
     assert "TOTAL_TASKS=$((N_U_D * N_TWIST))" in scan_text
     assert "scripts/scan_taige_finite_size_cg.py" in scan_text
+    assert "--vertex-workers" in scan_text
     assert "--compute-finite-q-ivc" in scan_text
     assert "--finite-q-shift-policy" in scan_text
     assert "--merge_taige_finite_size_cg.sh" not in scan_text
