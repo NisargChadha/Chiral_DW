@@ -456,7 +456,9 @@ def _fine_hartree_hamiltonian(
         v = float(interaction.hartree_scale) * float(_fine_v_over_a(active, interaction, q_frac))
         if v == 0.0:
             continue
-        coarse_lambda = backend.lambda_blocks[q0_index, ig]
+        coarse_lambda = backend.hartree_lambda_for_channel(q0_index, ig)
+        if coarse_lambda is None:
+            continue
         density = np.einsum("kab,kba->", coarse_lambda, q_density, optimize=True)
         fine_lambda = _fine_lambda_ff(active, frame, g_channel)
         h += 0.5 * v * (np.conj(density) * fine_lambda + density * fine_lambda.conj().T)

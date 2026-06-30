@@ -46,6 +46,7 @@ EXCHANGE_SCALE=${EXCHANGE_SCALE:-"1.0"}
 HARTREE_SCALE=${HARTREE_SCALE:-"1.0"}
 VERTEX_WORKERS=${VERTEX_WORKERS:-"${SLURM_CPUS_PER_TASK:-1}"}
 EXCHANGE_WORKERS=${EXCHANGE_WORKERS:-"${SLURM_CPUS_PER_TASK:-1}"}
+DENSITY_VERTEX_RETENTION=${DENSITY_VERTEX_RETENTION:-"hartree_only"}
 
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
@@ -107,7 +108,7 @@ if [[ "$NAN_TEXTURE_WHEN_IVC_LOWER" == "0" ]]; then
 fi
 
 echo "Running Taige continuum c_G task ${TASK_ID}/${TOTAL_TASKS} into ${OUTPUT_ROOT}"
-echo "Resources: SLURM_CPUS_PER_TASK=${SLURM_CPUS_PER_TASK:-unset} VERTEX_WORKERS=${VERTEX_WORKERS} EXCHANGE_WORKERS=${EXCHANGE_WORKERS} SLURM_MEM_PER_NODE=${SLURM_MEM_PER_NODE:-unset} SLURM_MEM_PER_CPU=${SLURM_MEM_PER_CPU:-unset}"
+echo "Resources: SLURM_CPUS_PER_TASK=${SLURM_CPUS_PER_TASK:-unset} VERTEX_WORKERS=${VERTEX_WORKERS} EXCHANGE_WORKERS=${EXCHANGE_WORKERS} DENSITY_VERTEX_RETENTION=${DENSITY_VERTEX_RETENTION} SLURM_MEM_PER_NODE=${SLURM_MEM_PER_NODE:-unset} SLURM_MEM_PER_CPU=${SLURM_MEM_PER_CPU:-unset}"
 python scripts/scan_taige_continuum_cg.py \
   --output-root "$OUTPUT_ROOT" \
   --u-d-min "$U_D_MIN" \
@@ -133,6 +134,7 @@ python scripts/scan_taige_continuum_cg.py \
   --hartree-scale "$HARTREE_SCALE" \
   --vertex-workers "$VERTEX_WORKERS" \
   --exchange-workers "$EXCHANGE_WORKERS" \
+  --density-vertex-retention "$DENSITY_VERTEX_RETENTION" \
   --n-occ-per-k "$N_OCC_PER_K" \
   --max-iter "$MAX_ITER" \
   --min-iter "$MIN_ITER" \

@@ -19,6 +19,7 @@ from chiral_dw.continuum import (
     build_continuum_bundle,
     build_symmetric_hf_references,
     convex_weights,
+    evaluate_hf_high_symmetry_path,
     mesh_inversion_map,
     projector_maps,
     reference_diagnostics,
@@ -177,6 +178,122 @@ def test_finite_q_taige_backend_matches_slow_hartree_fock_reference():
     )
     assert np.allclose(bundle.backend.hartree_hamiltonian(Q), _slow_hartree(bundle.backend, Q))
     assert np.allclose(bundle.backend.fock_hamiltonian(Q), _slow_fock(bundle.backend, Q))
+
+
+def test_taige_hartree_only_retention_preserves_backend_physics():
+    base_interaction = ContinuumInteractionParams(
+        coulomb_kind="dimensionless_screened",
+        v0=0.04,
+        q_mesh="full",
+        q_shell=0,
+        local_field_cutoff=1,
+        density_vertex_retention="full",
+    )
+    model = taige_model_params(theta_deg=3.5, u_D=0.0, plane_wave_shell=1, n_bands=1)
+    grid = ContinuumGridParams(n_k=3)
+    full_bundle = build_continuum_bundle(
+        model=model,
+        grid=grid,
+        interaction=base_interaction,
+    )
+    retained_bundle = build_continuum_bundle(
+        model=model,
+        grid=grid,
+        interaction=base_interaction.model_copy(
+            update={"density_vertex_retention": "hartree_only"}
+        ),
+    )
+    rng = np.random.default_rng(19)
+    Q = hermitize(
+        rng.normal(size=full_bundle.active.h0.shape)
+        + 1j * rng.normal(size=full_bundle.active.h0.shape)
+    )
+
+    assert full_bundle.vertices.lambda_blocks.shape[:2] == (9, 9)
+    assert retained_bundle.vertices.lambda_blocks.shape[:2] == (0, 0)
+    assert retained_bundle.vertices.q_shifts == full_bundle.vertices.q_shifts
+    assert retained_bundle.vertices.g_channels == full_bundle.vertices.g_channels
+    assert np.array_equal(
+        retained_bundle.vertices.target_minus_q,
+        full_bundle.vertices.target_minus_q,
+    )
+    assert retained_bundle.backend.lambda_blocks.shape[0] == len(
+        retained_bundle.backend.full_hartree_channels
+    )
+    retained_channels = int(np.prod(retained_bundle.backend.lambda_blocks.shape[:2]))
+    full_channels = int(np.prod(full_bundle.backend.lambda_blocks.shape[:2]))
+    assert retained_channels < full_channels
+
+    assert np.allclose(retained_bundle.backend.tVE, full_bundle.backend.tVE)
+    assert np.allclose(
+        retained_bundle.backend.fock_hamiltonian(Q),
+        full_bundle.backend.fock_hamiltonian(Q),
+    )
+    assert np.allclose(
+        retained_bundle.backend.hartree_hamiltonian(Q),
+        full_bundle.backend.hartree_hamiltonian(Q),
+    )
+    assert np.allclose(
+        retained_bundle.backend.hf_hamiltonian(Q),
+        full_bundle.backend.hf_hamiltonian(Q),
+    )
+    full_energy = full_bundle.backend.energy(Q)
+    retained_energy = retained_bundle.backend.energy(Q)
+    assert retained_energy.total == pytest.approx(full_energy.total)
+    assert retained_energy.one_body == pytest.approx(full_energy.one_body)
+    assert retained_energy.hartree == pytest.approx(full_energy.hartree)
+    assert retained_energy.fock == pytest.approx(full_energy.fock)
+
+    full_H = full_bundle.backend.hf_hamiltonian(Q)
+    retained_H = retained_bundle.backend.hf_hamiltonian(Q)
+    _P_full, _evals_full, full_direct, full_indirect = full_bundle.backend.update_density_per_k(
+        full_H,
+        1,
+    )
+    _P_retained, _evals_retained, retained_direct, retained_indirect = (
+        retained_bundle.backend.update_density_per_k(retained_H, 1)
+    )
+    assert retained_direct == pytest.approx(full_direct)
+    assert retained_indirect == pytest.approx(full_indirect)
+
+    hf_params = ContinuumHFParams(
+        n_occ_per_k=1,
+        max_iter=3,
+        min_iter=1,
+        mixing_method="linear",
+        mixing=0.4,
+        seed_random_weight=0.0,
+    )
+    full_seed = valley_polarized_seed(full_bundle.active, valley="K")
+    retained_seed = valley_polarized_seed(retained_bundle.active, valley="K")
+    full_result = solve_hf(
+        full_bundle.backend,
+        full_seed,
+        hf_params,
+        constraint=ValleyU1Constraint(full_bundle.active),
+    )
+    retained_result = solve_hf(
+        retained_bundle.backend,
+        retained_seed,
+        hf_params,
+        constraint=ValleyU1Constraint(retained_bundle.active),
+    )
+    assert retained_result.energy == pytest.approx(full_result.energy)
+    assert np.allclose(retained_result.H_hf, full_result.H_hf)
+
+    full_spectrum = evaluate_hf_high_symmetry_path(
+        full_bundle,
+        full_result.P,
+        n_per_segment=1,
+        reference="full",
+    )
+    retained_spectrum = evaluate_hf_high_symmetry_path(
+        retained_bundle,
+        retained_result.P,
+        n_per_segment=1,
+        reference="retained",
+    )
+    assert np.allclose(retained_spectrum.energies, full_spectrum.energies)
 
 
 def test_valley_u1_constraint_projects_intervalley_blocks_and_preserves_vp_seed():

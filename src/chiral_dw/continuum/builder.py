@@ -165,7 +165,7 @@ def build_continuum_bundle(
     return ContinuumBundle(
         grid=active.grid,
         active=active,
-        vertices=vertices,
+        vertices=backend.vertices,
         backend=backend,
         params=model_params,
         interaction=interaction_params,

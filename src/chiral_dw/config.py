@@ -268,6 +268,7 @@ class ContinuumInteractionParams(BaseModel):
     reference_density: Literal["zero"] = "zero"
     vertex_workers: int = Field(default=1, ge=0)
     exchange_workers: int = Field(default=1, ge=0)
+    density_vertex_retention: Literal["full", "hartree_only"] = "full"
 
 
 class ContinuumHFParams(BaseModel):

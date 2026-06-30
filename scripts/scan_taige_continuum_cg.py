@@ -76,6 +76,12 @@ def _build_parser() -> argparse.ArgumentParser:
         default=1,
         help="Number of joblib worker processes for dense exchange-kernel q-slabs.",
     )
+    parser.add_argument(
+        "--density-vertex-retention",
+        choices=["full", "hartree_only"],
+        default="hartree_only",
+        help="Retain full density vertices or only Hartree channels after dense exchange build.",
+    )
 
     parser.add_argument("--n-occ-per-k", type=int, default=1)
     parser.add_argument("--max-iter", type=int, default=100)
@@ -187,6 +193,7 @@ def _params_for_point(args: argparse.Namespace, point: TaigeSweepPoint, point_di
             "hartree_scale": float(args.hartree_scale),
             "vertex_workers": int(args.vertex_workers),
             "exchange_workers": int(args.exchange_workers),
+            "density_vertex_retention": args.density_vertex_retention,
         }
     )
     hf = ContinuumHFParams(

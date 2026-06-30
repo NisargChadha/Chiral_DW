@@ -134,7 +134,13 @@ class ContinuumHFBackend:
             raise ValueError("v_over_a must have shape (n_q, n_g)")
         self.p_ref = np.zeros_like(self.h0, dtype=complex)
         self.hartree_channels = self._find_hartree_channels()
+        self.full_hartree_channels = tuple(self.hartree_channels)
+        self._hartree_channel_lookup = {
+            (int(iq), int(ig)): (int(iq), int(ig), float(v))
+            for iq, ig, v in self.hartree_channels
+        }
         self.tVE = self._build_exchange_tve()
+        self._apply_density_vertex_retention()
 
     def as_block_density(self, P: np.ndarray) -> np.ndarray:
         arr = np.asarray(P, dtype=complex)
@@ -276,6 +282,99 @@ class ContinuumHFBackend:
                     forward,
                     reverse,
                 )
+
+    def _empty_retained_lambdas(self) -> np.ndarray:
+        return np.zeros((0, 0, self.n_blocks, self.dim, self.dim), dtype=complex)
+
+    def _vertices_without_lambda_blocks(self) -> DensityVertices:
+        return DensityVertices(
+            q_shifts=self.vertices.q_shifts,
+            target_minus_q=np.asarray(self.vertices.target_minus_q, dtype=int).copy(),
+            q_is_zero=np.asarray(self.vertices.q_is_zero, dtype=bool).copy(),
+            lambda_blocks=self._empty_retained_lambdas(),
+            v_over_a=np.asarray(self.vertices.v_over_a, dtype=float).copy(),
+            g_channels=self.vertices.g_channels,
+            channel_in_disk=(
+                None
+                if self.vertices.channel_in_disk is None
+                else np.asarray(self.vertices.channel_in_disk, dtype=bool).copy()
+            ),
+            q_vectors_nm_inv=(
+                None
+                if self.vertices.q_vectors_nm_inv is None
+                else np.asarray(self.vertices.q_vectors_nm_inv, dtype=float).copy()
+            ),
+            q_norm_nm_inv=(
+                None
+                if self.vertices.q_norm_nm_inv is None
+                else np.asarray(self.vertices.q_norm_nm_inv, dtype=float).copy()
+            ),
+            v_q=(
+                None
+                if self.vertices.v_q is None
+                else np.asarray(self.vertices.v_q, dtype=float).copy()
+            ),
+        )
+
+    def _apply_density_vertex_retention(self) -> None:
+        policy = str(self.interaction.density_vertex_retention)
+        if policy == "full":
+            return
+        if policy != "hartree_only":
+            raise ValueError("density_vertex_retention must be 'full' or 'hartree_only'")
+
+        original_lambdas = self.lambda_blocks
+        original_targets = self.target_minus_q
+        original_v_over_a = self.v_over_a
+        retained_count = len(self.full_hartree_channels)
+        if retained_count == 0:
+            self.lambda_blocks = self._empty_retained_lambdas()
+            self.target_minus_q = np.zeros((0, self.n_blocks), dtype=int)
+            self.q_is_zero = np.zeros(0, dtype=bool)
+            self.v_over_a = np.zeros((0, 0), dtype=float)
+            self.hartree_channels = []
+            self._hartree_channel_lookup = {}
+            self.n_q, self.n_g = 0, 0
+            self.vertices = self._vertices_without_lambda_blocks()
+            return
+
+        retained_lambdas = np.empty(
+            (retained_count, 1, self.n_blocks, self.dim, self.dim),
+            dtype=complex,
+        )
+        retained_targets = np.empty((retained_count, self.n_blocks), dtype=int)
+        retained_v_over_a = np.empty((retained_count, 1), dtype=float)
+        retained_q_is_zero = np.ones(retained_count, dtype=bool)
+        retained_channels: list[tuple[int, int, float]] = []
+        lookup: dict[tuple[int, int], tuple[int, int, float]] = {}
+        for new_iq, (old_iq, old_ig, v) in enumerate(self.full_hartree_channels):
+            retained_lambdas[new_iq, 0] = original_lambdas[int(old_iq), int(old_ig)]
+            retained_targets[new_iq] = original_targets[int(old_iq)]
+            retained_v_over_a[new_iq, 0] = original_v_over_a[int(old_iq), int(old_ig)]
+            retained_channels.append((new_iq, 0, float(v)))
+            lookup[(int(old_iq), int(old_ig))] = (new_iq, 0, float(v))
+
+        self.lambda_blocks = retained_lambdas
+        self.target_minus_q = retained_targets
+        self.q_is_zero = retained_q_is_zero
+        self.v_over_a = retained_v_over_a
+        self.hartree_channels = retained_channels
+        self._hartree_channel_lookup = lookup
+        self.n_q, self.n_g = self.lambda_blocks.shape[:2]
+        self.vertices = self._vertices_without_lambda_blocks()
+
+    def hartree_lambda_for_channel(self, iq: int, ig: int) -> np.ndarray | None:
+        retained = self._hartree_channel_lookup.get((int(iq), int(ig)))
+        if retained is None:
+            return None
+        retained_iq, retained_ig, _v = retained
+        return self.lambda_blocks[int(retained_iq), int(retained_ig)]
+
+    def hartree_weight_for_channel(self, iq: int, ig: int) -> float | None:
+        retained = self._hartree_channel_lookup.get((int(iq), int(ig)))
+        if retained is None:
+            return None
+        return float(retained[2])
 
     def hartree_hamiltonian(self, Q: np.ndarray) -> np.ndarray:
         density = self.as_block_density(Q)
