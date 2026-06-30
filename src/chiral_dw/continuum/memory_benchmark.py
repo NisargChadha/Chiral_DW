@@ -69,6 +69,7 @@ BackendVariant = Literal[
     "fused_compact",
     "compact_dense_exchange",
     "sector_exchange",
+    "sector_cached_gather",
     "packed",
     "matrix_free",
     "complex64",
@@ -82,6 +83,7 @@ _ALL_VARIANTS: tuple[BackendVariant, ...] = (
     "fused_compact",
     "compact_dense_exchange",
     "sector_exchange",
+    "sector_cached_gather",
     "packed",
     "matrix_free",
     "complex64",
@@ -507,7 +509,14 @@ def variant_spec(name: BackendVariant) -> TaigeBackendVariantSpec:
         ),
         "sector_exchange": TaigeBackendVariantSpec(
             name="sector_exchange",
-            description="Production compact Taige vertices with Hartree retention and valley-sector exchange.",
+            description="Production compact Taige vertices with scalar form factors and valley-sector exchange.",
+            keeps_full_lambda_blocks=False,
+            keeps_dense_tve=False,
+            uses_sector_tve=True,
+        ),
+        "sector_cached_gather": TaigeBackendVariantSpec(
+            name="sector_cached_gather",
+            description="Production compact Taige vertices with cached gathers and valley-sector exchange.",
             keeps_full_lambda_blocks=False,
             keeps_dense_tve=False,
             uses_sector_tve=True,
@@ -1069,6 +1078,7 @@ def _build_fused_taige_backend(
             dim=active.dim,
             shell=active.shell,
             shell_index=shell_index,
+            gather_cache=None,
             electron_vectors=electron_vectors,
             source_index=active.source_index,
         )
@@ -1178,7 +1188,7 @@ def _variant_estimated_peak_mb(
         return dense_tve + one_q + one_q_compact
     if variant == "compact_dense_exchange":
         return compact + dense_tve
-    if variant == "sector_exchange":
+    if variant in {"sector_exchange", "sector_cached_gather"}:
         return compact + sector_tve
     if variant == "packed":
         return full + dense_tve + packed
@@ -1220,13 +1230,15 @@ def _build_variant_backend(
             fn=lambda: _build_fused_taige_backend(active, interaction, compact_slabs=True),
         )
         return active, backend
-    if variant in {"compact_dense_exchange", "sector_exchange"}:
+    if variant in {"compact_dense_exchange", "sector_exchange", "sector_cached_gather"}:
         exchange_representation = "dense" if variant == "compact_dense_exchange" else "valley_sector"
+        form_factor_backend = "cached_gather" if variant == "sector_cached_gather" else "scalar"
         compact_interaction = interaction.model_copy(
             update={
                 "density_vertex_layout": "auto",
                 "density_vertex_retention": "hartree_only",
                 "exchange_representation": exchange_representation,
+                "form_factor_backend": form_factor_backend,
             }
         )
         vertices = _measure_stage(

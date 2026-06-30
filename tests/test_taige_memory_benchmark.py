@@ -131,6 +131,7 @@ def test_benchmark_worker_variants_match_baseline_reference(tmp_path):
         "fused_compact",
         "compact_dense_exchange",
         "sector_exchange",
+        "sector_cached_gather",
         "packed",
         "matrix_free",
     ):

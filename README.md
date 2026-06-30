@@ -68,7 +68,7 @@ physics while reducing retained backend memory.
 | Step | Backend mode | Status | Local smoke benchmark | Expected memory effect |
 |---|---|---|---|---|
 | 1 | Valley-sector exchange | Implemented | `n_k=4,6`, compact dense exchange vs sector exchange, fock/HF/energy errors `<1e-14` | Final exchange storage is reduced by `4x`; for two active bands per valley, `n_k=24` dense `tVE` is about `1.27 GiB` and sector exchange is about `0.32 GiB`. |
-| 2 | Cached form-factor gather maps | Planned | Not yet run | Expected negligible memory change and modest vertex-build speedup. |
+| 2 | Cached form-factor gather maps | Implemented | `n_k=4,6`, scalar sector exchange vs cached-gather sector exchange, fock/HF/energy errors `<1e-14` | No meaningful retained-memory change; compact vertex stage improved from `0.017s` to `0.0089s` at `n_k=4` and from `0.048s` to `0.043s` at `n_k=6` in the local smoke run. |
 | 3 | Vectorized form-factor construction | Planned | Not yet run | Expected modest temporary memory overhead and larger vertex-build speedup if Python loop overhead dominates. |
 
 ## Setup

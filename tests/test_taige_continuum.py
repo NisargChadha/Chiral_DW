@@ -539,6 +539,49 @@ def test_taige_density_vertices_parallel_q_slabs_match_serial(
     _assert_matching_density_vertices(serial, parallel)
 
 
+@pytest.mark.parametrize("finite_q_enabled", [False, True])
+def test_taige_density_vertices_cached_gather_matches_scalar(finite_q_enabled):
+    n_k = 6 if finite_q_enabled else 3
+    model = taige_model_params(theta_deg=3.5, u_D=0.0, plane_wave_shell=1, n_bands=1)
+    finite_q = (
+        ContinuumFiniteQParams(
+            enabled=True,
+            q_coord=taige_ivc_minus_q_coord(n_k),
+            half_shift_coord=taige_ivc_minus_half_shift_coord(n_k),
+        )
+        if finite_q_enabled
+        else ContinuumFiniteQParams()
+    )
+    interaction = ContinuumInteractionParams(
+        coulomb_kind="dimensionless_screened",
+        v0=0.05,
+        q_mesh="full",
+        q_shell=0,
+        local_field_cutoff=1,
+        vertex_workers=1,
+        form_factor_backend="scalar",
+    )
+    bundle = build_continuum_bundle(
+        model=model,
+        grid=ContinuumGridParams(n_k=n_k),
+        finite_q=finite_q,
+        interaction=interaction,
+    )
+
+    scalar = build_taige_density_vertices(bundle.active, interaction)
+    cached = build_taige_density_vertices(
+        bundle.active,
+        interaction.model_copy(update={"form_factor_backend": "cached_gather"}),
+    )
+    cached_parallel = build_taige_density_vertices(
+        bundle.active,
+        interaction.model_copy(update={"form_factor_backend": "cached_gather", "vertex_workers": 2}),
+    )
+
+    _assert_matching_density_vertices(scalar, cached)
+    _assert_matching_density_vertices(scalar, cached_parallel)
+
+
 def test_taige_interaction_params_accept_screening_overrides():
     interaction = taige_interaction_params(
         include_q0=False,
@@ -556,6 +599,7 @@ def test_taige_interaction_params_accept_screening_overrides():
         density_vertex_retention="hartree_only",
         density_vertex_layout="dense",
         exchange_representation="dense",
+        form_factor_backend="cached_gather",
     )
 
     assert interaction.coulomb_kind == "dual_gate"
@@ -574,6 +618,7 @@ def test_taige_interaction_params_accept_screening_overrides():
     assert interaction.density_vertex_retention == "hartree_only"
     assert interaction.density_vertex_layout == "dense"
     assert interaction.exchange_representation == "dense"
+    assert interaction.form_factor_backend == "cached_gather"
 
 
 def test_taige_finite_q_density_vertices_use_shifted_physical_sources():

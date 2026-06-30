@@ -45,6 +45,7 @@ def test_taige_finite_size_dry_run_writes_default_nk_plan(tmp_path):
     assert plan["args"]["density_vertex_retention"] == "hartree_only"
     assert plan["args"]["density_vertex_layout"] == "auto"
     assert plan["args"]["exchange_representation"] == "auto"
+    assert plan["args"]["form_factor_backend"] == "auto"
     assert (output_root / "sweep_plan.csv").exists()
     assert (output_root / "sweep_phase_plan.csv").exists()
 
@@ -224,6 +225,7 @@ def test_taige_finite_size_job_scripts_expose_array_and_merge_controls():
     assert "--density-vertex-retention" in script_text
     assert "--density-vertex-layout" in script_text
     assert "--exchange-representation" in script_text
+    assert "--form-factor-backend" in script_text
 
     scan_text = SCAN_JOB.read_text()
     assert "#SBATCH --array=0-440" in scan_text
@@ -241,11 +243,13 @@ def test_taige_finite_size_job_scripts_expose_array_and_merge_controls():
     assert 'DENSITY_VERTEX_RETENTION=${DENSITY_VERTEX_RETENTION:-"hartree_only"}' in scan_text
     assert 'DENSITY_VERTEX_LAYOUT=${DENSITY_VERTEX_LAYOUT:-"auto"}' in scan_text
     assert 'EXCHANGE_REPRESENTATION=${EXCHANGE_REPRESENTATION:-"auto"}' in scan_text
+    assert 'FORM_FACTOR_BACKEND=${FORM_FACTOR_BACKEND:-"auto"}' in scan_text
     assert "Resources: SLURM_CPUS_PER_TASK=" in scan_text
     assert "SLURM_MEM_PER_NODE=" in scan_text
     assert "DENSITY_VERTEX_RETENTION=" in scan_text
     assert "DENSITY_VERTEX_LAYOUT=" in scan_text
     assert "EXCHANGE_REPRESENTATION=" in scan_text
+    assert "FORM_FACTOR_BACKEND=" in scan_text
     assert "export OMP_NUM_THREADS=1" in scan_text
     assert "export MKL_NUM_THREADS=1" in scan_text
     assert "export OPENBLAS_NUM_THREADS=1" in scan_text
@@ -259,6 +263,7 @@ def test_taige_finite_size_job_scripts_expose_array_and_merge_controls():
     assert "--density-vertex-retention" in scan_text
     assert "--density-vertex-layout" in scan_text
     assert "--exchange-representation" in scan_text
+    assert "--form-factor-backend" in scan_text
     assert "--compute-finite-q-ivc" in scan_text
     assert "--finite-q-shift-policy" in scan_text
     assert "--merge_taige_finite_size_cg.sh" not in scan_text
@@ -301,6 +306,7 @@ def test_taige_finite_size_by_nk_submitter_dry_run_builds_scaled_memory_commands
     assert "VERTEX_WORKERS=4" in out
     assert "EXCHANGE_WORKERS=4" in out
     assert "EXCHANGE_REPRESENTATION=auto" in out
+    assert "FORM_FACTOR_BACKEND=auto" in out
     assert not (output_root / "slurm_jobs_finite_size_by_nk.csv").exists()
 
 
@@ -339,6 +345,7 @@ def test_taige_finite_size_memory_probe_dry_run_builds_single_point_commands(tmp
     assert "N_TWIST=1" in out
     assert "Q_MESH=full" in out
     assert "EXCHANGE_REPRESENTATION=auto" in out
+    assert "FORM_FACTOR_BACKEND=auto" in out
     assert not (output_root / "slurm_jobs_memory_probe.csv").exists()
 
 

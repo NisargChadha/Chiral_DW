@@ -198,6 +198,7 @@ def taige_interaction_params(
     density_vertex_retention: Literal["full", "hartree_only"] = "full",
     density_vertex_layout: Literal["auto", "dense", "valley_compact"] = "auto",
     exchange_representation: Literal["auto", "dense", "valley_sector"] = "auto",
+    form_factor_backend: Literal["auto", "scalar", "cached_gather", "vectorized"] = "auto",
 ) -> ContinuumInteractionParams:
     """Return dual-gated smeared Coulomb parameters for Taige MoTe2."""
 
@@ -219,6 +220,7 @@ def taige_interaction_params(
         density_vertex_retention=density_vertex_retention,
         density_vertex_layout=density_vertex_layout,
         exchange_representation=exchange_representation,
+        form_factor_backend=form_factor_backend,
     )
 
 
@@ -663,6 +665,38 @@ def _shift_gather(
     return np.asarray(src, dtype=int), np.asarray(tgt, dtype=int)
 
 
+GatherCache = dict[GridCoord, tuple[np.ndarray, np.ndarray]]
+
+
+def _taige_form_factor_shifts(
+    *,
+    q_list: tuple[GridCoord, ...],
+    g_channels: tuple[GridCoord, ...],
+    n_k: int,
+) -> tuple[GridCoord, ...]:
+    shifts: set[GridCoord] = set()
+    grid_size = int(n_k) * int(n_k)
+    for q in q_list:
+        for ik in range(grid_size):
+            k_coord = _grid_coord_of(ik, n_k)
+            _forward, rec_shift = _fold_grid_coord(
+                (k_coord[0] + int(q[0]), k_coord[1] + int(q[1])),
+                n_k,
+            )
+            for g in g_channels:
+                shifts.add((rec_shift[0] + int(g[0]), rec_shift[1] + int(g[1])))
+    return tuple(sorted(shifts))
+
+
+def _build_shift_gather_cache(
+    *,
+    shell: tuple[GridCoord, ...],
+    shell_index: dict[GridCoord, int],
+    shifts: tuple[GridCoord, ...],
+) -> GatherCache:
+    return {shift: _shift_gather(shell, shell_index, shift) for shift in shifts}
+
+
 def _overlap(
     left: np.ndarray,
     right: np.ndarray,
@@ -670,8 +704,13 @@ def _overlap(
     shell: tuple[GridCoord, ...],
     shell_index: dict[GridCoord, int],
     shift: GridCoord,
+    gather_cache: GatherCache | None = None,
 ) -> np.ndarray:
-    src, tgt = _shift_gather(shell, shell_index, shift)
+    key = (int(shift[0]), int(shift[1]))
+    if gather_cache is None:
+        src, tgt = _shift_gather(shell, shell_index, key)
+    else:
+        src, tgt = gather_cache[key]
     na_l = left.shape[1]
     na_r = right.shape[1]
     out = np.zeros((na_l, na_r), dtype=complex)
@@ -799,6 +838,7 @@ def _taige_density_vertex_q_slab_compact(
     n_active: int,
     shell: tuple[GridCoord, ...],
     shell_index: dict[GridCoord, int],
+    gather_cache: GatherCache | None,
     electron_vectors: np.ndarray,
     source_index: np.ndarray | None,
 ) -> tuple[int, np.ndarray, np.ndarray, np.ndarray]:
@@ -827,7 +867,14 @@ def _taige_density_vertex_q_slab_compact(
         shift = (rec_shift[0] + int(g_channel[0]), rec_shift[1] + int(g_channel[1]))
         left = electron_vectors[ik, iv, :, :n_active]
         right = electron_vectors[ikq, iv, :, :n_active]
-        return _overlap(left, right, shell=shell, shell_index=shell_index, shift=shift)
+        return _overlap(
+            left,
+            right,
+            shell=shell,
+            shell_index=shell_index,
+            shift=shift,
+            gather_cache=gather_cache,
+        )
 
     def hole_form_factor(
         iv: int,
@@ -884,6 +931,7 @@ def _taige_density_vertex_q_slab(
     dim: int,
     shell: tuple[GridCoord, ...],
     shell_index: dict[GridCoord, int],
+    gather_cache: GatherCache | None,
     electron_vectors: np.ndarray,
     source_index: np.ndarray | None,
 ) -> tuple[int, np.ndarray, np.ndarray, np.ndarray]:
@@ -899,6 +947,7 @@ def _taige_density_vertex_q_slab(
         n_active=n_active,
         shell=shell,
         shell_index=shell_index,
+        gather_cache=gather_cache,
         electron_vectors=electron_vectors,
         source_index=source_index,
     )
@@ -919,6 +968,36 @@ def _q_slab_ranges(n_q: int, vertex_workers: int) -> tuple[tuple[int, int], ...]
     )
 
 
+def _resolve_taige_form_factor_backend(interaction: ContinuumInteractionParams) -> str:
+    requested = str(getattr(interaction, "form_factor_backend", "auto"))
+    if requested == "auto":
+        return "cached_gather"
+    if requested in {"scalar", "cached_gather"}:
+        return requested
+    if requested == "vectorized":
+        raise NotImplementedError("form_factor_backend='vectorized' is implemented in the next optimization slice")
+    raise ValueError("form_factor_backend must be 'auto', 'scalar', 'cached_gather', or 'vectorized'")
+
+
+def _taige_gather_cache_for_backend(
+    *,
+    form_factor_backend: str,
+    q_list: tuple[GridCoord, ...],
+    g_channels: tuple[GridCoord, ...],
+    grid: MomentumGrid,
+    shell: tuple[GridCoord, ...],
+    shell_index: dict[GridCoord, int],
+) -> GatherCache | None:
+    if form_factor_backend == "scalar":
+        return None
+    shifts = _taige_form_factor_shifts(
+        q_list=q_list,
+        g_channels=g_channels,
+        n_k=grid.n_k,
+    )
+    return _build_shift_gather_cache(shell=shell, shell_index=shell_index, shifts=shifts)
+
+
 def _build_taige_density_vertex_arrays_serial(
     *,
     q_list: tuple[GridCoord, ...],
@@ -927,6 +1006,7 @@ def _build_taige_density_vertex_arrays_serial(
     grid: MomentumGrid,
     active: ContinuumActiveSpace,
     shell_index: dict[GridCoord, int],
+    gather_cache: GatherCache | None,
     electron_vectors: np.ndarray,
     compact: bool,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -941,6 +1021,7 @@ def _build_taige_density_vertex_arrays_serial(
         "n_active": active.n_active,
         "shell": active.shell,
         "shell_index": shell_index,
+        "gather_cache": gather_cache,
         "electron_vectors": electron_vectors,
         "source_index": active.source_index,
     }
@@ -960,6 +1041,7 @@ def _build_taige_density_vertex_arrays_parallel(
     grid: MomentumGrid,
     active: ContinuumActiveSpace,
     shell_index: dict[GridCoord, int],
+    gather_cache: GatherCache | None,
     electron_vectors: np.ndarray,
     vertex_workers: int,
     compact: bool,
@@ -990,6 +1072,7 @@ def _build_taige_density_vertex_arrays_parallel(
             "n_active": active.n_active,
             "shell": active.shell,
             "shell_index": shell_index,
+            "gather_cache": gather_cache,
             "electron_vectors": electron_vectors,
             "source_index": active.source_index,
         }
@@ -1044,6 +1127,15 @@ def build_taige_density_vertices(
     if layout not in {"dense", "valley_compact"}:
         raise ValueError("density_vertex_layout must be 'auto', 'dense', or 'valley_compact'")
     compact = layout == "valley_compact"
+    form_factor_backend = _resolve_taige_form_factor_backend(interaction)
+    gather_cache = _taige_gather_cache_for_backend(
+        form_factor_backend=form_factor_backend,
+        q_list=q_list,
+        g_channels=g_channels,
+        grid=grid,
+        shell=shell,
+        shell_index=shell_index,
+    )
     if interaction.vertex_workers <= 1:
         target_minus_q, q_is_zero, lambdas = _build_taige_density_vertex_arrays_serial(
             q_list=q_list,
@@ -1052,6 +1144,7 @@ def build_taige_density_vertices(
             grid=grid,
             active=active,
             shell_index=shell_index,
+            gather_cache=gather_cache,
             electron_vectors=electron_vectors,
             compact=compact,
         )
@@ -1063,6 +1156,7 @@ def build_taige_density_vertices(
             grid=grid,
             active=active,
             shell_index=shell_index,
+            gather_cache=gather_cache,
             electron_vectors=electron_vectors,
             vertex_workers=interaction.vertex_workers,
             compact=compact,

@@ -271,6 +271,7 @@ class ContinuumInteractionParams(BaseModel):
     density_vertex_retention: Literal["full", "hartree_only"] = "full"
     density_vertex_layout: Literal["auto", "dense", "valley_compact"] = "auto"
     exchange_representation: Literal["auto", "dense", "valley_sector"] = "auto"
+    form_factor_backend: Literal["auto", "scalar", "cached_gather", "vectorized"] = "auto"
 
 
 class ContinuumHFParams(BaseModel):

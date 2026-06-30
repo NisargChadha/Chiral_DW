@@ -167,6 +167,12 @@ def _build_parser() -> argparse.ArgumentParser:
         default="auto",
         help="Exchange representation; auto uses valley-sector exchange for compact Taige vertices.",
     )
+    parser.add_argument(
+        "--form-factor-backend",
+        choices=["auto", "scalar", "cached_gather", "vectorized"],
+        default="auto",
+        help="Taige form-factor backend; auto uses cached gather maps in this version.",
+    )
 
     parser.add_argument("--n-occ-per-k", type=int, default=1)
     parser.add_argument("--max-iter", type=int, default=100)
@@ -323,6 +329,7 @@ def _params_for_point(
             "density_vertex_retention": args.density_vertex_retention,
             "density_vertex_layout": args.density_vertex_layout,
             "exchange_representation": args.exchange_representation,
+            "form_factor_backend": args.form_factor_backend,
         }
     )
     hf = ContinuumHFParams(
@@ -710,7 +717,8 @@ def run_point(
         f"finite_q_enabled={diagnostic_controls.compute_finite_q_ivc} "
         f"vertex_workers={args.vertex_workers} "
         f"exchange_workers={args.exchange_workers} "
-        f"exchange_representation={args.exchange_representation}"
+        f"exchange_representation={args.exchange_representation} "
+        f"form_factor_backend={args.form_factor_backend}"
     )
     start = time.perf_counter()
     result = run_taige_branch_selected_symmetric_hf_workflow(
