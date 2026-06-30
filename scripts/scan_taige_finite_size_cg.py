@@ -155,6 +155,12 @@ def _build_parser() -> argparse.ArgumentParser:
         default="hartree_only",
         help="Retain full density vertices or only Hartree channels after dense exchange build.",
     )
+    parser.add_argument(
+        "--density-vertex-layout",
+        choices=["auto", "dense", "valley_compact"],
+        default="auto",
+        help="Density-vertex storage layout; auto uses valley-compact Taige vertices.",
+    )
 
     parser.add_argument("--n-occ-per-k", type=int, default=1)
     parser.add_argument("--max-iter", type=int, default=100)
@@ -309,6 +315,7 @@ def _params_for_point(
             "vertex_workers": int(args.vertex_workers),
             "exchange_workers": int(args.exchange_workers),
             "density_vertex_retention": args.density_vertex_retention,
+            "density_vertex_layout": args.density_vertex_layout,
         }
     )
     hf = ContinuumHFParams(

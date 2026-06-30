@@ -43,6 +43,8 @@ from chiral_dw.continuum.models import (
     DensityVertices,
     MomentumGrid,
     block_trace_product,
+    compact_lambdas_from_dense,
+    dense_lambdas_from_compact,
     hermitize,
 )
 from chiral_dw.continuum.references import build_symmetric_hf_references
@@ -588,31 +590,6 @@ def estimate_taige_array_bytes(params: TaigeMemoryBenchmarkInput) -> TaigeArrayB
     )
 
 
-def compact_lambdas_from_dense(lambdas: np.ndarray, n_active: int) -> np.ndarray:
-    arr = np.asarray(lambdas)
-    if arr.shape[-1] != 2 * int(n_active) or arr.shape[-2] != 2 * int(n_active):
-        raise ValueError("dense lambda shape is incompatible with n_active")
-    compact = np.empty(arr.shape[:-2] + (2, int(n_active), int(n_active)), dtype=arr.dtype)
-    for iv in range(2):
-        start = iv * int(n_active)
-        stop = start + int(n_active)
-        compact[..., iv, :, :] = arr[..., start:stop, start:stop]
-    return compact
-
-
-def dense_lambdas_from_compact(compact: np.ndarray) -> np.ndarray:
-    arr = np.asarray(compact)
-    if arr.ndim < 4 or arr.shape[-3] != 2 or arr.shape[-1] != arr.shape[-2]:
-        raise ValueError("compact lambdas must end in (2, n_active, n_active)")
-    n_active = int(arr.shape[-1])
-    dense = np.zeros(arr.shape[:-3] + (2 * n_active, 2 * n_active), dtype=arr.dtype)
-    for iv in range(2):
-        start = iv * n_active
-        stop = start + n_active
-        dense[..., start:stop, start:stop] = arr[..., iv, :, :]
-    return dense
-
-
 def compact_vertices_from_dense(
     vertices: DensityVertices,
     *,
@@ -724,15 +701,20 @@ def _hartree_only_arrays_from_dense_backend(
         empty_targets = np.zeros((0, backend.n_blocks), dtype=int)
         empty_v = np.zeros((0, 0), dtype=float)
         return empty_targets, empty_lambdas, empty_v, ()
+    lambda_blocks = (
+        dense_lambdas_from_compact(backend.lambda_compact)
+        if getattr(backend, "vertex_layout", "dense") == "valley_compact"
+        else backend.lambda_blocks
+    )
     lambdas = np.empty(
         (len(channels), 1, backend.n_blocks, backend.dim, backend.dim),
-        dtype=backend.lambda_blocks.dtype,
+        dtype=lambda_blocks.dtype,
     )
     target_minus_q = np.empty((len(channels), backend.n_blocks), dtype=int)
     v_over_a = np.empty((len(channels), 1), dtype=float)
     remapped: list[tuple[int, int, float]] = []
     for new_iq, (old_iq, old_ig, v) in enumerate(channels):
-        lambdas[new_iq, 0] = backend.lambda_blocks[int(old_iq), int(old_ig)]
+        lambdas[new_iq, 0] = lambda_blocks[int(old_iq), int(old_ig)]
         target_minus_q[new_iq] = backend.target_minus_q[int(old_iq)]
         v_over_a[new_iq, 0] = backend.v_over_a[int(old_iq), int(old_ig)]
         remapped.append((new_iq, 0, float(v)))
@@ -811,11 +793,16 @@ def hartree_only_backend_from_dense(
 
 
 def matrix_free_backend_from_dense(backend: ContinuumHFBackend) -> BenchmarkHFBackend:
+    lambda_blocks = (
+        dense_lambdas_from_compact(backend.lambda_compact)
+        if getattr(backend, "vertex_layout", "dense") == "valley_compact"
+        else backend.lambda_blocks.copy()
+    )
     return BenchmarkHFBackend(
         h0=backend.h0.copy(),
         interaction=backend.interaction,
         target_minus_q=backend.target_minus_q.copy(),
-        lambda_blocks=backend.lambda_blocks.copy(),
+        lambda_blocks=lambda_blocks,
         v_over_a=backend.v_over_a.copy(),
         hartree_channels=tuple(backend.hartree_channels),
         matrix_free=True,
@@ -1190,12 +1177,13 @@ def _build_variant_backend(
         )
         return active, backend
 
+    dense_vertex_interaction = interaction.model_copy(update={"density_vertex_layout": "dense"})
     vertices = _measure_stage(
         variant=variant,
         n_k=params.n_k,
         stage="density_vertices",
         rows=stages,
-        fn=lambda: build_taige_density_vertices(active, interaction),
+        fn=lambda: build_taige_density_vertices(active, dense_vertex_interaction),
     )
     if variant == "baseline":
         backend = _measure_stage(
@@ -1203,7 +1191,7 @@ def _build_variant_backend(
             n_k=params.n_k,
             stage="dense_exchange_backend",
             rows=stages,
-            fn=lambda: ContinuumHFBackend(active.h0, vertices, interaction),
+            fn=lambda: ContinuumHFBackend(active.h0, vertices, dense_vertex_interaction),
         )
         return active, backend
     if variant == "hartree_only":
@@ -1212,7 +1200,7 @@ def _build_variant_backend(
             n_k=params.n_k,
             stage="dense_exchange_backend",
             rows=stages,
-            fn=lambda: ContinuumHFBackend(active.h0, vertices, interaction),
+            fn=lambda: ContinuumHFBackend(active.h0, vertices, dense_vertex_interaction),
         )
         backend = _measure_stage(
             variant=variant,
@@ -1230,7 +1218,7 @@ def _build_variant_backend(
             n_k=params.n_k,
             stage="dense_exchange_backend",
             rows=stages,
-            fn=lambda: ContinuumHFBackend(active.h0, vertices, interaction),
+            fn=lambda: ContinuumHFBackend(active.h0, vertices, dense_vertex_interaction),
         )
         backend = _measure_stage(
             variant=variant,

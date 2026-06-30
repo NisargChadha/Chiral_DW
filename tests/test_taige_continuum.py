@@ -21,6 +21,7 @@ from chiral_dw.continuum import (
     build_symmetric_hf_references,
     chern_number_table,
     compute_taige_path_spectrum,
+    density_vertices_dense_lambdas,
     finite_q_shift_metadata,
     evaluate_hf_high_symmetry_path,
     hf_band_chern_table,
@@ -242,7 +243,10 @@ def test_taige_finite_q_active_space_uses_symmetric_physical_sources():
         ),
     )
     assert np.allclose(q0_bundle.active.h0, q0_explicit_bundle.active.h0)
-    assert np.allclose(q0_bundle.vertices.lambda_blocks, q0_explicit_bundle.vertices.lambda_blocks)
+    assert np.allclose(
+        density_vertices_dense_lambdas(q0_bundle.vertices),
+        density_vertices_dense_lambdas(q0_explicit_bundle.vertices),
+    )
     q0_sources = np.repeat(np.arange(q0_bundle.active.n_k)[:, None], 2, axis=1)
     assert np.array_equal(q0_bundle.active.source_index, q0_sources)
     assert np.count_nonzero(q0_bundle.active.source_shift) == 0
@@ -459,10 +463,18 @@ def test_taige_density_vertices_have_q0_identity_and_smeared_dual_gate_weights()
     vertices = bundle.vertices
     iq0 = vertices.q_shifts.index((0, 0))
 
-    assert vertices.lambda_blocks.shape[:3] == (9, 1, 4)
-    assert np.allclose(vertices.lambda_blocks[iq0, 0], np.eye(bundle.active.dim), atol=1e-10)
+    assert vertices.vertex_layout == "valley_compact"
+    assert vertices.lambda_blocks.shape[:3] == (0, 0, 4)
+    assert vertices.lambda_compact.shape[:4] == (9, 1, 4, 2)
+    dense_lambdas = density_vertices_dense_lambdas(vertices)
+    assert dense_lambdas.shape[:3] == (9, 1, 4)
+    assert np.allclose(dense_lambdas[iq0, 0], np.eye(bundle.active.dim), atol=1e-10)
     assert vertices.v_over_a.shape == (9, 1)
     assert vertices.v_over_a[iq0, 0] > 0.0
+
+    dense = _tiny_taige_bundle(interaction.model_copy(update={"density_vertex_layout": "dense"}))
+    assert dense.vertices.vertex_layout == "dense"
+    assert np.allclose(dense.vertices.lambda_blocks, dense_lambdas, atol=1e-12)
 
     unsmeared = interaction.model_copy(update={"smear_length_nm": 0.0})
     assert coulomb_potential_mev_nm2(5.0, interaction) < coulomb_potential_mev_nm2(5.0, unsmeared)
@@ -471,10 +483,20 @@ def test_taige_density_vertices_have_q0_identity_and_smeared_dual_gate_weights()
 def _assert_matching_density_vertices(serial, parallel):
     assert serial.q_shifts == parallel.q_shifts
     assert serial.g_channels == parallel.g_channels
+    assert serial.vertex_layout == parallel.vertex_layout
     assert np.array_equal(serial.target_minus_q, parallel.target_minus_q)
     assert np.array_equal(serial.q_is_zero, parallel.q_is_zero)
     assert np.array_equal(serial.channel_in_disk, parallel.channel_in_disk)
-    assert np.allclose(serial.lambda_blocks, parallel.lambda_blocks, atol=1e-12)
+    assert np.allclose(
+        density_vertices_dense_lambdas(serial),
+        density_vertices_dense_lambdas(parallel),
+        atol=1e-12,
+    )
+    if serial.vertex_layout == "valley_compact":
+        assert np.allclose(serial.lambda_compact, parallel.lambda_compact, atol=1e-12)
+        assert serial.lambda_blocks.shape[:2] == (0, 0)
+    else:
+        assert np.allclose(serial.lambda_blocks, parallel.lambda_blocks, atol=1e-12)
     assert np.allclose(serial.v_over_a, parallel.v_over_a, atol=1e-14)
     assert np.allclose(serial.q_vectors_nm_inv, parallel.q_vectors_nm_inv, atol=1e-14)
     assert np.allclose(serial.v_q, parallel.v_q, atol=1e-14)
@@ -532,6 +554,7 @@ def test_taige_interaction_params_accept_screening_overrides():
         vertex_workers=2,
         exchange_workers=3,
         density_vertex_retention="hartree_only",
+        density_vertex_layout="dense",
     )
 
     assert interaction.coulomb_kind == "dual_gate"
@@ -548,6 +571,7 @@ def test_taige_interaction_params_accept_screening_overrides():
     assert interaction.vertex_workers == 2
     assert interaction.exchange_workers == 3
     assert interaction.density_vertex_retention == "hartree_only"
+    assert interaction.density_vertex_layout == "dense"
 
 
 def test_taige_finite_q_density_vertices_use_shifted_physical_sources():
@@ -575,17 +599,20 @@ def test_taige_finite_q_density_vertices_use_shifted_physical_sources():
     )
     active = finite_bundle.active
     vertices = finite_bundle.vertices
+    dense_vertices = density_vertices_dense_lambdas(vertices)
+    dense_q0 = density_vertices_dense_lambdas(q0_bundle.vertices)
     iq0 = vertices.q_shifts.index((0, 0))
     iq = vertices.q_shifts.index((1, 0))
 
-    assert np.allclose(vertices.lambda_blocks[iq0, 0], np.eye(active.dim), atol=1e-10)
+    assert vertices.vertex_layout == "valley_compact"
+    assert np.allclose(dense_vertices[iq0, 0], np.eye(active.dim), atol=1e-10)
     for ik in range(active.n_k):
         physical = int(active.source_index[ik, 0])
         if physical == ik:
             continue
-        finite_block = vertices.lambda_blocks[iq, 0, ik, 0:1, 0:1]
-        shifted_block = q0_bundle.vertices.lambda_blocks[iq, 0, physical, 0:1, 0:1]
-        unshifted_block = q0_bundle.vertices.lambda_blocks[iq, 0, ik, 0:1, 0:1]
+        finite_block = dense_vertices[iq, 0, ik, 0:1, 0:1]
+        shifted_block = dense_q0[iq, 0, physical, 0:1, 0:1]
+        unshifted_block = dense_q0[iq, 0, ik, 0:1, 0:1]
         assert np.allclose(finite_block, shifted_block)
         assert not np.allclose(finite_block, unshifted_block)
         break

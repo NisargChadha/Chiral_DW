@@ -16,6 +16,7 @@ from chiral_dw.continuum.models import (
     DensityVertices,
     ReferenceHamiltonianDiagnostics,
     block_trace_product,
+    dense_lambdas_from_compact,
     hermitize,
     projector_idempotency_errors,
 )
@@ -80,6 +81,53 @@ def _exchange_tve_q_slab(
     return tuple(rows)
 
 
+def _exchange_tve_q_slab_compact(
+    *,
+    q_start: int,
+    q_stop: int,
+    lambda_compact: np.ndarray,
+    v_over_a: np.ndarray,
+    exchange_scale: float,
+) -> tuple[tuple[int, np.ndarray, np.ndarray], ...]:
+    """Return dense exchange contributions from valley-compact vertices."""
+
+    rows: list[tuple[int, np.ndarray, np.ndarray]] = []
+    scale = float(exchange_scale)
+    compact = np.asarray(lambda_compact)
+    n_active = int(compact.shape[-1])
+    dim = 2 * n_active
+    for iq in range(int(q_start), int(q_stop)):
+        v = 0.5 * scale * v_over_a[iq]
+        if not np.any(v):
+            continue
+        lam_q = compact[iq]
+        n_blocks = int(lam_q.shape[1])
+        forward = np.zeros((n_blocks, dim, dim, dim, dim), dtype=complex)
+        reverse = np.zeros_like(forward)
+        for iv in range(2):
+            a_slice = slice(iv * n_active, (iv + 1) * n_active)
+            lam_left = lam_q[:, :, iv]
+            for jv in range(2):
+                b_slice = slice(jv * n_active, (jv + 1) * n_active)
+                lam_right = lam_q[:, :, jv]
+                forward[:, a_slice, b_slice, a_slice, b_slice] = np.einsum(
+                    "g,gkac,gkbd->kabcd",
+                    v,
+                    lam_left,
+                    np.conj(lam_right),
+                    optimize=True,
+                )
+                reverse[:, a_slice, b_slice, a_slice, b_slice] = np.einsum(
+                    "g,gkca,gkdb->kabcd",
+                    v,
+                    np.conj(lam_left),
+                    lam_right,
+                    optimize=True,
+                )
+        rows.append((iq, forward, reverse))
+    return tuple(rows)
+
+
 def _hermitize_dense_in_place(matrix: np.ndarray, *, tile_size: int = 1024) -> np.ndarray:
     """Replace ``matrix`` by ``0.5 * (matrix + matrix.conj().T)`` using tiles."""
 
@@ -117,12 +165,38 @@ class ContinuumHFBackend:
         self.n_total = self.n_blocks * self.dim
         self.vertices = vertices
         self.interaction = interaction or ContinuumInteractionParams()
-        self.lambda_blocks = np.asarray(vertices.lambda_blocks, dtype=complex)
-        if self.lambda_blocks.ndim != 5:
-            raise ValueError("lambda_blocks must have shape (n_q, n_g, n_blocks, dim, dim)")
-        if self.lambda_blocks.shape[2:] != self.h0.shape:
-            raise ValueError("density vertices and h0 have incompatible shapes")
-        self.n_q, self.n_g = self.lambda_blocks.shape[:2]
+        self.vertex_layout = str(getattr(vertices, "vertex_layout", "dense"))
+        if self.vertex_layout == "valley_compact":
+            if vertices.lambda_compact is None:
+                raise ValueError("valley_compact DensityVertices require lambda_compact")
+            self.lambda_compact = np.asarray(vertices.lambda_compact, dtype=complex)
+            if self.lambda_compact.ndim != 6:
+                raise ValueError(
+                    "lambda_compact must have shape "
+                    "(n_q, n_g, n_blocks, 2, n_active, n_active)"
+                )
+            if self.lambda_compact.shape[2] != self.n_blocks:
+                raise ValueError("density vertices and h0 have incompatible block counts")
+            if self.lambda_compact.shape[3] != 2:
+                raise ValueError("lambda_compact must have exactly two valley blocks")
+            if self.lambda_compact.shape[-1] != self.lambda_compact.shape[-2]:
+                raise ValueError("lambda_compact active-band blocks must be square")
+            self.n_active = int(self.lambda_compact.shape[-1])
+            if 2 * self.n_active != self.dim:
+                raise ValueError("lambda_compact active-band dimension is incompatible with h0")
+            self.lambda_blocks = np.asarray(vertices.lambda_blocks, dtype=complex)
+            self.n_q, self.n_g = self.lambda_compact.shape[:2]
+        elif self.vertex_layout == "dense":
+            self.lambda_blocks = np.asarray(vertices.lambda_blocks, dtype=complex)
+            if self.lambda_blocks.ndim != 5:
+                raise ValueError("lambda_blocks must have shape (n_q, n_g, n_blocks, dim, dim)")
+            if self.lambda_blocks.shape[2:] != self.h0.shape:
+                raise ValueError("density vertices and h0 have incompatible shapes")
+            self.lambda_compact = None
+            self.n_active = self.dim // 2
+            self.n_q, self.n_g = self.lambda_blocks.shape[:2]
+        else:
+            raise ValueError("density vertex layout must be 'dense' or 'valley_compact'")
         self.target_minus_q = np.asarray(vertices.target_minus_q, dtype=int)
         if self.target_minus_q.shape != (self.n_q, self.n_blocks):
             raise ValueError("target_minus_q must have shape (n_q, n_blocks)")
@@ -228,13 +302,23 @@ class ContinuumHFBackend:
         scale: float,
     ) -> None:
         for iq in range(self.n_q):
-            for q_index, forward, reverse in _exchange_tve_q_slab(
-                q_start=iq,
-                q_stop=iq + 1,
-                lambda_blocks=self.lambda_blocks,
-                v_over_a=self.v_over_a,
-                exchange_scale=scale,
-            ):
+            if self.vertex_layout == "valley_compact":
+                rows = _exchange_tve_q_slab_compact(
+                    q_start=iq,
+                    q_stop=iq + 1,
+                    lambda_compact=self.lambda_compact,
+                    v_over_a=self.v_over_a,
+                    exchange_scale=scale,
+                )
+            else:
+                rows = _exchange_tve_q_slab(
+                    q_start=iq,
+                    q_stop=iq + 1,
+                    lambda_blocks=self.lambda_blocks,
+                    v_over_a=self.v_over_a,
+                    exchange_scale=scale,
+                )
+            for q_index, forward, reverse in rows:
                 self._scatter_exchange_tve_q_contribution(
                     tVE,
                     block_rows,
@@ -255,16 +339,28 @@ class ContinuumHFBackend:
 
         n_jobs = max(1, min(int(self.interaction.exchange_workers), self.n_q))
         ranges = _exchange_q_slab_ranges(self.n_q, n_jobs)
-        tasks = (
-            delayed(_exchange_tve_q_slab)(
-                q_start=start,
-                q_stop=stop,
-                lambda_blocks=self.lambda_blocks,
-                v_over_a=self.v_over_a,
-                exchange_scale=scale,
+        if self.vertex_layout == "valley_compact":
+            tasks = (
+                delayed(_exchange_tve_q_slab_compact)(
+                    q_start=start,
+                    q_stop=stop,
+                    lambda_compact=self.lambda_compact,
+                    v_over_a=self.v_over_a,
+                    exchange_scale=scale,
+                )
+                for start, stop in ranges
             )
-            for start, stop in ranges
-        )
+        else:
+            tasks = (
+                delayed(_exchange_tve_q_slab)(
+                    q_start=start,
+                    q_stop=stop,
+                    lambda_blocks=self.lambda_blocks,
+                    v_over_a=self.v_over_a,
+                    exchange_scale=scale,
+                )
+                for start, stop in ranges
+            )
         results = Parallel(
             n_jobs=n_jobs,
             backend="loky",
@@ -286,6 +382,12 @@ class ContinuumHFBackend:
     def _empty_retained_lambdas(self) -> np.ndarray:
         return np.zeros((0, 0, self.n_blocks, self.dim, self.dim), dtype=complex)
 
+    def _empty_retained_lambda_compact(self) -> np.ndarray:
+        return np.zeros(
+            (0, 0, self.n_blocks, 2, self.n_active, self.n_active),
+            dtype=complex,
+        )
+
     def _vertices_without_lambda_blocks(self) -> DensityVertices:
         return DensityVertices(
             q_shifts=self.vertices.q_shifts,
@@ -294,6 +396,12 @@ class ContinuumHFBackend:
             lambda_blocks=self._empty_retained_lambdas(),
             v_over_a=np.asarray(self.vertices.v_over_a, dtype=float).copy(),
             g_channels=self.vertices.g_channels,
+            vertex_layout=self.vertex_layout,
+            lambda_compact=(
+                self._empty_retained_lambda_compact()
+                if self.vertex_layout == "valley_compact"
+                else None
+            ),
             channel_in_disk=(
                 None
                 if self.vertices.channel_in_disk is None
@@ -324,11 +432,14 @@ class ContinuumHFBackend:
             raise ValueError("density_vertex_retention must be 'full' or 'hartree_only'")
 
         original_lambdas = self.lambda_blocks
+        original_compact = self.lambda_compact
         original_targets = self.target_minus_q
         original_v_over_a = self.v_over_a
         retained_count = len(self.full_hartree_channels)
         if retained_count == 0:
             self.lambda_blocks = self._empty_retained_lambdas()
+            if self.vertex_layout == "valley_compact":
+                self.lambda_compact = self._empty_retained_lambda_compact()
             self.target_minus_q = np.zeros((0, self.n_blocks), dtype=int)
             self.q_is_zero = np.zeros(0, dtype=bool)
             self.v_over_a = np.zeros((0, 0), dtype=float)
@@ -338,9 +449,21 @@ class ContinuumHFBackend:
             self.vertices = self._vertices_without_lambda_blocks()
             return
 
-        retained_lambdas = np.empty(
-            (retained_count, 1, self.n_blocks, self.dim, self.dim),
-            dtype=complex,
+        retained_lambdas = (
+            None
+            if self.vertex_layout == "valley_compact"
+            else np.empty(
+                (retained_count, 1, self.n_blocks, self.dim, self.dim),
+                dtype=complex,
+            )
+        )
+        retained_compact = (
+            np.empty(
+                (retained_count, 1, self.n_blocks, 2, self.n_active, self.n_active),
+                dtype=complex,
+            )
+            if self.vertex_layout == "valley_compact"
+            else None
         )
         retained_targets = np.empty((retained_count, self.n_blocks), dtype=int)
         retained_v_over_a = np.empty((retained_count, 1), dtype=float)
@@ -348,19 +471,35 @@ class ContinuumHFBackend:
         retained_channels: list[tuple[int, int, float]] = []
         lookup: dict[tuple[int, int], tuple[int, int, float]] = {}
         for new_iq, (old_iq, old_ig, v) in enumerate(self.full_hartree_channels):
-            retained_lambdas[new_iq, 0] = original_lambdas[int(old_iq), int(old_ig)]
+            if self.vertex_layout == "valley_compact":
+                if original_compact is None or retained_compact is None:
+                    raise ValueError("missing compact vertices for hartree_only retention")
+                retained_compact[new_iq, 0] = original_compact[int(old_iq), int(old_ig)]
+            else:
+                if retained_lambdas is None:
+                    raise ValueError("missing dense vertices for hartree_only retention")
+                retained_lambdas[new_iq, 0] = original_lambdas[int(old_iq), int(old_ig)]
             retained_targets[new_iq] = original_targets[int(old_iq)]
             retained_v_over_a[new_iq, 0] = original_v_over_a[int(old_iq), int(old_ig)]
             retained_channels.append((new_iq, 0, float(v)))
             lookup[(int(old_iq), int(old_ig))] = (new_iq, 0, float(v))
 
-        self.lambda_blocks = retained_lambdas
+        if self.vertex_layout == "valley_compact":
+            self.lambda_blocks = self._empty_retained_lambdas()
+            self.lambda_compact = retained_compact
+        else:
+            if retained_lambdas is None:
+                raise ValueError("missing dense vertices for hartree_only retention")
+            self.lambda_blocks = retained_lambdas
         self.target_minus_q = retained_targets
         self.q_is_zero = retained_q_is_zero
         self.v_over_a = retained_v_over_a
         self.hartree_channels = retained_channels
         self._hartree_channel_lookup = lookup
-        self.n_q, self.n_g = self.lambda_blocks.shape[:2]
+        if self.vertex_layout == "valley_compact":
+            self.n_q, self.n_g = self.lambda_compact.shape[:2]
+        else:
+            self.n_q, self.n_g = self.lambda_blocks.shape[:2]
         self.vertices = self._vertices_without_lambda_blocks()
 
     def hartree_lambda_for_channel(self, iq: int, ig: int) -> np.ndarray | None:
@@ -368,6 +507,10 @@ class ContinuumHFBackend:
         if retained is None:
             return None
         retained_iq, retained_ig, _v = retained
+        if self.vertex_layout == "valley_compact":
+            return dense_lambdas_from_compact(
+                self.lambda_compact[int(retained_iq), int(retained_ig)]
+            )
         return self.lambda_blocks[int(retained_iq), int(retained_ig)]
 
     def hartree_weight_for_channel(self, iq: int, ig: int) -> float | None:
@@ -376,13 +519,48 @@ class ContinuumHFBackend:
             return None
         return float(retained[2])
 
+    def _compact_channel_density_trace(self, lam: np.ndarray, density: np.ndarray) -> complex:
+        rho = 0.0 + 0.0j
+        for iv in range(2):
+            start = iv * self.n_active
+            stop = start + self.n_active
+            rho += np.einsum(
+                "kab,kba->",
+                lam[:, iv],
+                density[:, start:stop, start:stop],
+                optimize=True,
+            )
+        return rho
+
+    def _add_compact_hartree_channel(
+        self,
+        out: np.ndarray,
+        lam: np.ndarray,
+        rho: complex,
+        v: float,
+    ) -> None:
+        for iv in range(2):
+            start = iv * self.n_active
+            stop = start + self.n_active
+            lam_v = lam[:, iv]
+            out[:, start:stop, start:stop] += 0.5 * v * (
+                np.conj(rho) * lam_v + rho * np.swapaxes(lam_v.conj(), -1, -2)
+            )
+
     def hartree_hamiltonian(self, Q: np.ndarray) -> np.ndarray:
         density = self.as_block_density(Q)
         out = np.zeros_like(density, dtype=complex)
         for iq, ig, v in self.hartree_channels:
-            lam = self.lambda_blocks[iq, ig]
-            rho = np.einsum("kab,kba->", lam, density, optimize=True)
-            out += 0.5 * v * (np.conj(rho) * lam + rho * np.swapaxes(lam.conj(), -1, -2))
+            if self.vertex_layout == "valley_compact":
+                lam = self.lambda_compact[iq, ig]
+                rho = self._compact_channel_density_trace(lam, density)
+                self._add_compact_hartree_channel(out, lam, rho, v)
+            else:
+                lam = self.lambda_blocks[iq, ig]
+                rho = np.einsum("kab,kba->", lam, density, optimize=True)
+                out += 0.5 * v * (
+                    np.conj(rho) * lam + rho * np.swapaxes(lam.conj(), -1, -2)
+                )
         return hermitize(out)
 
     def fock_hamiltonian(self, Q: np.ndarray) -> np.ndarray:
@@ -399,8 +577,12 @@ class ContinuumHFBackend:
         density = self.as_block_density(Q)
         hartree = 0.0
         for iq, ig, v in self.hartree_channels:
-            lam = self.lambda_blocks[iq, ig]
-            rho = np.einsum("kab,kba->", lam, density, optimize=True)
+            if self.vertex_layout == "valley_compact":
+                lam = self.lambda_compact[iq, ig]
+                rho = self._compact_channel_density_trace(lam, density)
+            else:
+                lam = self.lambda_blocks[iq, ig]
+                rho = np.einsum("kab,kba->", lam, density, optimize=True)
             hartree += 0.5 * v * float(np.real(rho * np.conj(rho)))
         fock = 0.5 * block_trace_product(self.fock_hamiltonian(density), density)
         return hartree, fock

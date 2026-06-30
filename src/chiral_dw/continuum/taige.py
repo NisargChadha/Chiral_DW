@@ -16,6 +16,7 @@ from chiral_dw.continuum.models import (
     VALLEY_K,
     VALLEY_KPRIME,
     VALLEY_ORDER,
+    dense_lambdas_from_compact,
     hermitize,
 )
 
@@ -195,6 +196,7 @@ def taige_interaction_params(
     vertex_workers: int = 1,
     exchange_workers: int = 1,
     density_vertex_retention: Literal["full", "hartree_only"] = "full",
+    density_vertex_layout: Literal["auto", "dense", "valley_compact"] = "auto",
 ) -> ContinuumInteractionParams:
     """Return dual-gated smeared Coulomb parameters for Taige MoTe2."""
 
@@ -214,6 +216,7 @@ def taige_interaction_params(
         vertex_workers=int(vertex_workers),
         exchange_workers=int(exchange_workers),
         density_vertex_retention=density_vertex_retention,
+        density_vertex_layout=density_vertex_layout,
     )
 
 
@@ -783,7 +786,7 @@ def _fold_grid_coord(coord: GridCoord, n_k: int) -> tuple[GridCoord, GridCoord]:
     return (fi, fj), ((i - fi) // n, (j - fj) // n)
 
 
-def _taige_density_vertex_q_slab(
+def _taige_density_vertex_q_slab_compact(
     *,
     q_start: int,
     q_stop: int,
@@ -792,13 +795,12 @@ def _taige_density_vertex_q_slab(
     channel_in_disk: np.ndarray,
     n_k: int,
     n_active: int,
-    dim: int,
     shell: tuple[GridCoord, ...],
     shell_index: dict[GridCoord, int],
     electron_vectors: np.ndarray,
     source_index: np.ndarray | None,
 ) -> tuple[int, np.ndarray, np.ndarray, np.ndarray]:
-    """Build one contiguous q-slab of Taige density-vertex arrays."""
+    """Build one contiguous q-slab of valley-compact Taige density vertices."""
 
     q_slab = q_list[int(q_start) : int(q_stop)]
     n_q_slab = len(q_slab)
@@ -806,7 +808,7 @@ def _taige_density_vertex_q_slab(
     grid_size = int(n_k) * int(n_k)
     target_minus_q = np.empty((n_q_slab, grid_size), dtype=int)
     q_is_zero = np.zeros(n_q_slab, dtype=bool)
-    lambdas = np.zeros((n_q_slab, n_g, grid_size, dim, dim), dtype=complex)
+    lambdas = np.zeros((n_q_slab, n_g, grid_size, 2, n_active, n_active), dtype=complex)
 
     def electron_form_factor(
         iv: int,
@@ -855,12 +857,10 @@ def _taige_density_vertex_q_slab(
                 continue
             for ik in range(grid_size):
                 for iv in range(2):
-                    start = iv * n_active
-                    stop = start + n_active
                     physical_source = (
                         int(source_index[ik, iv]) if source_index is not None else int(ik)
                     )
-                    lambdas[local_iq, ig, ik, start:stop, start:stop] = hole_form_factor(
+                    lambdas[local_iq, ig, ik, iv] = hole_form_factor(
                         iv,
                         physical_source,
                         q,
@@ -868,6 +868,42 @@ def _taige_density_vertex_q_slab(
                     )
 
     return int(q_start), target_minus_q, q_is_zero, lambdas
+
+
+def _taige_density_vertex_q_slab(
+    *,
+    q_start: int,
+    q_stop: int,
+    q_list: tuple[GridCoord, ...],
+    g_channels: tuple[GridCoord, ...],
+    channel_in_disk: np.ndarray,
+    n_k: int,
+    n_active: int,
+    dim: int,
+    shell: tuple[GridCoord, ...],
+    shell_index: dict[GridCoord, int],
+    electron_vectors: np.ndarray,
+    source_index: np.ndarray | None,
+) -> tuple[int, np.ndarray, np.ndarray, np.ndarray]:
+    """Build one contiguous q-slab of dense Taige density vertices."""
+
+    q_start_out, target_minus_q, q_is_zero, compact = _taige_density_vertex_q_slab_compact(
+        q_start=q_start,
+        q_stop=q_stop,
+        q_list=q_list,
+        g_channels=g_channels,
+        channel_in_disk=channel_in_disk,
+        n_k=n_k,
+        n_active=n_active,
+        shell=shell,
+        shell_index=shell_index,
+        electron_vectors=electron_vectors,
+        source_index=source_index,
+    )
+    dense = dense_lambdas_from_compact(compact)
+    if dense.shape[-2:] != (int(dim), int(dim)):
+        raise ValueError("expanded Taige density vertices have incompatible active dimension")
+    return q_start_out, target_minus_q, q_is_zero, dense
 
 
 def _q_slab_ranges(n_q: int, vertex_workers: int) -> tuple[tuple[int, int], ...]:
@@ -890,20 +926,26 @@ def _build_taige_density_vertex_arrays_serial(
     active: ContinuumActiveSpace,
     shell_index: dict[GridCoord, int],
     electron_vectors: np.ndarray,
+    compact: bool,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    _q_start, target_minus_q, q_is_zero, lambdas = _taige_density_vertex_q_slab(
-        q_start=0,
-        q_stop=len(q_list),
-        q_list=q_list,
-        g_channels=g_channels,
-        channel_in_disk=channel_in_disk,
-        n_k=grid.n_k,
-        n_active=active.n_active,
-        dim=active.dim,
-        shell=active.shell,
-        shell_index=shell_index,
-        electron_vectors=electron_vectors,
-        source_index=active.source_index,
+    slab_builder = _taige_density_vertex_q_slab_compact if compact else _taige_density_vertex_q_slab
+    kwargs = {
+        "q_start": 0,
+        "q_stop": len(q_list),
+        "q_list": q_list,
+        "g_channels": g_channels,
+        "channel_in_disk": channel_in_disk,
+        "n_k": grid.n_k,
+        "n_active": active.n_active,
+        "shell": active.shell,
+        "shell_index": shell_index,
+        "electron_vectors": electron_vectors,
+        "source_index": active.source_index,
+    }
+    if not compact:
+        kwargs["dim"] = active.dim
+    _q_start, target_minus_q, q_is_zero, lambdas = slab_builder(
+        **kwargs,
     )
     return target_minus_q, q_is_zero, lambdas
 
@@ -918,6 +960,7 @@ def _build_taige_density_vertex_arrays_parallel(
     shell_index: dict[GridCoord, int],
     electron_vectors: np.ndarray,
     vertex_workers: int,
+    compact: bool,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     from joblib import Parallel, delayed
 
@@ -925,26 +968,34 @@ def _build_taige_density_vertex_arrays_parallel(
     n_g = len(g_channels)
     target_minus_q = np.empty((n_q, grid.size), dtype=int)
     q_is_zero = np.zeros(n_q, dtype=bool)
-    lambdas = np.zeros((n_q, n_g, grid.size, active.dim, active.dim), dtype=complex)
+    if compact:
+        lambdas = np.zeros((n_q, n_g, grid.size, 2, active.n_active, active.n_active), dtype=complex)
+        slab_builder = _taige_density_vertex_q_slab_compact
+    else:
+        lambdas = np.zeros((n_q, n_g, grid.size, active.dim, active.dim), dtype=complex)
+        slab_builder = _taige_density_vertex_q_slab
     n_jobs = max(1, min(int(vertex_workers), n_q))
     ranges = _q_slab_ranges(n_q, n_jobs)
-    tasks = (
-        delayed(_taige_density_vertex_q_slab)(
-            q_start=start,
-            q_stop=stop,
-            q_list=q_list,
-            g_channels=g_channels,
-            channel_in_disk=channel_in_disk,
-            n_k=grid.n_k,
-            n_active=active.n_active,
-            dim=active.dim,
-            shell=active.shell,
-            shell_index=shell_index,
-            electron_vectors=electron_vectors,
-            source_index=active.source_index,
-        )
-        for start, stop in ranges
-    )
+
+    def _task(start: int, stop: int):
+        kwargs = {
+            "q_start": start,
+            "q_stop": stop,
+            "q_list": q_list,
+            "g_channels": g_channels,
+            "channel_in_disk": channel_in_disk,
+            "n_k": grid.n_k,
+            "n_active": active.n_active,
+            "shell": active.shell,
+            "shell_index": shell_index,
+            "electron_vectors": electron_vectors,
+            "source_index": active.source_index,
+        }
+        if not compact:
+            kwargs["dim"] = active.dim
+        return slab_builder(**kwargs)
+
+    tasks = (delayed(_task)(start, stop) for start, stop in ranges)
     results = Parallel(
         n_jobs=n_jobs,
         backend="loky",
@@ -983,6 +1034,14 @@ def build_taige_density_vertices(
         g_channels,
         interaction.local_field_cutoff,
     )
+    layout = (
+        "valley_compact"
+        if interaction.density_vertex_layout == "auto"
+        else str(interaction.density_vertex_layout)
+    )
+    if layout not in {"dense", "valley_compact"}:
+        raise ValueError("density_vertex_layout must be 'auto', 'dense', or 'valley_compact'")
+    compact = layout == "valley_compact"
     if interaction.vertex_workers <= 1:
         target_minus_q, q_is_zero, lambdas = _build_taige_density_vertex_arrays_serial(
             q_list=q_list,
@@ -992,6 +1051,7 @@ def build_taige_density_vertices(
             active=active,
             shell_index=shell_index,
             electron_vectors=electron_vectors,
+            compact=compact,
         )
     else:
         target_minus_q, q_is_zero, lambdas = _build_taige_density_vertex_arrays_parallel(
@@ -1003,6 +1063,7 @@ def build_taige_density_vertices(
             shell_index=shell_index,
             electron_vectors=electron_vectors,
             vertex_workers=interaction.vertex_workers,
+            compact=compact,
         )
 
     q_vectors_nm_inv = geometry.mesh_q_vectors_nm_inv(grid, q_list, g_channels)
@@ -1019,13 +1080,22 @@ def build_taige_density_vertices(
         v_over_a = np.where(channel_in_disk, v_over_a, 0.0)
         v_q = np.where(channel_in_disk, v_q, 0.0)
 
+    lambda_blocks = (
+        np.zeros((0, 0, grid.size, active.dim, active.dim), dtype=complex)
+        if compact
+        else lambdas
+    )
+    lambda_compact = lambdas if compact else None
+
     return DensityVertices(
         q_shifts=q_list,
         target_minus_q=target_minus_q,
         q_is_zero=np.logical_or(q_is_zero, np.any(q_zero_channels, axis=-1)),
-        lambda_blocks=lambdas,
+        lambda_blocks=lambda_blocks,
         v_over_a=v_over_a,
         g_channels=g_channels,
+        vertex_layout=layout,
+        lambda_compact=lambda_compact,
         channel_in_disk=channel_in_disk,
         q_vectors_nm_inv=q_vectors_nm_inv,
         q_norm_nm_inv=np.linalg.norm(q_vectors_nm_inv, axis=-1),

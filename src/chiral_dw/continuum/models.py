@@ -245,10 +245,54 @@ class DensityVertices:
     lambda_blocks: np.ndarray
     v_over_a: np.ndarray
     g_channels: tuple[tuple[int, int], ...] = ((0, 0),)
+    vertex_layout: Literal["dense", "valley_compact"] = "dense"
+    lambda_compact: np.ndarray | None = None
     channel_in_disk: np.ndarray | None = None
     q_vectors_nm_inv: np.ndarray | None = None
     q_norm_nm_inv: np.ndarray | None = None
     v_q: np.ndarray | None = None
+
+
+def compact_lambdas_from_dense(lambdas: np.ndarray, n_active: int) -> np.ndarray:
+    """Return valley-diagonal blocks as ``(..., 2, n_active, n_active)``."""
+
+    arr = np.asarray(lambdas)
+    n = int(n_active)
+    if arr.shape[-2:] != (2 * n, 2 * n):
+        raise ValueError("dense lambda shape is incompatible with n_active")
+    compact = np.empty(arr.shape[:-2] + (2, n, n), dtype=arr.dtype)
+    for iv in range(2):
+        start = iv * n
+        stop = start + n
+        compact[..., iv, :, :] = arr[..., start:stop, start:stop]
+    return compact
+
+
+def dense_lambdas_from_compact(lambda_compact: np.ndarray) -> np.ndarray:
+    """Expand valley-compact lambdas into dense active-basis matrices."""
+
+    compact = np.asarray(lambda_compact)
+    if compact.ndim < 4 or compact.shape[-3] != 2 or compact.shape[-1] != compact.shape[-2]:
+        raise ValueError("compact lambdas must end in (2, n_active, n_active)")
+    n = int(compact.shape[-1])
+    dense = np.zeros(compact.shape[:-3] + (2 * n, 2 * n), dtype=compact.dtype)
+    for iv in range(2):
+        start = iv * n
+        stop = start + n
+        dense[..., start:stop, start:stop] = compact[..., iv, :, :]
+    return dense
+
+
+def density_vertices_dense_lambdas(vertices: DensityVertices) -> np.ndarray:
+    """Return dense lambda blocks for either supported vertex layout."""
+
+    if vertices.vertex_layout == "dense":
+        return np.asarray(vertices.lambda_blocks)
+    if vertices.vertex_layout == "valley_compact":
+        if vertices.lambda_compact is None:
+            raise ValueError("valley_compact DensityVertices require lambda_compact")
+        return dense_lambdas_from_compact(vertices.lambda_compact)
+    raise ValueError(f"unknown density vertex layout {vertices.vertex_layout!r}")
 
 
 @dataclass(frozen=True)

@@ -35,6 +35,11 @@ moving back to the nonideal conjugate AC/domain-wall calculation:
 - The Taige notebook and cluster sweep can solve both Q=0 and finite-Q IVC
   branches, then use the lower-energy IVC branch as the whole interpolation
   frame for `K(theta)` and `c_G`.
+- Taige cluster/HF builds now have opt-in multicore q-slab construction for
+  density vertices and dense exchange kernels, keep only Hartree density
+  vertices after `tVE` construction in sweep scripts, and use valley-compact
+  Taige density vertices by default to avoid storing zero intervalley form
+  factor blocks.
 - The same-Chern QHFM benchmark validates the real-space 4D charge evaluator
   against `rho_top=-q_sk` in a controlled Chern-1 limit.
 - The ideal opposite-Chern conjugate LLL benchmark validates the circular
@@ -216,7 +221,12 @@ per-task output. By default each point records scalar-rich diagnostics:
 `c_G`, `K(theta)`, trial energy and gap versus theta, HF reference gaps and
 energies, selected/Q=0/finite-Q VP and IVC order-parameter magnitudes,
 noninteracting Chern numbers, HF Chern numbers, and the Taige IVC- finite-Q
-energy comparison. The default `IVC_BRANCH_POLICY=lower-energy` selects the
+energy comparison. The Taige density-vertex default is
+`DENSITY_VERTEX_LAYOUT=auto`, which stores form factors in the valley-compact
+layout; set `DENSITY_VERTEX_LAYOUT=dense` only for dense form-factor debugging.
+The default `DENSITY_VERTEX_RETENTION=hartree_only` drops full density vertices
+after dense exchange construction and retains the Hartree channels needed for
+energies and Hartree fields. The default `IVC_BRANCH_POLICY=lower-energy` selects the
 lower-energy Q=0/finite-Q IVC branch for interpolation; use
 `IVC_BRANCH_POLICY=q0` to force the Q=0 path. The default production window is
 `n_k=24`, two active bands per valley, `plane_wave_shell=5`, `u_D=0..20 meV`,

@@ -85,6 +85,7 @@ def test_native_continuum_params_record_self_contained_hf_defaults():
     assert params.interaction.vertex_workers == 1
     assert params.interaction.exchange_workers == 1
     assert params.interaction.density_vertex_retention == "full"
+    assert params.interaction.density_vertex_layout == "auto"
     assert params.hf.n_occ_per_k == 1
 
 
