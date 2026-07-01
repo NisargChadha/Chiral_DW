@@ -196,6 +196,37 @@ print(refs.ivc.diagnostics.aufbau_residual_norm)
 print(reference_diagnostics(refs)["ivc"].model_dump())
 ```
 
+### Local Taige IVC Branch Diagnostics
+
+Use the local diagnostic script to study Q=0 constrained-IVC branch changes
+without submitting cluster jobs. The default quick preset uses `n_k=18`,
+`theta_deg=3.65`, `u_D=[5.25,6.0,6.75,7.5,8.25]`, one ordered IVC seed, and two
+mixed random seeds:
+
+```bash
+python3 scripts/diagnose_taige_ivc_branch_local.py \
+  --run-label ivc_branch_quick_nk18
+```
+
+For the full local linecut atlas, run:
+
+```bash
+python3 scripts/diagnose_taige_ivc_branch_local.py \
+  --preset ivc_branch_linecuts \
+  --diagnostic-mode all \
+  --run-label ivc_branch_linecuts_nk18
+```
+
+Outputs are written under `results/local_ivc_branch_diagnostics/<run-label>/`.
+The main files are `runs.csv` for final HF diagnostics and residuals,
+`iteration_history.csv` for every mixed-density HF iteration,
+`projector_overlaps_seed_matrix.csv` for seed-to-seed branch comparisons,
+`projector_overlaps_neighbor.csv` for neighboring-parameter projector jumps,
+`hysteresis.csv` for upward/downward warm-start comparisons, and
+`projectors_final.npz` / `projectors_snapshots.npz` for projector inspection.
+Neighboring-point overlaps use the active Bloch frames, so they compare the
+embedded physical subspaces rather than raw active-basis matrices.
+
 ### Taige Continuum Cluster Sweep
 
 The cluster sweep wrapper runs one `(u_D, theta_deg)` point per SLURM array

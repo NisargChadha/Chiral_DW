@@ -25,6 +25,13 @@ from chiral_dw.continuum.hf_bands import (
     hf_mesh_band_data,
     taige_active_fine_frame,
 )
+from chiral_dw.continuum.ivc_diagnostics import (
+    ProjectorOverlapDiagnostics,
+    TaigeIvcDiagnosticPoint,
+    TaigeIvcSeedSpec,
+    projector_overlap_diagnostics,
+    projector_overlap_diagnostics_with_frames,
+)
 from chiral_dw.continuum.models import (
     ContinuumActiveSpace,
     ContinuumBundle,
@@ -143,8 +150,11 @@ __all__ = [
     "finite_q_shift_metadata",
     "finite_q_ivc_seed",
     "MomentumGrid",
+    "ProjectorOverlapDiagnostics",
     "ReferenceHamiltonianDiagnostics",
     "SymmetricHFReferences",
+    "TaigeIvcDiagnosticPoint",
+    "TaigeIvcSeedSpec",
     "TPrimeConstraint",
     "TaigeSweepDiagnostics",
     "TaigeSweepDiagnosticsParams",
@@ -182,6 +192,8 @@ __all__ = [
     "noninteracting_chern_rows",
     "order_diagnostics",
     "projector_maps",
+    "projector_overlap_diagnostics",
+    "projector_overlap_diagnostics_with_frames",
     "random_projector_like_seed",
     "random_seed",
     "reference_diagnostics",
