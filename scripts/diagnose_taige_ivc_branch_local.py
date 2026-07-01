@@ -42,6 +42,7 @@ from chiral_dw.continuum.ivc_diagnostics import (  # noqa: E402
     ProjectorOverlapDiagnostics,
     TaigeIvcDiagnosticPoint,
     TaigeIvcSeedSpec,
+    transport_projector_between_frames,
 )
 
 
@@ -665,6 +666,42 @@ def _overlap_row(
     return {**base, **overlap.model_dump(mode="json")}
 
 
+def _transport_row(prefix: str, diagnostics) -> dict[str, Any]:
+    return {
+        f"{prefix}{key}": value
+        for key, value in diagnostics.model_dump(mode="json").items()
+    }
+
+
+def _select_lowest_energy_seed(
+    rows: list[dict[str, Any]],
+) -> tuple[dict[str, Any], str]:
+    converged_clean = [
+        row
+        for row in rows
+        if bool(row.get("converged", False))
+        and not bool(row.get("final_self_consistency_warning", False))
+    ]
+    non_warning = [
+        row
+        for row in rows
+        if not bool(row.get("final_self_consistency_warning", False))
+    ]
+    if converged_clean:
+        pool = converged_clean
+        label = "converged_non_warning"
+    elif non_warning:
+        pool = non_warning
+        label = "non_warning"
+    else:
+        pool = rows
+        label = "all_warning"
+    if not pool:
+        raise ValueError("cannot select a seed from an empty row list")
+    selected = min(pool, key=lambda row: float(row["energy_total_per_cell"]))
+    return selected, label
+
+
 def _compute_seed_overlaps(
     records: list[RunRecord],
     final_arrays: dict[str, np.ndarray],
@@ -675,7 +712,7 @@ def _compute_seed_overlaps(
     rows: list[dict[str, Any]] = []
     groups: dict[tuple[str, str, int], list[RunRecord]] = {}
     for record in records:
-        if record.mode not in {"scan", "convergence"}:
+        if record.mode not in {"scan", "convergence", "hysteresis_seed_scan"}:
             continue
         groups.setdefault((record.mode, record.phase_key, record.max_iter), []).append(record)
     for (_mode, _phase_key, _max_iter), group in groups.items():
@@ -760,7 +797,12 @@ def _compute_hysteresis_rows(
     rows: list[dict[str, Any]] = []
     groups: dict[tuple[float, float, int], dict[str, RunRecord]] = {}
     for record in records:
-        if record.mode != "hysteresis":
+        run_row = run_rows_by_id.get(record.run_id, {})
+        is_selected_initial = (
+            record.mode == "hysteresis_seed_scan"
+            and bool(run_row.get("hysteresis_selected_initial_seed", False))
+        )
+        if record.mode != "hysteresis" and not is_selected_initial:
             continue
         key = (round(record.point.theta_deg, 10), round(record.point.u_D, 10), record.max_iter)
         groups.setdefault(key, {})[record.direction] = record
@@ -1041,7 +1083,7 @@ def _run_hysteresis_mode(
     args: argparse.Namespace,
     *,
     linecuts: dict[str, list[TaigeIvcDiagnosticPoint]],
-    seed: TaigeIvcSeedSpec,
+    seeds: list[TaigeIvcSeedSpec],
     run_rows: list[dict[str, Any]],
     iteration_rows: list[dict[str, Any]],
     snapshot_rows: list[dict[str, Any]],
@@ -1057,32 +1099,105 @@ def _run_hysteresis_mode(
             ("down", sorted(points, key=lambda point: point.u_D, reverse=True)),
         ):
             previous_projector = None
+            previous_frames = None
             previous_run_id = None
+            previous_selection_pool = None
             for point in ordered_points:
                 bundle = _build_bundle(args, point)
                 phase_key = _point_key(point)
-                phase_frames.setdefault(phase_key, active_basis_frames(bundle.active))
+                current_frames = active_basis_frames(bundle.active)
+                phase_frames.setdefault(phase_key, current_frames)
+                if previous_projector is None:
+                    seed_rows: list[dict[str, Any]] = []
+                    seed_results: dict[str, Any] = {}
+                    for seed in seeds:
+                        run_id = f"run_{run_counter[0]:06d}"
+                        run_counter[0] += 1
+                        print(
+                            f"Hysteresis initial seed scan {group} {direction} {run_id} "
+                            f"u_D={point.u_D:g} theta={point.theta_deg:g} seed={seed.label}"
+                        )
+                        result, row = _solve_ivc(
+                            args=args,
+                            bundle=bundle,
+                            point=point,
+                            seed=seed,
+                            max_iter=int(args.max_iter),
+                            run_id=run_id,
+                            mode="hysteresis_seed_scan",
+                            direction=direction,
+                            initial_projector=None,
+                            warm_start_from_run_id=None,
+                            iteration_rows=iteration_rows,
+                            snapshot_arrays=snapshot_arrays,
+                            snapshot_rows=snapshot_rows,
+                        )
+                        row["hysteresis_initial_seed_candidate"] = True
+                        key = f"{run_id}__final"
+                        final_arrays[key] = result.P
+                        run_rows.append(row)
+                        record = RunRecord(
+                            run_id=run_id,
+                            mode="hysteresis_seed_scan",
+                            direction=direction,
+                            point=point,
+                            seed=seed,
+                            max_iter=int(args.max_iter),
+                            phase_key=phase_key,
+                            projector_key=key,
+                        )
+                        records.append(record)
+                        seed_rows.append(row)
+                        seed_results[run_id] = result
+                    selected_row, selection_pool = _select_lowest_energy_seed(seed_rows)
+                    selected_result = seed_results[selected_row["run_id"]]
+                    selected_row["hysteresis_selected_initial_seed"] = True
+                    selected_row["hysteresis_selection_pool"] = selection_pool
+                    previous_projector = selected_result.P
+                    previous_frames = current_frames
+                    previous_run_id = str(selected_row["run_id"])
+                    previous_selection_pool = selection_pool
+                    continue
+
+                if previous_frames is None:
+                    raise RuntimeError("missing previous active frames for hysteresis transport")
+                transported, transport_diag = transport_projector_between_frames(
+                    previous_projector,
+                    previous_frames,
+                    current_frames,
+                    n_occ_per_k=int(args.n_occ_per_k),
+                )
+                warm_seed = TaigeIvcSeedSpec(
+                    label="transported_warm_start",
+                    ordered_weight=1.0,
+                    random_weight=0.0,
+                    random_seed=None,
+                )
                 run_id = f"run_{run_counter[0]:06d}"
                 run_counter[0] += 1
                 print(
-                    f"Hysteresis {group} {direction} {run_id} "
-                    f"u_D={point.u_D:g} theta={point.theta_deg:g}"
+                    f"Hysteresis transported {group} {direction} {run_id} "
+                    f"u_D={point.u_D:g} theta={point.theta_deg:g} "
+                    f"from={previous_run_id} retained={transport_diag.mean_retained_weight:.6g}"
                 )
                 result, row = _solve_ivc(
                     args=args,
                     bundle=bundle,
                     point=point,
-                    seed=seed,
+                    seed=warm_seed,
                     max_iter=int(args.max_iter),
                     run_id=run_id,
                     mode="hysteresis",
                     direction=direction,
-                    initial_projector=previous_projector,
+                    initial_projector=transported,
                     warm_start_from_run_id=previous_run_id,
                     iteration_rows=iteration_rows,
                     snapshot_arrays=snapshot_arrays,
                     snapshot_rows=snapshot_rows,
                 )
+                row["warm_start_transport"] = "active_frame_projected_largest_eigenvectors"
+                row["warm_start_source_selection_pool"] = previous_selection_pool
+                row.update(_transport_row("warm_start_", transport_diag))
                 key = f"{run_id}__final"
                 final_arrays[key] = result.P
                 run_rows.append(row)
@@ -1092,14 +1207,16 @@ def _run_hysteresis_mode(
                         mode="hysteresis",
                         direction=direction,
                         point=point,
-                        seed=seed,
+                        seed=warm_seed,
                         max_iter=int(args.max_iter),
                         phase_key=phase_key,
                         projector_key=key,
                     )
                 )
                 previous_projector = result.P
+                previous_frames = current_frames
                 previous_run_id = run_id
+                previous_selection_pool = "warm_start"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1163,11 +1280,10 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.diagnostic_mode in {"hysteresis", "all"}:
         linecuts = _linecut_groups(points)
-        hysteresis_seed = seeds[0]
         _run_hysteresis_mode(
             args,
             linecuts=linecuts,
-            seed=hysteresis_seed,
+            seeds=seeds,
             run_rows=run_rows,
             iteration_rows=iteration_rows,
             snapshot_rows=snapshot_rows,

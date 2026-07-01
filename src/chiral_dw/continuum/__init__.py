@@ -27,10 +27,12 @@ from chiral_dw.continuum.hf_bands import (
 )
 from chiral_dw.continuum.ivc_diagnostics import (
     ProjectorOverlapDiagnostics,
+    ProjectorTransportDiagnostics,
     TaigeIvcDiagnosticPoint,
     TaigeIvcSeedSpec,
     projector_overlap_diagnostics,
     projector_overlap_diagnostics_with_frames,
+    transport_projector_between_frames,
 )
 from chiral_dw.continuum.models import (
     ContinuumActiveSpace,
@@ -151,6 +153,7 @@ __all__ = [
     "finite_q_ivc_seed",
     "MomentumGrid",
     "ProjectorOverlapDiagnostics",
+    "ProjectorTransportDiagnostics",
     "ReferenceHamiltonianDiagnostics",
     "SymmetricHFReferences",
     "TaigeIvcDiagnosticPoint",
@@ -194,6 +197,7 @@ __all__ = [
     "projector_maps",
     "projector_overlap_diagnostics",
     "projector_overlap_diagnostics_with_frames",
+    "transport_projector_between_frames",
     "random_projector_like_seed",
     "random_seed",
     "reference_diagnostics",

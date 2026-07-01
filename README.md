@@ -226,6 +226,10 @@ The main files are `runs.csv` for final HF diagnostics and residuals,
 `projectors_final.npz` / `projectors_snapshots.npz` for projector inspection.
 Neighboring-point overlaps use the active Bloch frames, so they compare the
 embedded physical subspaces rather than raw active-basis matrices.
+Hysteresis mode starts each sweep direction with the requested ordered/random
+seeds, selects the lowest-energy converged/no-warning IVC seed when available,
+and transports that selected projector through the old/new active frames before
+using it as the next displacement-field seed.
 
 ### Taige Continuum Cluster Sweep
 

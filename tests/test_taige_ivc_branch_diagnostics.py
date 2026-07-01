@@ -11,6 +11,7 @@ import pytest
 from chiral_dw.continuum.ivc_diagnostics import (
     projector_overlap_diagnostics,
     projector_overlap_diagnostics_with_frames,
+    transport_projector_between_frames,
 )
 
 
@@ -59,6 +60,25 @@ def test_projector_overlap_with_frames_compares_physical_embedded_subspaces():
     assert active_basis.mean_overlap == pytest.approx(0.0)
     assert embedded.mean_overlap == pytest.approx(1.0)
     assert embedded.frobenius_distance == pytest.approx(0.0)
+
+
+def test_transport_projector_between_active_frames_reexpresses_seed():
+    P = _projector(0, n_blocks=1)
+    frame_source = np.eye(2, dtype=complex)[None, :, :]
+    frame_target = np.asarray([[[0.0, 1.0], [1.0, 0.0]]], dtype=complex)
+
+    transported, diagnostics = transport_projector_between_frames(
+        P,
+        frame_source,
+        frame_target,
+        n_occ_per_k=1,
+    )
+
+    expected = _projector(1, n_blocks=1)
+    assert np.allclose(transported, expected)
+    assert diagnostics.mean_retained_weight == pytest.approx(1.0)
+    assert diagnostics.transported_trace_error < 1e-12
+    assert diagnostics.transported_idempotency_error_fro < 1e-12
 
 
 def test_local_ivc_branch_diagnostic_script_smoke(tmp_path: Path):
@@ -121,6 +141,16 @@ def test_local_ivc_branch_diagnostic_script_smoke(tmp_path: Path):
     assert snapshots
     assert neighbor
     assert hysteresis
+    assert {row["mode"] for row in runs} == {
+        "scan",
+        "convergence",
+        "hysteresis",
+        "hysteresis_seed_scan",
+    }
+    warm_rows = [row for row in runs if row["mode"] == "hysteresis"]
+    assert warm_rows
+    assert all(row["warm_start_transport"] == "active_frame_projected_largest_eigenvectors" for row in warm_rows)
+    assert all("warm_start_mean_retained_weight" in row for row in warm_rows)
     assert {"final_aufbau_residual_norm", "final_self_consistency_warning"} <= set(runs[0])
     assert {"aufbau_residual_norm", "iteration"} <= set(history[0])
     with np.load(out_dir / "projectors_final.npz") as arrays:
