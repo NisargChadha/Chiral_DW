@@ -24,13 +24,17 @@ from chiral_dw.continuum.hf import (
 )
 from chiral_dw.continuum.hysteresis import (
     HysteresisDirection,
+    HysteresisSweepAxis,
     TaigeHysteresisBranchRecord,
     TaigeHysteresisComparisonRecord,
     TaigeHysteresisPoint,
     build_branch_response_result,
     compare_hysteresis_records,
+    is_clean_hysteresis_record,
     phase_table_rows,
     records_to_csv_rows,
+    select_lowest_energy_clean_record,
+    select_lowest_energy_raw_record,
     select_lowest_energy_record,
 )
 from chiral_dw.continuum.hf_bands import (
@@ -162,6 +166,7 @@ __all__ = [
     "FiniteQIVCDiagnostic",
     "FineMomentumFrame",
     "HysteresisDirection",
+    "HysteresisSweepAxis",
     "HFBandChernRow",
     "IVCBranchPolicy",
     "HFMeshBandData",
@@ -216,6 +221,7 @@ __all__ = [
     "hf_chern_rows",
     "hf_hamiltonian_at_k",
     "hf_path_spectrum_rows",
+    "is_clean_hysteresis_record",
     "load_taige_backend_cache",
     "hf_mesh_band_data",
     "ivc_order_parameter",
@@ -240,6 +246,8 @@ __all__ = [
     "run_taige_branch_selected_symmetric_hf_workflow",
     "records_to_csv_rows",
     "save_taige_backend_cache",
+    "select_lowest_energy_clean_record",
+    "select_lowest_energy_raw_record",
     "select_lowest_energy_record",
     "select_ivc_branch_by_energy",
     "solve_hf",

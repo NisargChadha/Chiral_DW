@@ -1,12 +1,12 @@
 #!/bin/bash
-#SBATCH -J taige_ivc_hyst
+#SBATCH -J taige_ivc_hyst_all
 #SBATCH -p serial_requeue
-#SBATCH --array=0-41
+#SBATCH --array=0-83
 #SBATCH -t 24:00:00
 #SBATCH -c 4
 #SBATCH --mem=24G
-#SBATCH -o logs/taige_ivc_hyst_%A_%a.out
-#SBATCH -e logs/taige_ivc_hyst_%A_%a.err
+#SBATCH -o logs/taige_ivc_hyst_all_%A_%a.out
+#SBATCH -e logs/taige_ivc_hyst_all_%A_%a.err
 #SBATCH --requeue
 
 set -euo pipefail
@@ -80,9 +80,9 @@ COMPUTE_INVALID_TEXTURE_CG=${COMPUTE_INVALID_TEXTURE_CG:-"0"}
 REQUIRE_CACHE=${REQUIRE_CACHE:-"1"}
 
 TASK_ID=${SLURM_ARRAY_TASK_ID:-0}
-TOTAL_TASKS=$((N_TWIST * 2))
+TOTAL_TASKS=$((2 * (N_TWIST + N_U_D)))
 if (( TASK_ID >= TOTAL_TASKS )); then
-  echo "Task ${TASK_ID} is outside branch task count ${TOTAL_TASKS}; exiting."
+  echo "Task ${TASK_ID} is outside combined branch task count ${TOTAL_TASKS}; exiting."
   exit 0
 fi
 
@@ -107,13 +107,13 @@ if [[ "$REQUIRE_CACHE" == "1" ]]; then
   REQUIRE_CACHE_FLAG=(--require-cache)
 fi
 
-echo "Running Taige IVC hysteresis branch task ${TASK_ID}/${TOTAL_TASKS} into ${OUTPUT_ROOT}"
+echo "Running combined Taige IVC hysteresis linecut task ${TASK_ID}/${TOTAL_TASKS} into ${OUTPUT_ROOT}"
 echo "Resources: SLURM_CPUS_PER_TASK=${SLURM_CPUS_PER_TASK:-unset} VERTEX_WORKERS=${VERTEX_WORKERS} EXCHANGE_WORKERS=${EXCHANGE_WORKERS} DENSITY_VERTEX_RETENTION=${DENSITY_VERTEX_RETENTION} DENSITY_VERTEX_LAYOUT=${DENSITY_VERTEX_LAYOUT} EXCHANGE_REPRESENTATION=${EXCHANGE_REPRESENTATION} FORM_FACTOR_BACKEND=${FORM_FACTOR_BACKEND} SLURM_MEM_PER_NODE=${SLURM_MEM_PER_NODE:-unset} SLURM_MEM_PER_CPU=${SLURM_MEM_PER_CPU:-unset}"
 
 python scripts/scan_taige_ivc_hysteresis_linecut.py \
   --output-root "$OUTPUT_ROOT" \
   --cache-root "$CACHE_ROOT" \
-  --sweep-axis u_D \
+  --sweep-axis both \
   --task-id "$TASK_ID" \
   --u-d-min "$U_D_MIN" \
   --u-d-max "$U_D_MAX" \

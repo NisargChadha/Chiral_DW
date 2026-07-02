@@ -33,6 +33,7 @@ from chiral_dw.domain_wall import charge_density_radial
 from chiral_dw.response import KThetaResult, k_theta_from_projectors_with_basis
 
 HysteresisDirection = Literal["up", "down"]
+HysteresisSweepAxis = Literal["u_D", "theta"]
 
 
 class TaigeHysteresisPoint(BaseModel):
@@ -56,6 +57,14 @@ class TaigeHysteresisBranchRecord(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="allow")
 
+    sweep_axis: HysteresisSweepAxis = "u_D"
+    branch_id: str | None = None
+    fixed_axis: str | None = None
+    fixed_index: int | None = None
+    fixed_value: float | None = None
+    continuation_axis: str | None = None
+    continuation_index: int | None = None
+    continuation_value: float | None = None
     u_index: int
     theta_index: int
     u_D_meV: float
@@ -75,10 +84,24 @@ class TaigeHysteresisBranchRecord(BaseModel):
     warning_flag: bool
     converged: bool
     iteration_count: int
+    max_iter: int | None = None
+    hit_max_iter: bool = False
+    self_consistency_warning: bool = False
+    delta_P: float | None = None
+    delta_energy: float | None = None
+    commutator_norm: float | None = None
+    idempotency_error_fro: float | None = None
+    idempotency_error_max: float | None = None
+    constraint_error: float | None = None
+    trace_error: float | None = None
+    clean_branch: bool = True
+    branch_reliability: Literal["clean", "unclean", "unreliable_no_clean_candidate"] = "clean"
     transport_mean_retained_weight: float | None = None
     transport_min_retained_weight: float | None = None
     cG: float
     cG_diagnostic: float | None = None
+    cG_warning_flag: bool = False
+    cG_warning_reason: str | None = None
     texture_valid: bool
     texture_invalid_reason: str | None = None
     vp_reference_name: str
@@ -125,6 +148,18 @@ def _row_get(row: Mapping[str, Any] | BaseModel, key: str, default: Any = None) 
     return row.get(key, default)
 
 
+def _row_bool(value: Any, *, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, str):
+        key = value.strip().lower()
+        if key in {"", "0", "false", "f", "no", "n", "none", "null"}:
+            return False
+        if key in {"1", "true", "t", "yes", "y"}:
+            return True
+    return bool(value)
+
+
 def _row_energy(row: Mapping[str, Any] | BaseModel) -> float:
     for key in ("energy_total_per_cell", "energy", "final_energy"):
         value = _row_get(row, key)
@@ -137,32 +172,62 @@ def _row_warning(row: Mapping[str, Any] | BaseModel) -> bool:
     for key in ("warning_flag", "final_self_consistency_warning", "self_consistency_warning"):
         value = _row_get(row, key)
         if value is not None:
-            return bool(value)
+            return _row_bool(value)
     return False
+
+
+def is_clean_hysteresis_record(row: Mapping[str, Any] | BaseModel) -> bool:
+    """Return whether a candidate is clean enough for physical branch selection."""
+
+    clean_value = _row_get(row, "clean_branch")
+    if clean_value is not None:
+        return _row_bool(clean_value)
+    if not _row_bool(_row_get(row, "converged", False)):
+        return False
+    if _row_warning(row):
+        return False
+    if _row_bool(_row_get(row, "hit_max_iter", False)):
+        return False
+    return True
+
+
+def select_lowest_energy_clean_record(
+    records: Sequence[Mapping[str, Any] | BaseModel],
+) -> Mapping[str, Any] | BaseModel | None:
+    """Return the lowest-energy clean candidate, or None when no clean row exists."""
+
+    rows = list(records)
+    if not rows:
+        raise ValueError("cannot select from an empty record list")
+    clean = [row for row in rows if is_clean_hysteresis_record(row)]
+    if not clean:
+        return None
+    return min(clean, key=_row_energy)
+
+
+def select_lowest_energy_raw_record(
+    records: Sequence[Mapping[str, Any] | BaseModel],
+) -> Mapping[str, Any] | BaseModel:
+    """Return the lowest-energy candidate regardless of convergence quality."""
+
+    rows = list(records)
+    if not rows:
+        raise ValueError("cannot select from an empty record list")
+    return min(rows, key=_row_energy)
 
 
 def select_lowest_energy_record(
     records: Sequence[Mapping[str, Any] | BaseModel],
 ) -> tuple[Mapping[str, Any] | BaseModel, str]:
-    """Select the cleanest lowest-energy record for an endpoint cold scan."""
+    """Select the lowest-energy clean row, falling back to raw with a reliability label."""
 
     rows = list(records)
     if not rows:
         raise ValueError("cannot select from an empty record list")
-    converged_clean = [
-        row for row in rows if bool(_row_get(row, "converged", False)) and not _row_warning(row)
-    ]
-    non_warning = [row for row in rows if not _row_warning(row)]
-    if converged_clean:
-        pool = converged_clean
-        label = "converged_non_warning"
-    elif non_warning:
-        pool = non_warning
-        label = "non_warning"
-    else:
-        pool = rows
-        label = "all_warning"
-    return min(pool, key=_row_energy), label
+    clean = select_lowest_energy_clean_record(rows)
+    if clean is not None:
+        return clean, "clean"
+    return select_lowest_energy_raw_record(rows), "all_unclean_raw_fallback"
 
 
 def _vp_reference(refs: SymmetricHFReferences) -> tuple[str, ContinuumHFResult]:
@@ -457,12 +522,16 @@ def phase_table_rows(comparisons: Sequence[TaigeHysteresisComparisonRecord]) -> 
 
 __all__ = [
     "HysteresisDirection",
+    "HysteresisSweepAxis",
     "TaigeHysteresisBranchRecord",
     "TaigeHysteresisComparisonRecord",
     "TaigeHysteresisPoint",
     "build_branch_response_result",
     "compare_hysteresis_records",
+    "is_clean_hysteresis_record",
     "phase_table_rows",
     "records_to_csv_rows",
+    "select_lowest_energy_clean_record",
+    "select_lowest_energy_raw_record",
     "select_lowest_energy_record",
 ]

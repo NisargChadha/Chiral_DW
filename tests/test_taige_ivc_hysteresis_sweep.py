@@ -16,8 +16,11 @@ from chiral_dw.continuum import (
     build_continuum_bundle,
     build_seed,
     compare_hysteresis_records,
+    is_clean_hysteresis_record,
     load_taige_backend_cache,
     save_taige_backend_cache,
+    select_lowest_energy_clean_record,
+    select_lowest_energy_raw_record,
     select_lowest_energy_record,
     solve_reference_hf,
     taige_backend_cache_path,
@@ -30,11 +33,14 @@ from chiral_dw.continuum import (
 
 ROOT = Path(__file__).resolve().parents[1]
 PRECOMPUTE_SCRIPT = ROOT / "scripts" / "precompute_taige_backend_cache.py"
-BRANCH_SCRIPT = ROOT / "scripts" / "scan_taige_ivc_hysteresis_by_theta.py"
+BRANCH_SCRIPT = ROOT / "scripts" / "scan_taige_ivc_hysteresis_linecut.py"
+LEGACY_BRANCH_SCRIPT = ROOT / "scripts" / "scan_taige_ivc_hysteresis_by_theta.py"
 MERGE_SCRIPT = ROOT / "scripts" / "merge_taige_ivc_hysteresis_sweep.py"
 CACHE_JOB = ROOT / "jobs" / "precompute_taige_backend_cache_array.sh"
 BRANCH_JOB = ROOT / "jobs" / "scan_taige_ivc_hysteresis_by_theta.sh"
+ALL_BRANCH_JOB = ROOT / "jobs" / "scan_taige_ivc_hysteresis_all_linecuts_array.sh"
 MERGE_JOB = ROOT / "jobs" / "merge_taige_ivc_hysteresis_sweep.sh"
+SUBMIT_JOB = ROOT / "jobs" / "submit_taige_ivc_hysteresis_full_pipeline.sh"
 
 
 def _read_csv(path: Path) -> list[dict[str, str]]:
@@ -125,15 +131,20 @@ def test_lowest_energy_selection_prefers_clean_converged_then_fallbacks():
     ]
     selected, pool = select_lowest_energy_record(rows)
     assert selected["run_id"] == "clean_low"
-    assert pool == "converged_non_warning"
+    assert pool == "clean"
+    assert select_lowest_energy_clean_record(rows)["run_id"] == "clean_low"
+    assert select_lowest_energy_raw_record(rows)["run_id"] == "warn_low"
+    assert is_clean_hysteresis_record(rows[2]) is True
 
     selected, pool = select_lowest_energy_record(rows[:2])
-    assert selected["run_id"] == "dirty_clean"
-    assert pool == "non_warning"
+    assert selected["run_id"] == "warn_low"
+    assert pool == "all_unclean_raw_fallback"
+    assert select_lowest_energy_clean_record(rows[:2]) is None
+    assert is_clean_hysteresis_record(rows[1]) is False
 
     selected, pool = select_lowest_energy_record([rows[0]])
     assert selected["run_id"] == "warn_low"
-    assert pool == "all_warning"
+    assert pool == "all_unclean_raw_fallback"
 
     with pytest.raises(ValueError, match="empty"):
         select_lowest_energy_record([])
@@ -260,6 +271,12 @@ def test_hysteresis_scripts_smoke_resume_and_merge(tmp_path: Path):
         sys.executable,
         str(PRECOMPUTE_SCRIPT),
         *_tiny_cli_args(output_root),
+        "--theta-min-deg",
+        "3.5",
+        "--theta-max-deg",
+        "3.55",
+        "--n-twist",
+        "2",
         "--seed-ordered-weight",
         "1.0",
         "--seed-random-weight",
@@ -271,6 +288,12 @@ def test_hysteresis_scripts_smoke_resume_and_merge(tmp_path: Path):
         sys.executable,
         str(BRANCH_SCRIPT),
         *_tiny_cli_args(output_root),
+        "--theta-min-deg",
+        "3.5",
+        "--theta-max-deg",
+        "3.55",
+        "--n-twist",
+        "2",
         "--random-seeds",
         "7",
         "--no-include-ordered-seed",
@@ -278,10 +301,14 @@ def test_hysteresis_scripts_smoke_resume_and_merge(tmp_path: Path):
         "3",
         "--require-cache",
     ]
-    subprocess.run([*branch_base, "--task-id", "0"], check=True, timeout=120)
-    subprocess.run([*branch_base, "--task-id", "1"], check=True, timeout=120)
+    for task_id in range(8):
+        subprocess.run(
+            [*branch_base, "--sweep-axis", "both", "--task-id", str(task_id)],
+            check=True,
+            timeout=120,
+        )
     resumed = subprocess.run(
-        [*branch_base, "--task-id", "0"],
+        [*branch_base, "--sweep-axis", "both", "--task-id", "0"],
         check=True,
         timeout=120,
         text=True,
@@ -297,19 +324,41 @@ def test_hysteresis_scripts_smoke_resume_and_merge(tmp_path: Path):
 
     branch_rows = _read_csv(output_root / "hysteresis_sweep.csv")
     comparison_rows = _read_csv(output_root / "hysteresis_comparison.csv")
-    assert len(branch_rows) == 4
-    assert len(comparison_rows) == 2
+    displacement_rows = _read_csv(output_root / "hysteresis_displacement_comparison.csv")
+    twist_rows = _read_csv(output_root / "hysteresis_twist_comparison.csv")
+    candidate_rows = _read_csv(output_root / "hysteresis_all_branch_candidates.csv")
+    assert len(branch_rows) == 16
+    assert len(comparison_rows) == 4
+    assert len(displacement_rows) == 4
+    assert len(twist_rows) == 4
+    assert len(candidate_rows) == 16
     assert {"up", "down"} == {row["direction"] for row in branch_rows}
-    assert {"cG", "cG_diagnostic", "texture_valid", "projector_path"} <= set(branch_rows[0])
+    assert {"u_D", "theta"} == {row["sweep_axis"] for row in branch_rows}
     assert {
-        "energy_up_minus_down",
-        "mean_projector_overlap",
-        "cG_up",
-        "cG_down",
-        "cG_high_gap",
-        "cG_low_gap",
-        "cG_lowest_energy_ivc",
+        "cG",
+        "cG_diagnostic",
+        "cG_warning_flag",
+        "texture_valid",
+        "projector_path",
+        "hit_max_iter",
+        "delta_P",
+        "delta_energy",
+        "commutator_norm",
+        "constraint_error",
+        "trace_error",
+        "clean_branch",
+    } <= set(branch_rows[0])
+    assert {
+        "lowest_energy_raw_branch",
+        "lowest_energy_clean_branch",
+        "high_gap_branch",
+        "low_gap_branch",
+        "lowest_energy_raw_cG",
+        "lowest_energy_clean_cG",
+        "row_reliability",
     } <= set(comparison_rows[0])
+    assert {"energy_up_minus_down", "mean_projector_overlap"} <= set(displacement_rows[0])
+    assert {"energy_up_minus_down", "mean_projector_overlap"} <= set(twist_rows[0])
     for row in branch_rows:
         assert Path(row["projector_path"]).exists()
         assert Path(row["point_record_path"]).exists()
@@ -325,6 +374,8 @@ def test_hysteresis_scripts_smoke_resume_and_merge(tmp_path: Path):
 def test_hysteresis_dry_runs_plan_default_cluster_task_counts(tmp_path: Path):
     cache_root = tmp_path / "cache_dry"
     branch_root = tmp_path / "branch_dry"
+    twist_root = tmp_path / "twist_dry"
+    both_root = tmp_path / "both_dry"
     subprocess.run(
         [sys.executable, str(PRECOMPUTE_SCRIPT), "--output-root", str(cache_root), "--dry-run"],
         check=True,
@@ -335,27 +386,76 @@ def test_hysteresis_dry_runs_plan_default_cluster_task_counts(tmp_path: Path):
         check=True,
         timeout=60,
     )
+    subprocess.run(
+        [
+            sys.executable,
+            str(BRANCH_SCRIPT),
+            "--output-root",
+            str(twist_root),
+            "--sweep-axis",
+            "theta",
+            "--dry-run",
+        ],
+        check=True,
+        timeout=60,
+    )
+    subprocess.run(
+        [
+            sys.executable,
+            str(BRANCH_SCRIPT),
+            "--output-root",
+            str(both_root),
+            "--sweep-axis",
+            "both",
+            "--dry-run",
+        ],
+        check=True,
+        timeout=60,
+    )
 
     cache_plan = json.loads((cache_root / "backend_cache_plan.json").read_text())
     branch_plan = json.loads((branch_root / "hysteresis_branch_plan.json").read_text())
+    twist_plan = json.loads((twist_root / "hysteresis_branch_plan.json").read_text())
+    both_plan = json.loads((both_root / "hysteresis_branch_plan.json").read_text())
     assert cache_plan["n_tasks"] == 21 * 21
     assert cache_plan["n_selected"] == 21 * 21
     assert branch_plan["n_tasks"] == 21 * 2
+    assert twist_plan["n_tasks"] == 21 * 2
+    assert both_plan["n_tasks"] == 2 * (21 + 21)
     assert {row["direction"] for row in branch_plan["rows"]} == {"up", "down"}
+    assert {row["sweep_axis"] for row in branch_plan["rows"]} == {"u_D"}
+    assert {row["sweep_axis"] for row in twist_plan["rows"]} == {"theta"}
+    assert {row["sweep_axis"] for row in both_plan["rows"]} == {"u_D", "theta"}
     assert branch_plan["rows"][0]["first_u_D_meV"] == pytest.approx(0.0)
     assert branch_plan["rows"][1]["first_u_D_meV"] == pytest.approx(20.0)
+    assert twist_plan["rows"][0]["first_theta_deg"] == pytest.approx(2.0)
+    assert twist_plan["rows"][1]["first_theta_deg"] == pytest.approx(4.0)
 
 
 def test_hysteresis_slurm_wrappers_pass_cluster_defaults():
-    subprocess.run(["bash", "-n", str(CACHE_JOB), str(BRANCH_JOB), str(MERGE_JOB)], check=True)
+    subprocess.run(
+        [
+            "bash",
+            "-n",
+            str(CACHE_JOB),
+            str(BRANCH_JOB),
+            str(ALL_BRANCH_JOB),
+            str(MERGE_JOB),
+            str(SUBMIT_JOB),
+        ],
+        check=True,
+    )
     cache_text = CACHE_JOB.read_text()
     branch_text = BRANCH_JOB.read_text()
+    all_branch_text = ALL_BRANCH_JOB.read_text()
     merge_text = MERGE_JOB.read_text()
+    submit_text = SUBMIT_JOB.read_text()
 
     assert "#SBATCH -p serial_requeue" in cache_text
     assert "#SBATCH --array=0-440" in cache_text
     assert "#SBATCH -c 4" in cache_text
     assert "#SBATCH --array=0-41" in branch_text
+    assert "#SBATCH --array=0-83" in all_branch_text
     assert 'N_TWIST=${N_TWIST:-"21"}' in cache_text
     assert 'THETA_MAX_DEG=${THETA_MAX_DEG:-"4.0"}' in branch_text
     assert 'N_K=${N_K:-"24"}' in branch_text
@@ -368,15 +468,24 @@ def test_hysteresis_slurm_wrappers_pass_cluster_defaults():
     assert 'DENSITY_VERTEX_LAYOUT=${DENSITY_VERTEX_LAYOUT:-"auto"}' in branch_text
     assert 'EXCHANGE_REPRESENTATION=${EXCHANGE_REPRESENTATION:-"auto"}' in branch_text
     assert 'FORM_FACTOR_BACKEND=${FORM_FACTOR_BACKEND:-"auto"}' in branch_text
+    assert 'MAX_ITER=${MAX_ITER:-"800"}' in branch_text
+    assert 'MAX_ITER=${MAX_ITER:-"800"}' in all_branch_text
     assert 'RANDOM_SEEDS=${RANDOM_SEEDS:-"1,7,13,29,53"}' in branch_text
     assert 'REQUIRE_CACHE=${REQUIRE_CACHE:-"1"}' in branch_text
+    assert 'TOTAL_TASKS=$((2 * (N_TWIST + N_U_D)))' in all_branch_text
+    assert "scan_taige_ivc_hysteresis_all_linecuts_array.sh" in submit_text
+    assert "--dependency=afterok:" in submit_text
+    assert "precompute_taige_backend_cache_array.sh" in submit_text
+    assert "merge_taige_ivc_hysteresis_sweep.sh" in submit_text
     assert "SLURM_ARRAY_TASK_ID" in cache_text
     assert "--task-id \"$TASK_ID\"" in branch_text
+    assert "--sweep-axis both" in all_branch_text
+    assert "--sweep-axis u_D" in branch_text
     assert "--density-vertex-retention \"$DENSITY_VERTEX_RETENTION\"" in cache_text
     assert "--density-vertex-layout \"$DENSITY_VERTEX_LAYOUT\"" in branch_text
     assert "--exchange-representation \"$EXCHANGE_REPRESENTATION\"" in branch_text
     assert "--form-factor-backend \"$FORM_FACTOR_BACKEND\"" in branch_text
-    for text in (cache_text, branch_text, merge_text):
+    for text in (cache_text, branch_text, all_branch_text, merge_text):
         assert "export OMP_NUM_THREADS=1" in text
         assert "export MKL_NUM_THREADS=1" in text
         assert "export OPENBLAS_NUM_THREADS=1" in text
