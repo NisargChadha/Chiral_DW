@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dataclass_field
 import hashlib
 import json
 from pathlib import Path
+import re
 from typing import Any
 
 import numpy as np
@@ -18,6 +19,7 @@ from chiral_dw.config import (
     ContinuumModelParams,
 )
 from chiral_dw.continuum.hf import ContinuumHFBackend, ValleySectorExchange
+from chiral_dw.continuum.hf_bands import hf_band_chern_table
 from chiral_dw.continuum.models import (
     ContinuumActiveSpace,
     ContinuumBundle,
@@ -46,6 +48,8 @@ class TaigeBackendCacheManifest(BaseModel):
     n_blocks: int = Field(ge=1)
     dim: int = Field(ge=1)
     n_active: int = Field(ge=1)
+    vp_hf_chern_rows: tuple[dict[str, Any], ...] = Field(default_factory=tuple)
+    vp_hf_chern_columns: dict[str, float] = Field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -56,6 +60,8 @@ class LoadedTaigeBackendCache:
     manifest: TaigeBackendCacheManifest
     vp_plus: ContinuumHFResult | None = None
     vp_minus: ContinuumHFResult | None = None
+    vp_hf_chern_rows: tuple[dict[str, Any], ...] = ()
+    vp_hf_chern_columns: dict[str, float] = dataclass_field(default_factory=dict)
 
     @property
     def has_vp_references(self) -> bool:
@@ -65,6 +71,49 @@ class LoadedTaigeBackendCache:
 def _json_hash(payload: dict[str, Any]) -> str:
     text = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(text.encode()).hexdigest()[:16]
+
+
+def _safe_column_fragment(value: str) -> str:
+    text = str(value).strip().lower()
+    text = text.replace("+", "plus").replace("-", "minus").replace("=", "_")
+    text = re.sub(r"[^a-z0-9]+", "_", text)
+    return text.strip("_") or "unnamed"
+
+
+def hf_chern_columns_from_rows(rows: list[dict[str, Any]] | tuple[dict[str, Any], ...]) -> dict[str, float]:
+    """Return flattened HF Chern columns using sweep-table naming."""
+
+    columns: dict[str, float] = {}
+    for row in rows:
+        key = (
+            "chern_hf_"
+            f"{_safe_column_fragment(str(row['reference']))}_"
+            f"band_{int(row['band'])}"
+        )
+        columns[key] = float(row["chern"])
+    return columns
+
+
+def vp_hf_chern_rows(
+    active: ContinuumActiveSpace,
+    *,
+    vp_plus: ContinuumHFResult | None,
+    vp_minus: ContinuumHFResult | None,
+) -> tuple[dict[str, Any], ...]:
+    """Return compact VP+ and VP- HF Chern rows for a cached Taige point."""
+
+    rows: list[dict[str, Any]] = []
+    if vp_plus is not None:
+        rows.extend(
+            row.model_dump(mode="json")
+            for row in hf_band_chern_table(active, vp_plus.H_hf, reference="VP+")
+        )
+    if vp_minus is not None:
+        rows.extend(
+            row.model_dump(mode="json")
+            for row in hf_band_chern_table(active, vp_minus.H_hf, reference="VP-")
+        )
+    return tuple(rows)
 
 
 def taige_backend_cache_signature(
@@ -154,11 +203,12 @@ def _hf_result_arrays(prefix: str, result: ContinuumHFResult) -> dict[str, np.nd
     }
 
 
-def _hf_result_metadata(result: ContinuumHFResult) -> dict[str, Any]:
+def _hf_result_metadata(result: ContinuumHFResult, *, max_iter: int | None = None) -> dict[str, Any]:
     return {
         "energy": float(result.energy),
         "converged": bool(result.converged),
         "n_iter": int(result.n_iter),
+        "max_iter": None if max_iter is None else int(max_iter),
         "diagnostics": result.diagnostics.model_dump(mode="json"),
         "seed": result.seed,
         "constraint_name": result.constraint_name,
@@ -189,6 +239,8 @@ def save_taige_backend_cache(
     signature: dict[str, Any],
     vp_plus: ContinuumHFResult | None = None,
     vp_minus: ContinuumHFResult | None = None,
+    vp_reference_max_iter: int | None = None,
+    compute_vp_chern: bool = True,
 ) -> TaigeBackendCacheManifest:
     """Write a loadable backend cache without raw full form-factor retention."""
 
@@ -199,6 +251,12 @@ def save_taige_backend_cache(
     vertices = backend.vertices
     cache_hash = taige_backend_cache_hash(signature)
     has_vp = vp_plus is not None and vp_minus is not None
+    chern_rows = (
+        vp_hf_chern_rows(active, vp_plus=vp_plus, vp_minus=vp_minus)
+        if compute_vp_chern and has_vp
+        else ()
+    )
+    chern_columns = hf_chern_columns_from_rows(chern_rows)
     metadata = {
         "schema": TAIGE_BACKEND_CACHE_SCHEMA,
         "cache_hash": cache_hash,
@@ -230,6 +288,8 @@ def save_taige_backend_cache(
             "has_v_q": vertices.v_q is not None,
         },
         "hf_references": {},
+        "vp_hf_chern_rows": list(chern_rows),
+        "vp_hf_chern_columns": chern_columns,
     }
     arrays: dict[str, np.ndarray] = {
         "metadata_json": np.asarray(json.dumps(metadata, sort_keys=True)),
@@ -261,10 +321,16 @@ def save_taige_backend_cache(
     }
     if vp_plus is not None:
         arrays.update(_hf_result_arrays("vp_plus", vp_plus))
-        metadata["hf_references"]["vp_plus"] = _hf_result_metadata(vp_plus)
+        metadata["hf_references"]["vp_plus"] = _hf_result_metadata(
+            vp_plus,
+            max_iter=vp_reference_max_iter,
+        )
     if vp_minus is not None:
         arrays.update(_hf_result_arrays("vp_minus", vp_minus))
-        metadata["hf_references"]["vp_minus"] = _hf_result_metadata(vp_minus)
+        metadata["hf_references"]["vp_minus"] = _hf_result_metadata(
+            vp_minus,
+            max_iter=vp_reference_max_iter,
+        )
     arrays["metadata_json"] = np.asarray(json.dumps(metadata, sort_keys=True))
     np.savez_compressed(out, **arrays)
     return TaigeBackendCacheManifest(
@@ -278,6 +344,8 @@ def save_taige_backend_cache(
         n_blocks=int(backend.n_blocks),
         dim=int(backend.dim),
         n_active=int(backend.n_active),
+        vp_hf_chern_rows=chern_rows,
+        vp_hf_chern_columns=chern_columns,
     )
 
 
@@ -426,6 +494,11 @@ def load_taige_backend_cache(path: str | Path) -> LoadedTaigeBackendCache:
         )
         vp_plus = _load_hf_result("vp_plus", data, metadata)
         vp_minus = _load_hf_result("vp_minus", data, metadata)
+        chern_rows = tuple(dict(row) for row in metadata.get("vp_hf_chern_rows", []))
+        chern_columns = {
+            str(key): float(value)
+            for key, value in metadata.get("vp_hf_chern_columns", {}).items()
+        }
     manifest = TaigeBackendCacheManifest(
         cache_hash=str(metadata["cache_hash"]),
         path=str(cache_path),
@@ -437,12 +510,16 @@ def load_taige_backend_cache(path: str | Path) -> LoadedTaigeBackendCache:
         n_blocks=int(bundle.backend.n_blocks),
         dim=int(bundle.backend.dim),
         n_active=int(bundle.backend.n_active),
+        vp_hf_chern_rows=chern_rows,
+        vp_hf_chern_columns=chern_columns,
     )
     return LoadedTaigeBackendCache(
         bundle=bundle,
         manifest=manifest,
         vp_plus=vp_plus,
         vp_minus=vp_minus,
+        vp_hf_chern_rows=chern_rows,
+        vp_hf_chern_columns=chern_columns,
     )
 
 
@@ -450,9 +527,11 @@ __all__ = [
     "LoadedTaigeBackendCache",
     "TAIGE_BACKEND_CACHE_SCHEMA",
     "TaigeBackendCacheManifest",
+    "hf_chern_columns_from_rows",
     "load_taige_backend_cache",
     "save_taige_backend_cache",
     "taige_backend_cache_hash",
     "taige_backend_cache_path",
     "taige_backend_cache_signature",
+    "vp_hf_chern_rows",
 ]

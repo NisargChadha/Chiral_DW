@@ -85,7 +85,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument("--n-occ-per-k", type=int, default=1)
-    parser.add_argument("--max-iter", type=int, default=100)
+    parser.add_argument("--max-iter", type=int, default=800)
     parser.add_argument("--min-iter", type=int, default=3)
     parser.add_argument("--mixing-method", choices=["linear", "oda"], default="oda")
     parser.add_argument("--mixing", type=float, default=0.45)
@@ -95,9 +95,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed-random-weight", type=float, default=0.0)
     parser.add_argument("--random-seed", type=int, default=7)
     parser.add_argument("--no-vp-references", action="store_true")
+    parser.add_argument("--no-vp-chern", action="store_true")
 
     parser.add_argument("--skip-existing", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--merge-only", action="store_true")
     return parser
 
 
@@ -223,6 +225,82 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         writer.writerows(rows)
 
 
+def _reference_quality_fields(
+    prefix: str,
+    result: Any | None,
+    *,
+    n_blocks: int,
+    max_iter: int | None,
+) -> dict[str, Any]:
+    if result is None:
+        return {
+            f"{prefix}_energy_per_cell": None,
+            f"{prefix}_converged": None,
+            f"{prefix}_hit_max_iter": None,
+            f"{prefix}_warning_flag": None,
+            f"{prefix}_clean": None,
+            f"{prefix}_direct_gap": None,
+            f"{prefix}_indirect_gap": None,
+        }
+    diagnostics = result.diagnostics
+    hit_max_iter = bool(
+        max_iter is not None
+        and not result.converged
+        and int(result.n_iter) >= int(max_iter)
+    )
+    warning = bool(diagnostics.self_consistency_warning or hit_max_iter or not result.converged)
+    return {
+        f"{prefix}_energy_per_cell": float(result.energy / n_blocks),
+        f"{prefix}_converged": bool(result.converged),
+        f"{prefix}_hit_max_iter": hit_max_iter,
+        f"{prefix}_warning_flag": warning,
+        f"{prefix}_self_consistency_warning": bool(diagnostics.self_consistency_warning),
+        f"{prefix}_clean": bool(result.converged and not hit_max_iter and not diagnostics.self_consistency_warning),
+        f"{prefix}_iteration_count": int(result.n_iter),
+        f"{prefix}_max_iter": None if max_iter is None else int(max_iter),
+        f"{prefix}_direct_gap": float(diagnostics.direct_gap_min),
+        f"{prefix}_indirect_gap": float(diagnostics.indirect_gap),
+        f"{prefix}_aufbau_residual_norm": float(diagnostics.aufbau_residual_norm),
+        f"{prefix}_commutator_norm": float(diagnostics.commutator_norm),
+        f"{prefix}_delta_P": float(diagnostics.delta_P),
+        f"{prefix}_delta_energy": float(diagnostics.delta_energy),
+        f"{prefix}_idempotency_error_fro": float(diagnostics.idempotency_error_fro),
+        f"{prefix}_constraint_error": float(diagnostics.constraint_error),
+        f"{prefix}_trace_error": float(diagnostics.trace_error),
+    }
+
+
+def _load_cache_summary(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text())
+
+
+def _merge_cache_summaries(args: argparse.Namespace) -> list[dict[str, Any]]:
+    output_root = Path(args.output_root)
+    if not output_root.is_absolute():
+        output_root = ROOT / output_root
+    cache_root = _cache_root(args)
+    rows = [
+        _load_cache_summary(path)
+        for path in sorted(cache_root.rglob("*.summary.json"))
+    ]
+    rows.sort(key=lambda row: (int(row.get("theta_index", 0)), int(row.get("u_index", 0))))
+    _write_csv(output_root / "backend_cache_completed.csv", rows)
+    chern_rows: list[dict[str, Any]] = []
+    for row in rows:
+        point_fields = {
+            "u_index": row.get("u_index"),
+            "theta_index": row.get("theta_index"),
+            "u_D_meV": row.get("u_D"),
+            "theta_deg": row.get("theta_deg"),
+            "cache_hash": row.get("cache_hash"),
+            "cache_path": row.get("cache_path"),
+        }
+        for chern in row.get("vp_hf_chern_rows", []) or []:
+            chern_rows.append({**point_fields, **chern})
+    _write_csv(output_root / "backend_cache_vp_chern_numbers.csv", chern_rows)
+    return rows
+
+
 def _plan_rows(args: argparse.Namespace, points: list[TaigeHysteresisPoint]) -> list[dict[str, Any]]:
     cache_root = _cache_root(args)
     interaction = _interaction(args)
@@ -288,6 +366,8 @@ def run_point(args: argparse.Namespace, point: TaigeHysteresisPoint) -> dict[str
         signature=signature,
         vp_plus=vp_plus,
         vp_minus=vp_minus,
+        vp_reference_max_iter=args.max_iter,
+        compute_vp_chern=not args.no_vp_chern,
     )
     seconds = time.perf_counter() - start
     summary = {
@@ -300,6 +380,20 @@ def run_point(args: argparse.Namespace, point: TaigeHysteresisPoint) -> dict[str
         "vertex_layout": manifest.vertex_layout,
         "exchange_representation": manifest.exchange_representation,
         "density_vertex_retention": manifest.density_vertex_retention,
+        "vp_hf_chern_rows": list(manifest.vp_hf_chern_rows),
+        **manifest.vp_hf_chern_columns,
+        **_reference_quality_fields(
+            "vp_plus",
+            vp_plus,
+            n_blocks=bundle.backend.n_blocks,
+            max_iter=args.max_iter,
+        ),
+        **_reference_quality_fields(
+            "vp_minus",
+            vp_minus,
+            n_blocks=bundle.backend.n_blocks,
+            max_iter=args.max_iter,
+        ),
     }
     _write_json(cache_path.with_suffix(".summary.json"), summary | {"signature": signature})
     print(f"Wrote cache {cache_path} elapsed={seconds:.1f}s")
@@ -330,6 +424,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     if args.dry_run:
         print(f"Wrote backend-cache dry-run plan to {output_root}")
+        return 0
+    if args.merge_only:
+        rows = _merge_cache_summaries(args)
+        print(f"Merged {len(rows)} backend-cache summaries under {output_root}")
         return 0
     rows = [run_point(args, point) for point in points]
     _write_csv(output_root / "backend_cache_completed.csv", rows)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -36,11 +37,14 @@ PRECOMPUTE_SCRIPT = ROOT / "scripts" / "precompute_taige_backend_cache.py"
 BRANCH_SCRIPT = ROOT / "scripts" / "scan_taige_ivc_hysteresis_linecut.py"
 LEGACY_BRANCH_SCRIPT = ROOT / "scripts" / "scan_taige_ivc_hysteresis_by_theta.py"
 MERGE_SCRIPT = ROOT / "scripts" / "merge_taige_ivc_hysteresis_sweep.py"
+FINITE_MERGE_SCRIPT = ROOT / "scripts" / "merge_taige_ivc_hysteresis_finite_size.py"
 CACHE_JOB = ROOT / "jobs" / "precompute_taige_backend_cache_array.sh"
 BRANCH_JOB = ROOT / "jobs" / "scan_taige_ivc_hysteresis_by_theta.sh"
 ALL_BRANCH_JOB = ROOT / "jobs" / "scan_taige_ivc_hysteresis_all_linecuts_array.sh"
 MERGE_JOB = ROOT / "jobs" / "merge_taige_ivc_hysteresis_sweep.sh"
 SUBMIT_JOB = ROOT / "jobs" / "submit_taige_ivc_hysteresis_full_pipeline.sh"
+FINITE_MERGE_JOB = ROOT / "jobs" / "merge_taige_ivc_hysteresis_finite_size.sh"
+FINITE_SUBMIT_JOB = ROOT / "jobs" / "submit_taige_ivc_hysteresis_finite_size_pipeline.sh"
 
 
 def _read_csv(path: Path) -> list[dict[str, str]]:
@@ -263,6 +267,9 @@ def test_backend_cache_save_load_restores_usable_backend_and_vp_references(tmp_p
     assert loaded_indirect == pytest.approx(direct_indirect)
     assert np.allclose(loaded.vp_plus.P, vp_plus.P)
     assert np.allclose(loaded.vp_minus.H_hf, vp_minus.H_hf)
+    assert manifest.vp_hf_chern_rows
+    assert loaded.vp_hf_chern_rows
+    assert "chern_hf_vpplus_band_0" in loaded.vp_hf_chern_columns
 
 
 def test_hysteresis_scripts_smoke_resume_and_merge(tmp_path: Path):
@@ -347,6 +354,12 @@ def test_hysteresis_scripts_smoke_resume_and_merge(tmp_path: Path):
         "constraint_error",
         "trace_error",
         "clean_branch",
+        "trial_theta_csv",
+        "vp_plus_energy_per_cell",
+        "vp_minus_energy_per_cell",
+        "vp_plus_clean",
+        "vp_minus_clean",
+        "chern_hf_vpplus_band_0",
     } <= set(branch_rows[0])
     assert {
         "lowest_energy_raw_branch",
@@ -367,8 +380,93 @@ def test_hysteresis_scripts_smoke_resume_and_merge(tmp_path: Path):
         "hysteresis_gap_jump.csv",
         "hysteresis_overlap_discontinuity.csv",
         "hysteresis_selected_branch_cg.csv",
+        "hysteresis_gap_families.csv",
+        "hysteresis_trial_theta.csv",
+        "hysteresis_selected_trial_theta.csv",
+        "hysteresis_vp_chern_numbers.csv",
     ):
         assert (output_root / name).exists()
+    assert len(_read_csv(output_root / "hysteresis_trial_theta.csv")) == 16 * 3
+    assert len(_read_csv(output_root / "hysteresis_selected_trial_theta.csv")) == 4 * 3
+    assert _read_csv(output_root / "hysteresis_vp_chern_numbers.csv")
+
+
+def test_hysteresis_finite_size_merge_writes_clean_fit_tables(tmp_path: Path):
+    output_root = tmp_path / "fs_hysteresis"
+    for n_k, cG in [(18, 1.2), (20, 1.1), (22, 1.05), (24, 1.0)]:
+        mesh = output_root / f"nk_{n_k:03d}"
+        mesh.mkdir(parents=True)
+        comparison = {
+            "theta_index": 0,
+            "u_index": 0,
+            "theta_deg": 3.5,
+            "u_D_meV": 10.0,
+            "lowest_energy_clean_branch": "u_D_up",
+            "lowest_energy_clean_cG": cG,
+            "lowest_energy_raw_branch": "u_D_up",
+            "lowest_energy_raw_cG": cG,
+            "lowest_energy_raw_clean": True,
+            "row_reliability": "clean",
+        }
+        with (mesh / "hysteresis_comparison.csv").open("w", newline="") as fh:
+            writer = csv.DictWriter(fh, fieldnames=list(comparison))
+            writer.writeheader()
+            writer.writerow(comparison)
+        candidates = [
+            {
+                "theta_index": 0,
+                "u_index": 0,
+                "theta_deg": 3.5,
+                "u_D_meV": 10.0,
+                "branch_id": "u_D_up",
+                "gap_family_label": "small_gap",
+                "energy_total_per_cell": -1.0,
+                "cG": cG,
+                "clean_branch": True,
+            },
+            {
+                "theta_index": 0,
+                "u_index": 0,
+                "theta_deg": 3.5,
+                "u_D_meV": 10.0,
+                "branch_id": "theta_down",
+                "gap_family_label": "large_gap",
+                "energy_total_per_cell": -0.8,
+                "cG": cG + 0.5,
+                "clean_branch": True,
+            },
+        ]
+        with (mesh / "hysteresis_all_branch_candidates.csv").open("w", newline="") as fh:
+            writer = csv.DictWriter(fh, fieldnames=list(candidates[0]))
+            writer.writeheader()
+            writer.writerows(candidates)
+        (mesh / "hysteresis_selected_trial_theta.csv").write_text(
+            "theta_index,u_index,theta_deg,u_D_meV,theta,energy_total_per_cell,cG\n"
+            f"0,0,3.5,10.0,0.1,-1.0,{cG}\n"
+        )
+        (mesh / "hysteresis_vp_chern_numbers.csv").write_text(
+            "theta_index,u_index,theta_deg,u_D_meV,reference,band,chern\n"
+            "0,0,3.5,10.0,VP+,0,1.0\n"
+        )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(FINITE_MERGE_SCRIPT),
+            "--output-root",
+            str(output_root),
+            "--n-k-list",
+            "18,20,22,24",
+        ],
+        check=True,
+    )
+    fits = _read_csv(output_root / "hysteresis_finite_size_cg_fits.csv")
+    selected = [row for row in fits if row["branch_label"] == "lowest_energy_clean"]
+    assert selected
+    assert selected[0]["fit_status"] == "fit_ok"
+    assert selected[0]["n_clean_finite"] == "4"
+    assert (output_root / "hysteresis_finite_size_selected_trial_theta.csv").exists()
+    assert (output_root / "hysteresis_finite_size_vp_chern_boundary.csv").exists()
 
 
 def test_hysteresis_dry_runs_plan_default_cluster_task_counts(tmp_path: Path):
@@ -442,6 +540,8 @@ def test_hysteresis_slurm_wrappers_pass_cluster_defaults():
             str(ALL_BRANCH_JOB),
             str(MERGE_JOB),
             str(SUBMIT_JOB),
+            str(FINITE_MERGE_JOB),
+            str(FINITE_SUBMIT_JOB),
         ],
         check=True,
     )
@@ -450,6 +550,8 @@ def test_hysteresis_slurm_wrappers_pass_cluster_defaults():
     all_branch_text = ALL_BRANCH_JOB.read_text()
     merge_text = MERGE_JOB.read_text()
     submit_text = SUBMIT_JOB.read_text()
+    finite_merge_text = FINITE_MERGE_JOB.read_text()
+    finite_submit_text = FINITE_SUBMIT_JOB.read_text()
 
     assert "#SBATCH -p serial_requeue" in cache_text
     assert "#SBATCH --array=0-440" in cache_text
@@ -470,6 +572,8 @@ def test_hysteresis_slurm_wrappers_pass_cluster_defaults():
     assert 'FORM_FACTOR_BACKEND=${FORM_FACTOR_BACKEND:-"auto"}' in branch_text
     assert 'MAX_ITER=${MAX_ITER:-"800"}' in branch_text
     assert 'MAX_ITER=${MAX_ITER:-"800"}' in all_branch_text
+    assert 'MAX_ITER=${MAX_ITER:-"800"}' in cache_text
+    assert 'N_THETA=${N_THETA:-"81"}' in all_branch_text
     assert 'RANDOM_SEEDS=${RANDOM_SEEDS:-"1,7,13,29,53"}' in branch_text
     assert 'REQUIRE_CACHE=${REQUIRE_CACHE:-"1"}' in branch_text
     assert 'TOTAL_TASKS=$((2 * (N_TWIST + N_U_D)))' in all_branch_text
@@ -490,3 +594,29 @@ def test_hysteresis_slurm_wrappers_pass_cluster_defaults():
         assert "export MKL_NUM_THREADS=1" in text
         assert "export OPENBLAS_NUM_THREADS=1" in text
         assert "export NUMEXPR_NUM_THREADS=1" in text
+    assert "merge_taige_ivc_hysteresis_finite_size.py" in finite_merge_text
+    assert 'N_K_LIST=${N_K_LIST:-"18,20,22,24"}' in finite_submit_text
+    assert 'NK_MEMORY_GB_MAP=${NK_MEMORY_GB_MAP:-"18:12,20:16,22:20,24:24"}' in finite_submit_text
+    assert "jobs/precompute_taige_backend_cache_array.sh" in finite_submit_text
+    assert "jobs/scan_taige_ivc_hysteresis_all_linecuts_array.sh" in finite_submit_text
+    assert "jobs/merge_taige_ivc_hysteresis_finite_size.sh" in finite_submit_text
+    assert "--export=ALL" in finite_submit_text
+
+    dry = subprocess.run(
+        [str(FINITE_SUBMIT_JOB)],
+        check=True,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "DRY_RUN": "1",
+            "N_U_D": "21",
+            "N_TWIST": "21",
+            "N_K_LIST": "18,20,22,24",
+        },
+    ).stdout
+    assert "Dry run task counts: cache=1764 scan=336" in dry
+    assert "--mem=12G" in dry
+    assert "--mem=16G" in dry
+    assert "--mem=20G" in dry
+    assert "--mem=24G" in dry

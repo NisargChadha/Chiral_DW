@@ -56,7 +56,7 @@ export OPENBLAS_NUM_THREADS=1
 export NUMEXPR_NUM_THREADS=1
 
 N_OCC_PER_K=${N_OCC_PER_K:-"1"}
-MAX_ITER=${MAX_ITER:-"100"}
+MAX_ITER=${MAX_ITER:-"800"}
 MIN_ITER=${MIN_ITER:-"3"}
 MIXING_METHOD=${MIXING_METHOD:-"oda"}
 MIXING=${MIXING:-"0.45"}
@@ -66,6 +66,7 @@ SEED_ORDERED_WEIGHT=${SEED_ORDERED_WEIGHT:-"1.0"}
 SEED_RANDOM_WEIGHT=${SEED_RANDOM_WEIGHT:-"0.0"}
 RANDOM_SEED=${RANDOM_SEED:-"7"}
 SOLVE_VP_REFERENCES=${SOLVE_VP_REFERENCES:-"1"}
+COMPUTE_VP_CHERN=${COMPUTE_VP_CHERN:-"1"}
 
 TASK_ID=${SLURM_ARRAY_TASK_ID:-0}
 TOTAL_TASKS=$((N_U_D * N_TWIST))
@@ -81,6 +82,10 @@ fi
 VP_REFERENCE_FLAG=()
 if [[ "$SOLVE_VP_REFERENCES" == "0" ]]; then
   VP_REFERENCE_FLAG=(--no-vp-references)
+fi
+VP_CHERN_FLAG=()
+if [[ "$COMPUTE_VP_CHERN" == "0" ]]; then
+  VP_CHERN_FLAG=(--no-vp-chern)
 fi
 
 echo "Precomputing Taige hysteresis backend cache task ${TASK_ID}/${TOTAL_TASKS} into ${CACHE_ROOT}"
@@ -127,4 +132,5 @@ python scripts/precompute_taige_backend_cache.py \
   --seed-random-weight "$SEED_RANDOM_WEIGHT" \
   --random-seed "$RANDOM_SEED" \
   "${VP_REFERENCE_FLAG[@]}" \
+  "${VP_CHERN_FLAG[@]}" \
   --skip-existing

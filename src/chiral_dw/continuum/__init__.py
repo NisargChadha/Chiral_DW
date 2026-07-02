@@ -9,11 +9,13 @@ from chiral_dw.continuum.backend_cache import (
     LoadedTaigeBackendCache,
     TAIGE_BACKEND_CACHE_SCHEMA,
     TaigeBackendCacheManifest,
+    hf_chern_columns_from_rows,
     load_taige_backend_cache,
     save_taige_backend_cache,
     taige_backend_cache_hash,
     taige_backend_cache_path,
     taige_backend_cache_signature,
+    vp_hf_chern_rows,
 )
 from chiral_dw.continuum.hf import (
     ContinuumHFBackend,
@@ -218,6 +220,7 @@ __all__ = [
     "evaluate_hf_high_symmetry_path",
     "evaluate_hf_path",
     "hf_band_chern_table",
+    "hf_chern_columns_from_rows",
     "hf_chern_rows",
     "hf_hamiltonian_at_k",
     "hf_path_spectrum_rows",
@@ -272,5 +275,6 @@ __all__ = [
     "valley_polarization",
     "valley_swap_matrix",
     "valley_u1_rotation",
+    "vp_hf_chern_rows",
     "write_continuum_symmetric_hf_outputs",
 ]

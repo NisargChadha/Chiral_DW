@@ -35,6 +35,7 @@ from chiral_dw.continuum import (  # noqa: E402
     build_branch_response_result,
     build_continuum_bundle,
     build_seed,
+    hf_chern_columns_from_rows,
     load_taige_backend_cache,
     mix_projector_seeds,
     order_diagnostics,
@@ -49,6 +50,8 @@ from chiral_dw.continuum import (  # noqa: E402
     taige_interaction_params,
     taige_model_params,
     transport_projector_between_frames,
+    trial_theta_rows,
+    vp_hf_chern_rows,
 )
 
 
@@ -124,7 +127,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--include-ordered-seed", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--default-random-seed", type=int, default=7)
 
-    parser.add_argument("--n-theta", type=int, default=41)
+    parser.add_argument("--n-theta", type=int, default=81)
     parser.add_argument("--endpoint-eps", type=float, default=1e-5)
     parser.add_argument("--domain-radius", type=float, default=20.0)
     parser.add_argument("--domain-width", type=float, default=3.0)
@@ -367,6 +370,76 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         writer.writerows(rows)
 
 
+def _vp_reference_fields(
+    prefix: str,
+    result: Any | None,
+    *,
+    n_blocks: int,
+    max_iter: int | None,
+) -> dict[str, Any]:
+    if result is None:
+        return {
+            f"{prefix}_energy_per_cell": None,
+            f"{prefix}_converged": None,
+            f"{prefix}_hit_max_iter": None,
+            f"{prefix}_warning_flag": None,
+            f"{prefix}_clean": None,
+            f"{prefix}_direct_gap": None,
+            f"{prefix}_indirect_gap": None,
+        }
+    diagnostics = result.diagnostics
+    hit_max_iter = bool(
+        max_iter is not None
+        and not result.converged
+        and int(result.n_iter) >= int(max_iter)
+    )
+    warning_flag = bool(diagnostics.self_consistency_warning or hit_max_iter or not result.converged)
+    clean = bool(result.converged and not hit_max_iter and not diagnostics.self_consistency_warning)
+    return {
+        f"{prefix}_energy_per_cell": float(result.energy / n_blocks),
+        f"{prefix}_converged": bool(result.converged),
+        f"{prefix}_hit_max_iter": hit_max_iter,
+        f"{prefix}_warning_flag": warning_flag,
+        f"{prefix}_self_consistency_warning": bool(diagnostics.self_consistency_warning),
+        f"{prefix}_clean": clean,
+        f"{prefix}_iteration_count": int(result.n_iter),
+        f"{prefix}_max_iter": None if max_iter is None else int(max_iter),
+        f"{prefix}_direct_gap": float(diagnostics.direct_gap_min),
+        f"{prefix}_indirect_gap": float(diagnostics.indirect_gap),
+        f"{prefix}_aufbau_residual_norm": float(diagnostics.aufbau_residual_norm),
+        f"{prefix}_commutator_norm": float(diagnostics.commutator_norm),
+        f"{prefix}_delta_P": float(diagnostics.delta_P),
+        f"{prefix}_delta_energy": float(diagnostics.delta_energy),
+        f"{prefix}_idempotency_error_fro": float(diagnostics.idempotency_error_fro),
+        f"{prefix}_constraint_error": float(diagnostics.constraint_error),
+        f"{prefix}_trace_error": float(diagnostics.trace_error),
+    }
+
+
+def _vp_inputs_clean(args: argparse.Namespace, vp_plus: Any | None, vp_minus: Any | None) -> bool:
+    plus = _vp_reference_fields(
+        "vp_plus",
+        vp_plus,
+        n_blocks=1,
+        max_iter=args.max_iter,
+    )
+    minus = _vp_reference_fields(
+        "vp_minus",
+        vp_minus,
+        n_blocks=1,
+        max_iter=args.max_iter,
+    )
+    return bool(plus.get("vp_plus_clean") and minus.get("vp_minus_clean"))
+
+
+def _loaded_vp_chern_columns(loaded: Any, vp_plus: Any | None, vp_minus: Any | None) -> dict[str, float]:
+    columns = dict(getattr(loaded, "vp_hf_chern_columns", {}) or {})
+    if columns:
+        return columns
+    rows = vp_hf_chern_rows(loaded.bundle.active, vp_plus=vp_plus, vp_minus=vp_minus)
+    return hf_chern_columns_from_rows(rows)
+
+
 def _float_label(prefix: str, index: int, value: float) -> str:
     text = f"{float(value):.6g}".replace("-", "m").replace(".", "p")
     return f"{prefix}_{int(index):03d}_{text}"
@@ -424,6 +497,7 @@ def _load_or_build_cache(args: argparse.Namespace, point: TaigeHysteresisPoint):
         signature=signature,
         vp_plus=vp_plus,
         vp_minus=vp_minus,
+        vp_reference_max_iter=args.max_iter,
     )
     loaded = load_taige_backend_cache(cache_path)
     return loaded, str(cache_path)
@@ -479,7 +553,9 @@ def _response_fields(
     vp_minus,
     ivc,
     direction: str,
+    branch_id: str,
     clean_branch: bool,
+    vp_inputs_clean: bool,
 ) -> dict[str, Any]:
     params = _workflow_params(args, point, point_dir)
     physical = build_branch_response_result(
@@ -507,13 +583,16 @@ def _response_fields(
         diagnostic_cg = float(diagnostic.summary.cG)
     elif bool(physical.branch_selection["texture_valid"]):
         diagnostic_cg = float(physical.summary.cG)
-    cG_warning_reason = None
+    warning_reasons: list[str] = []
     if not clean_branch:
-        cG_warning_reason = "non_clean_branch"
-    return {
+        warning_reasons.append("non_clean_branch")
+    if not vp_inputs_clean:
+        warning_reasons.append("non_clean_vp_reference")
+    cG_warning_reason = ";".join(warning_reasons) or None
+    scalar = {
         "cG": float(physical.summary.cG),
         "cG_diagnostic": diagnostic_cg,
-        "cG_warning_flag": bool(not clean_branch),
+        "cG_warning_flag": bool(warning_reasons),
         "cG_warning_reason": cG_warning_reason,
         "K_min": float(physical.summary.kappa_min),
         "K_max": float(physical.summary.kappa_max),
@@ -526,6 +605,27 @@ def _response_fields(
         ),
         "response_gap_min": physical.summary.gap_min,
     }
+    rows = [
+        {
+            "u_index": point.u_index,
+            "theta_index": point.theta_index,
+            "u_D_meV": point.u_D,
+            "theta_deg": point.theta_deg,
+            "point_label": point.label,
+            "branch_id": branch_id,
+            "direction": direction,
+            "clean_branch": clean_branch,
+            "vp_inputs_clean": vp_inputs_clean,
+            "cG_warning_flag": scalar["cG_warning_flag"],
+            "cG_warning_reason": cG_warning_reason,
+            "texture_valid": scalar["texture_valid"],
+            "texture_invalid_reason": scalar["texture_invalid_reason"],
+            **row,
+        }
+        for row in trial_theta_rows(physical)
+    ]
+    _write_csv(point_dir / "trial_theta.csv", rows)
+    return {**scalar, "trial_theta_csv": str(point_dir / "trial_theta.csv")}
 
 
 def _hit_max_iter(args: argparse.Namespace, result: Any) -> bool:
@@ -638,6 +738,7 @@ def _write_checkpoint(
     bundle,
     vp_plus,
     vp_minus,
+    vp_chern_columns: dict[str, float],
     cache_path: str,
     warm_start_source: str,
     warm_start_from_run_id: str | None,
@@ -666,6 +767,12 @@ def _write_checkpoint(
         or hit_max_iter
         or not result.converged
     )
+    linecut = _linecut_fields(
+        point=point,
+        sweep_axis=sweep_axis,
+        fixed_index=fixed_index,
+        direction=direction,
+    )
     response = _response_fields(
         args=args,
         point=point,
@@ -675,15 +782,27 @@ def _write_checkpoint(
         vp_minus=vp_minus,
         ivc=result,
         direction=direction,
+        branch_id=str(linecut["branch_id"]),
         clean_branch=clean_branch,
+        vp_inputs_clean=_vp_inputs_clean(args, vp_plus, vp_minus),
     )
-    record = TaigeHysteresisBranchRecord(
-        **_linecut_fields(
-            point=point,
-            sweep_axis=sweep_axis,
-            fixed_index=fixed_index,
-            direction=direction,
+    vp_fields = {
+        **_vp_reference_fields(
+            "vp_plus",
+            vp_plus,
+            n_blocks=bundle.backend.n_blocks,
+            max_iter=args.max_iter,
         ),
+        **_vp_reference_fields(
+            "vp_minus",
+            vp_minus,
+            n_blocks=bundle.backend.n_blocks,
+            max_iter=args.max_iter,
+        ),
+        **vp_chern_columns,
+    }
+    record = TaigeHysteresisBranchRecord(
+        **linecut,
         u_index=point.u_index,
         theta_index=point.theta_index,
         u_D_meV=point.u_D,
@@ -734,6 +853,7 @@ def _write_checkpoint(
         energy_fock_per_cell=float(energy.fock / bundle.backend.n_blocks),
         final_idempotency_error_fro=float(diagnostics.idempotency_error_fro),
         final_trace_error=float(diagnostics.trace_error),
+        **vp_fields,
         **response,
     )
     _write_json(point_dir / "point_record.json", record.model_dump(mode="json"))
@@ -789,6 +909,7 @@ def _endpoint_seed_scan(
     else:
         loaded_vp_plus = loaded.vp_plus
         loaded_vp_minus = loaded.vp_minus
+    vp_chern_columns = _loaded_vp_chern_columns(loaded, loaded_vp_plus, loaded_vp_minus)
     seed_rows: list[dict[str, Any]] = []
     seed_results: dict[str, Any] = {}
     for seed in _seed_specs(args):
@@ -837,6 +958,7 @@ def _endpoint_seed_scan(
         bundle=bundle,
         vp_plus=loaded_vp_plus,
         vp_minus=loaded_vp_minus,
+        vp_chern_columns=vp_chern_columns,
         cache_path=cache_path,
         warm_start_source="endpoint_cold_seed_scan",
         warm_start_from_run_id=None,
@@ -889,6 +1011,7 @@ def _run_branch(
         else:
             vp_plus = loaded.vp_plus
             vp_minus = loaded.vp_minus
+        vp_chern_columns = _loaded_vp_chern_columns(loaded, vp_plus, vp_minus)
         if previous_projector is None:
             record, previous_projector, previous_frames = _endpoint_seed_scan(
                 args=args,
@@ -935,6 +1058,7 @@ def _run_branch(
             bundle=bundle,
             vp_plus=vp_plus,
             vp_minus=vp_minus,
+            vp_chern_columns=vp_chern_columns,
             cache_path=cache_path,
             warm_start_source="active_frame_projected_largest_eigenvectors",
             warm_start_from_run_id=previous_run_id,
