@@ -78,6 +78,16 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=["scan", "convergence", "hysteresis", "all"],
         default="scan",
     )
+    parser.add_argument(
+        "--hysteresis-axis",
+        choices=["u_d", "theta"],
+        default="u_d",
+        help=(
+            "Axis swept by warm-start hysteresis runs.  'u_d' keeps the old "
+            "fixed-twist displacement sweep; 'theta' sweeps twist at fixed "
+            "displacement with active-frame projector transport."
+        ),
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--skip-plots", action="store_true")
 
@@ -295,14 +305,27 @@ def _convergence_points(args: argparse.Namespace) -> list[TaigeIvcDiagnosticPoin
     ]
 
 
-def _linecut_groups(points: list[TaigeIvcDiagnosticPoint]) -> dict[str, list[TaigeIvcDiagnosticPoint]]:
+def _hysteresis_groups(
+    points: list[TaigeIvcDiagnosticPoint],
+    *,
+    axis: str,
+) -> dict[str, list[TaigeIvcDiagnosticPoint]]:
     groups: dict[str, list[TaigeIvcDiagnosticPoint]] = {}
     for point in points:
         if point.group == "stable_controls":
             continue
-        groups.setdefault(point.group, []).append(point)
+        if axis == "u_d":
+            key = f"{point.group}|theta={_float_label(point.theta_deg)}"
+        elif axis == "theta":
+            key = f"{point.group}|u_D={_float_label(point.u_D)}"
+        else:
+            raise ValueError(f"unknown hysteresis axis {axis!r}")
+        groups.setdefault(key, []).append(point)
     for group, rows in groups.items():
-        groups[group] = sorted(rows, key=lambda point: point.u_D)
+        if axis == "u_d":
+            groups[group] = sorted(rows, key=lambda point: point.u_D)
+        else:
+            groups[group] = sorted(rows, key=lambda point: point.theta_deg)
     return groups
 
 
@@ -1083,6 +1106,7 @@ def _run_hysteresis_mode(
     args: argparse.Namespace,
     *,
     linecuts: dict[str, list[TaigeIvcDiagnosticPoint]],
+    axis: str,
     seeds: list[TaigeIvcSeedSpec],
     run_rows: list[dict[str, Any]],
     iteration_rows: list[dict[str, Any]],
@@ -1093,10 +1117,17 @@ def _run_hysteresis_mode(
     records: list[RunRecord],
     run_counter: list[int],
 ) -> None:
+    if axis == "u_d":
+        sort_key = lambda point: point.u_D
+    elif axis == "theta":
+        sort_key = lambda point: point.theta_deg
+    else:
+        raise ValueError(f"unknown hysteresis axis {axis!r}")
+
     for group, points in linecuts.items():
         for direction, ordered_points in (
-            ("up", sorted(points, key=lambda point: point.u_D)),
-            ("down", sorted(points, key=lambda point: point.u_D, reverse=True)),
+            ("up", sorted(points, key=sort_key)),
+            ("down", sorted(points, key=sort_key, reverse=True)),
         ):
             previous_projector = None
             previous_frames = None
@@ -1279,10 +1310,11 @@ def main(argv: list[str] | None = None) -> int:
             run_counter=run_counter,
         )
     if args.diagnostic_mode in {"hysteresis", "all"}:
-        linecuts = _linecut_groups(points)
+        linecuts = _hysteresis_groups(points, axis=args.hysteresis_axis)
         _run_hysteresis_mode(
             args,
             linecuts=linecuts,
+            axis=args.hysteresis_axis,
             seeds=seeds,
             run_rows=run_rows,
             iteration_rows=iteration_rows,
@@ -1334,6 +1366,7 @@ def main(argv: list[str] | None = None) -> int:
             "n_seed_overlap_rows": len(seed_overlap_rows),
             "n_neighbor_overlap_rows": len(neighbor_overlap_rows),
             "n_hysteresis_rows": len(hysteresis_rows),
+            "hysteresis_axis": args.hysteresis_axis,
             "output_dir": str(output_dir),
         },
     )

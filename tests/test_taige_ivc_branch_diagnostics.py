@@ -155,3 +155,63 @@ def test_local_ivc_branch_diagnostic_script_smoke(tmp_path: Path):
     assert {"aufbau_residual_norm", "iteration"} <= set(history[0])
     with np.load(out_dir / "projectors_final.npz") as arrays:
         assert len(arrays.files) == len(runs)
+
+
+def test_local_ivc_branch_diagnostic_script_supports_theta_hysteresis(tmp_path: Path):
+    script = Path(__file__).resolve().parents[1] / "scripts" / "diagnose_taige_ivc_branch_local.py"
+    output_root = tmp_path / "diagnostics"
+    cmd = [
+        sys.executable,
+        str(script),
+        "--output-root",
+        str(output_root),
+        "--run-label",
+        "theta_hysteresis",
+        "--preset",
+        "custom",
+        "--diagnostic-mode",
+        "hysteresis",
+        "--hysteresis-axis",
+        "theta",
+        "--theta-deg-list",
+        "3.4,3.5",
+        "--u-d-list",
+        "0.0",
+        "--n-k",
+        "2",
+        "--plane-wave-shell",
+        "0",
+        "--n-bands",
+        "1",
+        "--n-active-bands-per-valley",
+        "1",
+        "--q-mesh",
+        "full",
+        "--local-field-cutoff",
+        "0",
+        "--max-iter",
+        "1",
+        "--min-iter",
+        "0",
+        "--snapshot-interval",
+        "1",
+        "--random-seeds",
+        "7",
+        "--no-include-ordered-seed",
+        "--no-solve-vp-baseline",
+        "--skip-plots",
+    ]
+    subprocess.run(cmd, check=True, timeout=120)
+
+    out_dir = output_root / "theta_hysteresis"
+    runs = _read_csv(out_dir / "runs.csv")
+    hysteresis = _read_csv(out_dir / "hysteresis.csv")
+
+    assert len(runs) == 4
+    assert hysteresis
+    assert {row["mode"] for row in runs} == {"hysteresis", "hysteresis_seed_scan"}
+    warm_rows = [row for row in runs if row["mode"] == "hysteresis"]
+    assert len(warm_rows) == 2
+    assert all(float(row["u_D_meV"]) == pytest.approx(0.0) for row in runs)
+    assert sorted(float(row["theta_deg"]) for row in warm_rows) == pytest.approx([3.4, 3.5])
+    assert all(row["warm_start_transport"] == "active_frame_projected_largest_eigenvectors" for row in warm_rows)
