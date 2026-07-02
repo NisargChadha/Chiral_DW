@@ -5,8 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field as dataclass_field
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
+import tempfile
 from typing import Any
 
 import numpy as np
@@ -215,6 +217,32 @@ def _hf_result_metadata(result: ContinuumHFResult, *, max_iter: int | None = Non
     }
 
 
+def _write_npz_compressed_atomically(path: Path, arrays: dict[str, np.ndarray]) -> None:
+    """Write an NPZ beside the target, then atomically replace the final path."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as fh:
+            tmp_path = Path(fh.name)
+            np.savez_compressed(fh, **arrays)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_path, path)
+        tmp_path = None
+    finally:
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink()
+            except FileNotFoundError:
+                pass
+
+
 def _load_hf_result(prefix: str, data: Any, metadata: dict[str, Any]) -> ContinuumHFResult | None:
     ref_meta = metadata.get("hf_references", {}).get(prefix)
     if ref_meta is None:
@@ -332,7 +360,7 @@ def save_taige_backend_cache(
             max_iter=vp_reference_max_iter,
         )
     arrays["metadata_json"] = np.asarray(json.dumps(metadata, sort_keys=True))
-    np.savez_compressed(out, **arrays)
+    _write_npz_compressed_atomically(out, arrays)
     return TaigeBackendCacheManifest(
         cache_hash=cache_hash,
         path=str(out),

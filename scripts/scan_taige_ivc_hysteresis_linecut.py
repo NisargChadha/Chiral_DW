@@ -478,8 +478,22 @@ def _cache_path(args: argparse.Namespace, point: TaigeHysteresisPoint) -> tuple[
 def _load_or_build_cache(args: argparse.Namespace, point: TaigeHysteresisPoint):
     cache_path, signature = _cache_path(args, point)
     if cache_path.exists():
-        loaded = load_taige_backend_cache(cache_path)
-        return loaded, str(cache_path)
+        try:
+            loaded = load_taige_backend_cache(cache_path)
+        except Exception as exc:
+            if args.require_cache:
+                raise ValueError(
+                    "required backend cache is unreadable; rerun the backend "
+                    f"precompute array to rebuild corrupt cache {cache_path}"
+                ) from exc
+            print(
+                f"Existing cache {cache_path} is unreadable; deleting and rebuilding: {exc}",
+                file=sys.stderr,
+            )
+            cache_path.unlink(missing_ok=True)
+            cache_path.with_suffix(".summary.json").unlink(missing_ok=True)
+        else:
+            return loaded, str(cache_path)
     if args.require_cache:
         raise FileNotFoundError(f"missing required backend cache {cache_path}")
     bundle = build_continuum_bundle(

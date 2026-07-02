@@ -274,6 +274,39 @@ def test_backend_cache_save_load_restores_usable_backend_and_vp_references(tmp_p
     assert "chern_hf_vpplus_band_0" in loaded.vp_hf_chern_columns
 
 
+def test_precompute_skip_existing_rebuilds_unreadable_cache(tmp_path: Path):
+    output_root = tmp_path / "hysteresis"
+    base_cmd = [
+        sys.executable,
+        str(PRECOMPUTE_SCRIPT),
+        *_tiny_cli_args(output_root),
+        "--u-d-max",
+        "0",
+        "--n-u-d",
+        "1",
+    ]
+    subprocess.run([*base_cmd, "--dry-run"], check=True, timeout=120)
+    plan = json.loads((output_root / "backend_cache_plan.json").read_text())
+    cache_row = plan["rows"][0]
+    cache_path = Path(cache_row["cache_path"])
+    cache_path.parent.mkdir(parents=True)
+    cache_path.write_bytes(b"not an npz archive")
+    cache_path.with_suffix(".summary.json").write_text("{}")
+
+    result = subprocess.run(
+        [*base_cmd, "--skip-existing"],
+        check=True,
+        timeout=120,
+        text=True,
+        capture_output=True,
+    )
+
+    assert "is unreadable; deleting and rebuilding" in result.stderr
+    loaded = load_taige_backend_cache(cache_path)
+    assert loaded.manifest.cache_hash == cache_row["cache_hash"]
+    assert not list(cache_path.parent.glob("*.tmp"))
+
+
 def test_hysteresis_scripts_smoke_resume_and_merge(tmp_path: Path):
     output_root = tmp_path / "hysteresis"
     precompute_cmd = [

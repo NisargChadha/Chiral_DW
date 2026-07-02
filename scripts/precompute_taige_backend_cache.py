@@ -23,6 +23,7 @@ from chiral_dw.continuum import (  # noqa: E402
     TaigeHysteresisPoint,
     ValleyU1Constraint,
     build_continuum_bundle,
+    load_taige_backend_cache,
     save_taige_backend_cache,
     solve_reference_hf,
     taige_backend_cache_hash,
@@ -338,13 +339,23 @@ def run_point(args: argparse.Namespace, point: TaigeHysteresisPoint) -> dict[str
     )
     cache_path = taige_backend_cache_path(cache_root, signature)
     if args.skip_existing and cache_path.exists():
-        print(f"Skipping existing cache {cache_path}")
-        return {
-            **point.model_dump(mode="json"),
-            "cache_hash": taige_backend_cache_hash(signature),
-            "cache_path": str(cache_path),
-            "status": "skipped_existing",
-        }
+        try:
+            load_taige_backend_cache(cache_path)
+        except Exception as exc:
+            print(
+                f"Existing cache {cache_path} is unreadable; deleting and rebuilding: {exc}",
+                file=sys.stderr,
+            )
+            cache_path.unlink(missing_ok=True)
+            cache_path.with_suffix(".summary.json").unlink(missing_ok=True)
+        else:
+            print(f"Skipping existing validated cache {cache_path}")
+            return {
+                **point.model_dump(mode="json"),
+                "cache_hash": taige_backend_cache_hash(signature),
+                "cache_path": str(cache_path),
+                "status": "skipped_existing",
+            }
     print(
         "Building Taige backend cache "
         f"theta={point.theta_deg:.8g} u_D={point.u_D:.8g} n_k={args.n_k} "
