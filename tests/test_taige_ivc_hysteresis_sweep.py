@@ -38,6 +38,7 @@ BRANCH_SCRIPT = ROOT / "scripts" / "scan_taige_ivc_hysteresis_linecut.py"
 LEGACY_BRANCH_SCRIPT = ROOT / "scripts" / "scan_taige_ivc_hysteresis_by_theta.py"
 MERGE_SCRIPT = ROOT / "scripts" / "merge_taige_ivc_hysteresis_sweep.py"
 FINITE_MERGE_SCRIPT = ROOT / "scripts" / "merge_taige_ivc_hysteresis_finite_size.py"
+CLEANUP_SCRIPT = ROOT / "scripts" / "cleanup_taige_backend_cache.py"
 CACHE_JOB = ROOT / "jobs" / "precompute_taige_backend_cache_array.sh"
 BRANCH_JOB = ROOT / "jobs" / "scan_taige_ivc_hysteresis_by_theta.sh"
 ALL_BRANCH_JOB = ROOT / "jobs" / "scan_taige_ivc_hysteresis_all_linecuts_array.sh"
@@ -45,6 +46,7 @@ MERGE_JOB = ROOT / "jobs" / "merge_taige_ivc_hysteresis_sweep.sh"
 SUBMIT_JOB = ROOT / "jobs" / "submit_taige_ivc_hysteresis_full_pipeline.sh"
 FINITE_MERGE_JOB = ROOT / "jobs" / "merge_taige_ivc_hysteresis_finite_size.sh"
 FINITE_SUBMIT_JOB = ROOT / "jobs" / "submit_taige_ivc_hysteresis_finite_size_pipeline.sh"
+CLEANUP_JOB = ROOT / "jobs" / "cleanup_taige_backend_cache.sh"
 
 
 def _read_csv(path: Path) -> list[dict[str, str]]:
@@ -469,6 +471,89 @@ def test_hysteresis_finite_size_merge_writes_clean_fit_tables(tmp_path: Path):
     assert (output_root / "hysteresis_finite_size_vp_chern_boundary.csv").exists()
 
 
+def test_cleanup_taige_backend_cache_is_safe_and_preserves_outputs(tmp_path: Path):
+    output_root = tmp_path / "mesh"
+    cache_root = output_root / "backend_cache"
+    cache_root.mkdir(parents=True)
+    (cache_root / "cache.bin").write_bytes(b"123456")
+    for name in (
+        "hysteresis_sweep.csv",
+        "hysteresis_comparison.csv",
+        "hysteresis_all_branch_candidates.csv",
+        "hysteresis_selected_trial_theta.csv",
+        "hysteresis_vp_chern_numbers.csv",
+    ):
+        (output_root / name).write_text("ok\n")
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(CLEANUP_SCRIPT),
+            "--output-root",
+            str(output_root),
+            "--cache-root",
+            str(cache_root),
+            "--dry-run",
+        ],
+        check=True,
+    )
+    assert cache_root.exists()
+    dry_manifest = json.loads((output_root / "backend_cache_cleanup_manifest.json").read_text())
+    assert dry_manifest["status"] == "dry_run"
+    assert dry_manifest["byte_count"] == 6
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(CLEANUP_SCRIPT),
+            "--output-root",
+            str(output_root),
+            "--cache-root",
+            str(cache_root),
+        ],
+        check=True,
+    )
+    assert not cache_root.exists()
+    assert (output_root / "hysteresis_sweep.csv").exists()
+    manifest = json.loads((output_root / "backend_cache_cleanup_manifest.json").read_text())
+    assert manifest["status"] == "deleted"
+    assert manifest["deleted"] is True
+
+    unsafe = subprocess.run(
+        [
+            sys.executable,
+            str(CLEANUP_SCRIPT),
+            "--output-root",
+            str(output_root),
+            "--cache-root",
+            str(tmp_path / "backend_cache"),
+        ],
+        text=True,
+        capture_output=True,
+    )
+    assert unsafe.returncode == 2
+    assert "outside output root" in unsafe.stderr
+
+    missing_output = tmp_path / "missing_outputs"
+    missing_cache = missing_output / "backend_cache"
+    missing_cache.mkdir(parents=True)
+    refused = subprocess.run(
+        [
+            sys.executable,
+            str(CLEANUP_SCRIPT),
+            "--output-root",
+            str(missing_output),
+            "--cache-root",
+            str(missing_cache),
+        ],
+        text=True,
+        capture_output=True,
+    )
+    assert refused.returncode == 2
+    assert missing_cache.exists()
+    assert "merged outputs are missing" in refused.stderr
+
+
 def test_hysteresis_dry_runs_plan_default_cluster_task_counts(tmp_path: Path):
     cache_root = tmp_path / "cache_dry"
     branch_root = tmp_path / "branch_dry"
@@ -542,6 +627,7 @@ def test_hysteresis_slurm_wrappers_pass_cluster_defaults():
             str(SUBMIT_JOB),
             str(FINITE_MERGE_JOB),
             str(FINITE_SUBMIT_JOB),
+            str(CLEANUP_JOB),
         ],
         check=True,
     )
@@ -552,6 +638,7 @@ def test_hysteresis_slurm_wrappers_pass_cluster_defaults():
     submit_text = SUBMIT_JOB.read_text()
     finite_merge_text = FINITE_MERGE_JOB.read_text()
     finite_submit_text = FINITE_SUBMIT_JOB.read_text()
+    cleanup_text = CLEANUP_JOB.read_text()
 
     assert "#SBATCH -p serial_requeue" in cache_text
     assert "#SBATCH --array=0-440" in cache_text
@@ -595,12 +682,16 @@ def test_hysteresis_slurm_wrappers_pass_cluster_defaults():
         assert "export OPENBLAS_NUM_THREADS=1" in text
         assert "export NUMEXPR_NUM_THREADS=1" in text
     assert "merge_taige_ivc_hysteresis_finite_size.py" in finite_merge_text
-    assert 'N_K_LIST=${N_K_LIST:-"18,20,22,24"}' in finite_submit_text
-    assert 'NK_MEMORY_GB_MAP=${NK_MEMORY_GB_MAP:-"18:12,20:16,22:20,24:24"}' in finite_submit_text
+    assert 'N_K_LIST=${N_K_LIST:-"18,19,20"}' in finite_submit_text
+    assert 'NK_MEMORY_GB_MAP=${NK_MEMORY_GB_MAP:-"18:12,19:14,20:16"}' in finite_submit_text
+    assert 'SEQUENTIAL_MESHES=${SEQUENTIAL_MESHES:-"1"}' in finite_submit_text
+    assert 'CLEANUP_BACKEND_CACHE=${CLEANUP_BACKEND_CACHE:-"1"}' in finite_submit_text
     assert "jobs/precompute_taige_backend_cache_array.sh" in finite_submit_text
     assert "jobs/scan_taige_ivc_hysteresis_all_linecuts_array.sh" in finite_submit_text
     assert "jobs/merge_taige_ivc_hysteresis_finite_size.sh" in finite_submit_text
+    assert "jobs/cleanup_taige_backend_cache.sh" in finite_submit_text
     assert "--export=ALL" in finite_submit_text
+    assert "cleanup_taige_backend_cache.py" in cleanup_text
 
     dry = subprocess.run(
         [str(FINITE_SUBMIT_JOB)],
@@ -612,11 +703,13 @@ def test_hysteresis_slurm_wrappers_pass_cluster_defaults():
             "DRY_RUN": "1",
             "N_U_D": "21",
             "N_TWIST": "21",
-            "N_K_LIST": "18,20,22,24",
+            "N_K_LIST": "18,19,20",
         },
     ).stdout
-    assert "Dry run task counts: cache=1764 scan=336" in dry
+    assert "Dry run task counts: cache=1323 scan=252" in dry
     assert "--mem=12G" in dry
+    assert "--mem=14G" in dry
     assert "--mem=16G" in dry
-    assert "--mem=20G" in dry
-    assert "--mem=24G" in dry
+    assert "--dependency=afterok:dry_cleanup_18" in dry
+    assert "--dependency=afterok:dry_cleanup_19" in dry
+    assert "--dependency=afterok:dry_cleanup_20" in dry

@@ -21,7 +21,7 @@ if str(SRC) not in sys.path:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-root", default="results/taige_ivc_hysteresis_finite_size")
-    parser.add_argument("--n-k-list", default="18,20,22,24")
+    parser.add_argument("--n-k-list", default="18,19,20")
     parser.add_argument("--mesh-dir-template", default="nk_{n_k:03d}")
     parser.add_argument("--fit-min-clean", type=int, default=3)
     parser.add_argument("--fit-degree", type=int, default=1)

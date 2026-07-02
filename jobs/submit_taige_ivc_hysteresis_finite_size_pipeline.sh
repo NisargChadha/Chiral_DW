@@ -6,9 +6,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-OUTPUT_ROOT=${OUTPUT_ROOT:-"results/taige_ivc_hysteresis_finite_size_nk18_24_grid21"}
-N_K_LIST=${N_K_LIST:-"18,20,22,24"}
-NK_MEMORY_GB_MAP=${NK_MEMORY_GB_MAP:-"18:12,20:16,22:20,24:24"}
+OUTPUT_ROOT=${OUTPUT_ROOT:-"results/taige_ivc_hysteresis_finite_size_nk18_20_grid21"}
+N_K_LIST=${N_K_LIST:-"18,19,20"}
+NK_MEMORY_GB_MAP=${NK_MEMORY_GB_MAP:-"18:12,19:14,20:16"}
+SEQUENTIAL_MESHES=${SEQUENTIAL_MESHES:-"1"}
 
 U_D_MIN=${U_D_MIN:-"0.0"}
 U_D_MAX=${U_D_MAX:-"20.0"}
@@ -58,6 +59,9 @@ MERGE_TIME=${MERGE_TIME:-"02:00:00"}
 FINAL_MERGE_TIME=${FINAL_MERGE_TIME:-"02:00:00"}
 MERGE_MEM_GB=${MERGE_MEM_GB:-"8"}
 FINAL_MERGE_MEM_GB=${FINAL_MERGE_MEM_GB:-"8"}
+CLEANUP_BACKEND_CACHE=${CLEANUP_BACKEND_CACHE:-"1"}
+CLEANUP_TIME=${CLEANUP_TIME:-"01:00:00"}
+CLEANUP_MEM_GB=${CLEANUP_MEM_GB:-"2"}
 MAX_CONCURRENT_CACHE=${MAX_CONCURRENT_CACHE:-""}
 MAX_CONCURRENT_SCAN=${MAX_CONCURRENT_SCAN:-""}
 DRY_RUN=${DRY_RUN:-"0"}
@@ -104,7 +108,8 @@ submit_or_echo() {
   "$@"
 }
 
-merge_job_ids=()
+barrier_job_ids=()
+previous_barrier_job=""
 IFS=',' read -r -a nks <<< "$N_K_LIST"
 for raw_nk in "${nks[@]}"; do
   nk="$(echo "$raw_nk" | xargs)"
@@ -156,6 +161,7 @@ for raw_nk in "${nks[@]}"; do
     "SOLVE_VP_REFERENCES=${SOLVE_VP_REFERENCES}"
     "COMPUTE_VP_CHERN=${COMPUTE_VP_CHERN}"
     "COMPUTE_INVALID_TEXTURE_CG=${COMPUTE_INVALID_TEXTURE_CG}"
+    "CLEANUP_BACKEND_CACHE=${CLEANUP_BACKEND_CACHE}"
   )
 
   cache_cmd=(
@@ -165,6 +171,11 @@ for raw_nk in "${nks[@]}"; do
     "--mem=${mem_gb}G"
     "--time=${CACHE_TIME}"
     "--cpus-per-task=${CPUS_PER_TASK}"
+  )
+  if [[ "$SEQUENTIAL_MESHES" == "1" && -n "$previous_barrier_job" ]]; then
+    cache_cmd+=(--dependency=afterok:"$previous_barrier_job")
+  fi
+  cache_cmd+=(
     "--export=ALL"
     jobs/precompute_taige_backend_cache_array.sh
   )
@@ -183,9 +194,7 @@ for raw_nk in "${nks[@]}"; do
     "--time=${SCAN_TIME}"
     "--cpus-per-task=${CPUS_PER_TASK}"
   )
-  if [[ "$DRY_RUN" != "1" ]]; then
-    scan_cmd+=(--dependency=afterok:"$cache_job")
-  fi
+  scan_cmd+=(--dependency=afterok:"$cache_job")
   scan_cmd+=(
     "--export=ALL"
     jobs/scan_taige_ivc_hysteresis_all_linecuts_array.sh
@@ -204,9 +213,7 @@ for raw_nk in "${nks[@]}"; do
     "--time=${MERGE_TIME}"
     "--cpus-per-task=1"
   )
-  if [[ "$DRY_RUN" != "1" ]]; then
-    merge_cmd+=(--dependency=afterok:"$scan_job")
-  fi
+  merge_cmd+=(--dependency=afterok:"$scan_job")
   merge_cmd+=(
     "--export=ALL"
     jobs/merge_taige_ivc_hysteresis_sweep.sh
@@ -217,10 +224,32 @@ for raw_nk in "${nks[@]}"; do
   else
     merge_job="$(submit_or_echo "${merge_cmd[@]}")"
   fi
-  if [[ "$DRY_RUN" != "1" ]]; then
-    merge_job_ids+=("$merge_job")
-    echo "n_k=${nk} cache=${cache_job} scan=${scan_job} merge=${merge_job}"
+  barrier_job="$merge_job"
+  cleanup_job=""
+  if [[ "$CLEANUP_BACKEND_CACHE" == "1" ]]; then
+    cleanup_cmd=(
+      "${mesh_env[@]}"
+      sbatch --parsable
+      "--mem=${CLEANUP_MEM_GB}G"
+      "--time=${CLEANUP_TIME}"
+      "--cpus-per-task=1"
+      --dependency=afterok:"$merge_job"
+      "--export=ALL"
+      jobs/cleanup_taige_backend_cache.sh
+    )
+    if [[ "$DRY_RUN" == "1" ]]; then
+      submit_or_echo "${cleanup_cmd[@]}"
+      cleanup_job="dry_cleanup_${nk}"
+    else
+      cleanup_job="$(submit_or_echo "${cleanup_cmd[@]}")"
+    fi
+    barrier_job="$cleanup_job"
   fi
+  if [[ "$DRY_RUN" != "1" ]]; then
+    barrier_job_ids+=("$barrier_job")
+    echo "n_k=${nk} cache=${cache_job} scan=${scan_job} merge=${merge_job} cleanup=${cleanup_job:-disabled}"
+  fi
+  previous_barrier_job="$barrier_job"
 done
 
 final_cmd=(
@@ -233,10 +262,12 @@ final_cmd=(
   "--time=${FINAL_MERGE_TIME}"
   "--cpus-per-task=1"
 )
-if [[ "$DRY_RUN" != "1" && "${#merge_job_ids[@]}" -gt 0 ]]; then
+if [[ "$DRY_RUN" != "1" && "${#barrier_job_ids[@]}" -gt 0 ]]; then
   IFS=:
-  final_cmd+=(--dependency=afterok:"${merge_job_ids[*]}")
+  final_cmd+=(--dependency=afterok:"${barrier_job_ids[*]}")
   unset IFS
+elif [[ "$DRY_RUN" == "1" && "$SEQUENTIAL_MESHES" == "1" && -n "$previous_barrier_job" ]]; then
+  final_cmd+=(--dependency=afterok:"$previous_barrier_job")
 fi
 final_cmd+=(
   "--export=ALL"
