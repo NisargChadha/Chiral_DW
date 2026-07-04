@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -26,6 +27,13 @@ HYST_JOB = ROOT / "jobs" / "scan_wse2_ivc_hysteresis_all_linecuts_array.sh"
 BY_THETA_JOB = ROOT / "jobs" / "scan_wse2_ivc_hysteresis_by_theta.sh"
 MERGE_JOB = ROOT / "jobs" / "merge_wse2_ivc_hysteresis_sweep.sh"
 SUBMIT_JOB = ROOT / "jobs" / "submit_wse2_ivc_hysteresis_full_pipeline.sh"
+FINITE_SUBMIT_JOB = ROOT / "jobs" / "submit_wse2_ivc_hysteresis_finite_size_pipeline.sh"
+FS_CG_SCRIPT = ROOT / "scripts" / "scan_wse2_finite_size_cg.py"
+FS_HYST_MERGE_SCRIPT = ROOT / "scripts" / "merge_wse2_ivc_hysteresis_finite_size.py"
+FS_CG_JOB = ROOT / "jobs" / "scan_wse2_finite_size_cg_array.sh"
+FS_CG_MERGE_JOB = ROOT / "jobs" / "merge_wse2_finite_size_cg.sh"
+FS_CG_SUBMIT_JOB = ROOT / "jobs" / "submit_wse2_finite_size_by_nk.sh"
+FS_HYST_MERGE_JOB = ROOT / "jobs" / "merge_wse2_ivc_hysteresis_finite_size.sh"
 
 
 def test_wse2_taige_presets_and_mote2_defaults():
@@ -211,7 +219,52 @@ def test_wse2_cache_and_hysteresis_dry_runs_use_wse2_roots(tmp_path):
     assert "wse2_hyst" in hyst_plan["rows"][0]["branch_dir"]
 
 
+def test_wse2_finite_size_cg_dry_run_writes_material_mesh_plan(tmp_path):
+    output_root = tmp_path / "wse2_fs_cg"
+    subprocess.run(
+        [
+            sys.executable,
+            str(FS_CG_SCRIPT),
+            "--output-root",
+            str(output_root),
+            "--n-k-list",
+            "18,20",
+            "--n-u-d",
+            "2",
+            "--n-twist",
+            "2",
+            "--task-id",
+            "1",
+            "--dry-run",
+        ],
+        check=True,
+    )
+
+    plan = json.loads((output_root / "sweep_plan.json").read_text())
+    phase_plan = json.loads((output_root / "sweep_phase_plan.json").read_text())
+    assert plan["args"]["material"] == "wse2"
+    assert plan["args"]["output_root"] == str(output_root)
+    assert phase_plan["n_phase_points"] == 1
+    assert plan["n_mesh_points"] == 2
+    assert [point["n_k"] for point in plan["points"]] == [18, 20]
+    assert {point["theta_index"] for point in plan["points"]} == {1}
+    assert "points/u_000_theta_001/nk_018" in plan["points"][0]["point_dir"]
+
+
 def test_wse2_job_scripts_mirror_taige_controls():
+    subprocess.run(
+        [
+            "bash",
+            "-n",
+            str(FS_CG_JOB),
+            str(FS_CG_MERGE_JOB),
+            str(FS_CG_SUBMIT_JOB),
+            str(FS_HYST_MERGE_JOB),
+            str(FINITE_SUBMIT_JOB),
+        ],
+        check=True,
+    )
+
     cg_text = CG_JOB.read_text()
     assert "scripts/scan_wse2_continuum_cg.py" in cg_text
     assert 'OUTPUT_ROOT=${OUTPUT_ROOT:-"results/wse2_cg_nk24_active2_shell5_vp_region"}' in cg_text
@@ -237,3 +290,99 @@ def test_wse2_job_scripts_mirror_taige_controls():
     assert "jobs/precompute_wse2_backend_cache_array.sh" in SUBMIT_JOB.read_text()
     assert "jobs/scan_wse2_ivc_hysteresis_all_linecuts_array.sh" in SUBMIT_JOB.read_text()
     assert "jobs/merge_wse2_ivc_hysteresis_sweep.sh" in SUBMIT_JOB.read_text()
+
+    fs_cg_text = FS_CG_JOB.read_text()
+    assert "scripts/scan_wse2_finite_size_cg.py" in fs_cg_text
+    assert 'OUTPUT_ROOT=${OUTPUT_ROOT:-"results/wse2_cg_finite_size_nk18_24_u0_15_theta2_4p2"}' in fs_cg_text
+    assert 'N_K_LIST=${N_K_LIST:-"18,20,22,24"}' in fs_cg_text
+    assert 'SMEAR_LENGTH_NM=${SMEAR_LENGTH_NM:-"0.332"}' in fs_cg_text
+    assert "jobs/merge_wse2_finite_size_cg.sh" in fs_cg_text
+    assert "scripts/scan_wse2_finite_size_cg.py" in FS_CG_MERGE_JOB.read_text()
+    assert "jobs/scan_wse2_finite_size_cg_array.sh" in FS_CG_SUBMIT_JOB.read_text()
+
+    finite_submit_text = FINITE_SUBMIT_JOB.read_text()
+    assert 'OUTPUT_ROOT=${OUTPUT_ROOT:-"results/wse2_ivc_hysteresis_finite_size_nk18_22_grid41"}' in finite_submit_text
+    assert 'N_K_LIST=${N_K_LIST:-"18,19,20,21,22"}' in finite_submit_text
+    assert 'FINAL_N_K_LIST=${FINAL_N_K_LIST:-"$N_K_LIST"}' in finite_submit_text
+    assert 'NK_MEMORY_GB_MAP=${NK_MEMORY_GB_MAP:-"18:12,19:14,20:16,21:18,22:20,23:22,24:24"}' in finite_submit_text
+    assert 'N_U_D=${N_U_D:-"41"}' in finite_submit_text
+    assert 'N_TWIST=${N_TWIST:-"41"}' in finite_submit_text
+    assert 'SMEAR_LENGTH_NM=${SMEAR_LENGTH_NM:-"0.332"}' in finite_submit_text
+    assert "jobs/precompute_wse2_backend_cache_array.sh" in finite_submit_text
+    assert "jobs/scan_wse2_ivc_hysteresis_all_linecuts_array.sh" in finite_submit_text
+    assert "jobs/merge_wse2_ivc_hysteresis_sweep.sh" in finite_submit_text
+    assert 'CLEANUP_BACKEND_CACHE=${CLEANUP_BACKEND_CACHE:-"0"}' in finite_submit_text
+    assert "CACHE_BASE_ROOT" in finite_submit_text
+    assert "LAB_SCRATCH_ROOT" in finite_submit_text
+    assert "SCRATCH" in finite_submit_text
+    assert "jobs/merge_wse2_ivc_hysteresis_finite_size.sh" in finite_submit_text
+    assert "scripts/merge_wse2_ivc_hysteresis_finite_size.py" in FS_HYST_MERGE_JOB.read_text()
+
+
+def test_wse2_finite_size_cg_submitter_dry_run_builds_by_nk_commands(tmp_path):
+    output_root = tmp_path / "wse2_by_nk"
+    proc = subprocess.run(
+        [str(FS_CG_SUBMIT_JOB)],
+        check=True,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "DRY_RUN": "1",
+            "OUTPUT_ROOT": str(output_root),
+            "N_K_LIST": "18,20",
+            "N_U_D": "2",
+            "N_TWIST": "3",
+            "CPUS_PER_TASK": "4",
+        },
+    )
+    out = proc.stdout
+
+    assert "--array=0-5" in out
+    assert "--mem=18G" in out
+    assert "--mem=20G" in out
+    assert "jobs/scan_wse2_finite_size_cg_array.sh" in out
+    assert "N_K_LIST=18" in out
+    assert "N_K_LIST=20" in out
+    assert "SMEAR_LENGTH_NM=0.332" in out
+    assert not (output_root / "slurm_jobs_finite_size_by_nk.csv").exists()
+
+
+def test_wse2_finite_size_submitter_dry_run_builds_split_mesh_commands(tmp_path):
+    env = os.environ.copy()
+    env.update(
+        {
+            "OUTPUT_ROOT": str(tmp_path / "wse2_fs"),
+            "N_K_LIST": "18,22",
+            "N_U_D": "3",
+            "N_TWIST": "2",
+            "CACHE_BASE_ROOT": str(tmp_path / "cache"),
+            "DRY_RUN": "1",
+        }
+    )
+    proc = subprocess.run(
+        [str(FINITE_SUBMIT_JOB)],
+        check=True,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    out = proc.stdout
+
+    assert "jobs/precompute_wse2_backend_cache_array.sh" in out
+    assert "jobs/scan_wse2_ivc_hysteresis_all_linecuts_array.sh" in out
+    assert "jobs/merge_wse2_ivc_hysteresis_sweep.sh" in out
+    assert "jobs/cleanup_taige_backend_cache.sh" not in out
+    assert "jobs/merge_wse2_ivc_hysteresis_finite_size.sh" in out
+    assert "--array=0-5" in out
+    assert "--array=0-9" in out
+    assert "--mem=12G" in out
+    assert "--mem=20G" in out
+    assert "SMEAR_LENGTH_NM=0.332" in out
+    assert f"CACHE_BASE_ROOT={tmp_path / 'cache'}" in out
+    assert f"CACHE_ROOT={tmp_path / 'cache' / 'wse2_fs' / 'nk_018' / 'backend_cache'}" in out
+    assert "N_K=18" in out
+    assert "N_K=22" in out
+    assert "--dependency=afterok:dry_merge_18" in out
+    assert "--dependency=afterok:dry_merge_22" in out
+    assert "Dry run task counts: cache=12 scan=20" in out

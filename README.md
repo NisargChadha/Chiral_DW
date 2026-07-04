@@ -331,6 +331,22 @@ The IVC hysteresis pipeline mirrors the MoTe2 hysteresis window
 sbatch jobs/submit_wse2_ivc_hysteresis_full_pipeline.sh
 ```
 
+The WSe2 finite-size production sweeps mirror the MoTe2 `n_k` workflow. The
+cG sweep defaults to `n_k=18,20,22,24`; the hysteresis finite-size pipeline
+defaults to `n_k=18..24` on the `21 x 21` hysteresis grid and keeps backend
+caches under a scratch root:
+
+```bash
+sbatch jobs/submit_wse2_finite_size_by_nk.sh
+
+export CACHE_BASE_ROOT=/path/to/lab/scratch/chiral_dw_cache
+sbatch jobs/submit_wse2_ivc_hysteresis_finite_size_pipeline.sh
+```
+
+If `CACHE_BASE_ROOT` is not set, the WSe2 finite-size hysteresis submitter uses
+`LAB_SCRATCH_ROOT`, then `SCRATCH`, then a local fallback under
+`results/wse2_backend_cache_scratch`.
+
 As with MoTe2, all WSe2 defaults are command-line or environment-variable
 overridable; the WSe2 jobs default to `SMEAR_LENGTH_NM=0.332`, i.e. `a0/10`.
 
