@@ -234,6 +234,7 @@ class ContinuumModelParams(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
+    material: str = "generic"
     theta_deg: float = Field(default=3.5, gt=0.0)
     a0_angstrom: float = Field(default=3.47, gt=0.0)
     m_eff: float = Field(default=0.62, gt=0.0)

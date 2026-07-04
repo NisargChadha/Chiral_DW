@@ -30,13 +30,20 @@ from chiral_dw.continuum import (  # noqa: E402
     taige_backend_cache_path,
     taige_backend_cache_signature,
     taige_interaction_params,
+    taige_material_label,
     taige_model_params,
 )
+
+DEFAULT_OUTPUT_ROOTS = {
+    "mote2": "results/taige_ivc_hysteresis",
+    "wse2": "results/wse2_ivc_hysteresis",
+}
 
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output-root", default="results/taige_ivc_hysteresis")
+    parser.add_argument("--material", choices=["mote2", "wse2"], default="mote2")
+    parser.add_argument("--output-root", default=None)
     parser.add_argument("--cache-root", default=None)
     parser.add_argument("--u-d", type=float, default=None)
     parser.add_argument("--theta-deg", type=float, default=None)
@@ -58,7 +65,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--omit-q0", action="store_true")
     parser.add_argument("--epsilon", type=float, default=16.7)
     parser.add_argument("--gate-distance-nm", type=float, default=30.0)
-    parser.add_argument("--smear-length-nm", type=float, default=0.347)
+    parser.add_argument("--smear-length-nm", type=float, default=None)
     parser.add_argument("--v0", type=float, default=1.0)
     parser.add_argument("--exchange-scale", type=float, default=1.0)
     parser.add_argument("--hartree-scale", type=float, default=1.0)
@@ -102,6 +109,13 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--merge-only", action="store_true")
     return parser
+
+
+def _output_root(args: argparse.Namespace) -> Path:
+    root = Path(args.output_root or DEFAULT_OUTPUT_ROOTS[str(args.material)])
+    if not root.is_absolute():
+        root = ROOT / root
+    return root
 
 
 def _axis_values(single: float | None, lower: float, upper: float, count: int, name: str) -> np.ndarray:
@@ -149,9 +163,7 @@ def _selected_points(args: argparse.Namespace) -> list[TaigeHysteresisPoint]:
 
 
 def _cache_root(args: argparse.Namespace) -> Path:
-    output_root = Path(args.output_root)
-    if not output_root.is_absolute():
-        output_root = ROOT / output_root
+    output_root = _output_root(args)
     root = Path(args.cache_root) if args.cache_root is not None else output_root / "backend_cache"
     if not root.is_absolute():
         root = ROOT / root
@@ -160,6 +172,7 @@ def _cache_root(args: argparse.Namespace) -> Path:
 
 def _model_for_point(args: argparse.Namespace, point: TaigeHysteresisPoint):
     return taige_model_params(
+        material=args.material,
         theta_deg=point.theta_deg,
         u_D=point.u_D,
         plane_wave_shell=args.plane_wave_shell,
@@ -170,6 +183,7 @@ def _model_for_point(args: argparse.Namespace, point: TaigeHysteresisPoint):
 
 def _interaction(args: argparse.Namespace):
     return taige_interaction_params(
+        material=args.material,
         include_q0=not args.omit_q0,
         q_mesh=args.q_mesh,
         q_shell=args.q_shell,
@@ -276,9 +290,7 @@ def _load_cache_summary(path: Path) -> dict[str, Any]:
 
 
 def _merge_cache_summaries(args: argparse.Namespace) -> list[dict[str, Any]]:
-    output_root = Path(args.output_root)
-    if not output_root.is_absolute():
-        output_root = ROOT / output_root
+    output_root = _output_root(args)
     cache_root = _cache_root(args)
     rows = [
         _load_cache_summary(path)
@@ -357,7 +369,7 @@ def run_point(args: argparse.Namespace, point: TaigeHysteresisPoint) -> dict[str
                 "status": "skipped_existing",
             }
     print(
-        "Building Taige backend cache "
+        f"Building {taige_material_label(args.material)} backend cache "
         f"theta={point.theta_deg:.8g} u_D={point.u_D:.8g} n_k={args.n_k} "
         f"retention={args.density_vertex_retention} layout={args.density_vertex_layout} "
         f"exchange={args.exchange_representation} form_factor={args.form_factor_backend}"
@@ -413,9 +425,8 @@ def run_point(args: argparse.Namespace, point: TaigeHysteresisPoint) -> dict[str
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
-    output_root = Path(args.output_root)
-    if not output_root.is_absolute():
-        output_root = ROOT / output_root
+    output_root = _output_root(args)
+    args.output_root = str(output_root)
     output_root.mkdir(parents=True, exist_ok=True)
     points = _selected_points(args)
     plan_rows = _plan_rows(args, points)

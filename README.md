@@ -306,6 +306,34 @@ The merge writes `sweep.csv/json` plus stacked long-form tables:
 `sweep_noninteracting_chern_numbers.csv`, `sweep_hf_chern_numbers.csv`, and
 `sweep_hf_path_spectra.csv` when that optional branch was enabled.
 
+### WSe2 Taige Continuum Sweeps
+
+The WSe2 scripts reuse the same Taige continuum/HF machinery with the Table SI
+parameters from Wang et al.: `V=9 meV`, `w=18 meV`, `m*=0.43`, and
+`a0=3.32 A`. The paper lists `phi=+128 deg`; in the local C3-gauge convention
+this is encoded as `phi_deg=-128.0`, which gives the expected K-valley
+electron-band Chern sign at zero displacement.
+
+The cG sweep mirrors the MoTe2 defaults, including `u_D=0..20 meV` and
+`theta=2..5 deg`:
+
+```bash
+python scripts/scan_wse2_continuum_cg.py \
+  --output-root results/wse2_cg_nk24_active2_shell5_vp_region \
+  --dry-run
+sbatch jobs/scan_wse2_continuum_cg_array.sh
+```
+
+The IVC hysteresis pipeline mirrors the MoTe2 hysteresis window
+`theta=2..4 deg`:
+
+```bash
+sbatch jobs/submit_wse2_ivc_hysteresis_full_pipeline.sh
+```
+
+As with MoTe2, all WSe2 defaults are command-line or environment-variable
+overridable; the WSe2 jobs default to `SMEAR_LENGTH_NM=0.332`, i.e. `a0/10`.
+
 ## Artifacts
 
 The AC command writes a directory containing:

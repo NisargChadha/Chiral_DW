@@ -32,12 +32,19 @@ from chiral_dw.continuum.sweep import (  # noqa: E402
     build_taige_sweep_diagnostics,
 )
 from chiral_dw.continuum.taige import taige_interaction_params, taige_model_params  # noqa: E402
+from chiral_dw.continuum.taige import taige_material_label  # noqa: E402
 from chiral_dw.continuum.workflow import run_taige_branch_selected_symmetric_hf_workflow  # noqa: E402
+
+DEFAULT_OUTPUT_ROOTS = {
+    "mote2": "results/taige_continuum_cg_sweep",
+    "wse2": "results/wse2_continuum_cg_sweep",
+}
 
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output-root", default="results/taige_continuum_cg_sweep")
+    parser.add_argument("--material", choices=["mote2", "wse2"], default="mote2")
+    parser.add_argument("--output-root", default=None)
 
     parser.add_argument("--u-d", type=float, default=None, help="Run one explicit displacement value in meV.")
     parser.add_argument("--theta-deg", type=float, default=None, help="Run one explicit twist angle in degrees.")
@@ -60,7 +67,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--omit-q0", action="store_true")
     parser.add_argument("--epsilon", type=float, default=16.7)
     parser.add_argument("--gate-distance-nm", type=float, default=30.0)
-    parser.add_argument("--smear-length-nm", type=float, default=0.347)
+    parser.add_argument("--smear-length-nm", type=float, default=None)
     parser.add_argument("--v0", type=float, default=1.0)
     parser.add_argument("--exchange-scale", type=float, default=1.0)
     parser.add_argument("--hartree-scale", type=float, default=1.0)
@@ -152,6 +159,14 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _output_root_from_args(args: argparse.Namespace) -> Path:
+    output = args.output_root or DEFAULT_OUTPUT_ROOTS[str(args.material)]
+    root = Path(output)
+    if not root.is_absolute():
+        root = ROOT / root
+    return root
+
+
 def _linspace_points(args: argparse.Namespace) -> list[TaigeSweepPoint]:
     if (args.u_d is None) ^ (args.theta_deg is None):
         raise ValueError("--u-d and --theta-deg must be supplied together for an explicit single point")
@@ -190,6 +205,7 @@ def _selected_points(args: argparse.Namespace) -> list[TaigeSweepPoint]:
 
 def _params_for_point(args: argparse.Namespace, point: TaigeSweepPoint, point_dir: Path) -> ContinuumWorkflowParams:
     model = taige_model_params(
+        material=args.material,
         theta_deg=point.theta_deg,
         u_D=point.u_D,
         plane_wave_shell=args.plane_wave_shell,
@@ -197,25 +213,23 @@ def _params_for_point(args: argparse.Namespace, point: TaigeSweepPoint, point_di
         n_active_bands_per_valley=args.n_active_bands_per_valley,
     )
     interaction = taige_interaction_params(
+        material=args.material,
         include_q0=not args.omit_q0,
         q_mesh=args.q_mesh,
         q_shell=args.q_shell,
         local_field_cutoff=args.local_field_cutoff,
-    ).model_copy(
-        update={
-            "epsilon": float(args.epsilon),
-            "gate_distance_nm": float(args.gate_distance_nm),
-            "smear_length_nm": float(args.smear_length_nm),
-            "v0": float(args.v0),
-            "exchange_scale": float(args.exchange_scale),
-            "hartree_scale": float(args.hartree_scale),
-            "vertex_workers": int(args.vertex_workers),
-            "exchange_workers": int(args.exchange_workers),
-            "density_vertex_retention": args.density_vertex_retention,
-            "density_vertex_layout": args.density_vertex_layout,
-            "exchange_representation": args.exchange_representation,
-            "form_factor_backend": args.form_factor_backend,
-        }
+        epsilon=float(args.epsilon),
+        gate_distance_nm=float(args.gate_distance_nm),
+        smear_length_nm=args.smear_length_nm,
+        interaction_strength_scale=float(args.v0),
+        exchange_scale=float(args.exchange_scale),
+        hartree_scale=float(args.hartree_scale),
+        vertex_workers=int(args.vertex_workers),
+        exchange_workers=int(args.exchange_workers),
+        density_vertex_retention=args.density_vertex_retention,
+        density_vertex_layout=args.density_vertex_layout,
+        exchange_representation=args.exchange_representation,
+        form_factor_backend=args.form_factor_backend,
     )
     hf = ContinuumHFParams(
         n_occ_per_k=args.n_occ_per_k,
@@ -399,7 +413,7 @@ def run_point(args: argparse.Namespace, output_root: Path, point: TaigeSweepPoin
     params = _params_for_point(args, point, point_dir)
     _write_json(point_dir / "point_params.json", params.model_dump(mode="json"))
     print(
-        "Running Taige continuum HF cG "
+        f"Running {taige_material_label(args.material)} continuum HF cG "
         f"u_D={point.u_D:.8g} meV theta={point.theta_deg:.8g} deg "
         f"n_k={args.n_k} q_mesh={args.q_mesh} q_shell={args.q_shell} "
         f"local_field_cutoff={args.local_field_cutoff} "
@@ -461,9 +475,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if not args.no_finite_q_ivc and int(args.n_k) % 6:
         parser.error("finite-Q IVC diagnostics require --n-k divisible by 6; use --no-finite-q-ivc to skip them")
-    output_root = Path(args.output_root)
-    if not output_root.is_absolute():
-        output_root = ROOT / output_root
+    output_root = _output_root_from_args(args)
+    args.output_root = str(output_root)
     output_root.mkdir(parents=True, exist_ok=True)
 
     if args.merge_only:

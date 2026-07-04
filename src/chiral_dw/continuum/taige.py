@@ -36,6 +36,17 @@ TAIGE_PHI_DEG = 91.0
 TAIGE_W_MEV = -13.3
 TAIGE_EPSILON = 16.7
 TAIGE_GATE_DISTANCE_NM = 30.0
+TAIGE_MOTE2_MATERIAL = "MoTe2_Taige"
+
+TAIGE_WSE2_A0_ANGSTROM = 3.32
+TAIGE_WSE2_M_EFF = 0.43
+TAIGE_WSE2_V_MEV = 9.0
+# Table SI uses phi=+128 deg; this C3-gauge code convention flips the sign,
+# as checked by the WSe2 K-valley first-band Chern number at u_D=0.
+TAIGE_WSE2_PHI_DEG = -128.0
+TAIGE_WSE2_W_MEV = 18.0
+TAIGE_WSE2_MATERIAL = "WSe2_Taige"
+TaigeMaterial = Literal["mote2", "wse2"]
 
 _INTRALAYER_SHIFTS: tuple[GridCoord, ...] = ((1, 0), (-1, 1), (0, -1))
 _C3_TUNNELING_RECIPROCAL_PARTS: tuple[GridCoord, ...] = ((0, 0), (0, 1), (-1, 1))
@@ -158,6 +169,7 @@ class TaigeBandStructure:
 
 def taige_model_params(
     *,
+    material: TaigeMaterial = "mote2",
     theta_deg: float = TAIGE_THETA_DEG,
     u_D: float = 0.0,
     plane_wave_shell: int = 1,
@@ -166,13 +178,31 @@ def taige_model_params(
 ) -> ContinuumModelParams:
     """Return Chiral_DW-native Taige model parameters."""
 
+    material_key = _normalize_taige_material(material)
+    if material_key == "mote2":
+        material_label = TAIGE_MOTE2_MATERIAL
+        a0_angstrom = TAIGE_A0_ANGSTROM
+        m_eff = TAIGE_M_EFF
+        moire_potential_mev = TAIGE_V_MEV
+        phi_deg = TAIGE_PHI_DEG
+        tunneling_mev = TAIGE_W_MEV
+    elif material_key == "wse2":
+        material_label = TAIGE_WSE2_MATERIAL
+        a0_angstrom = TAIGE_WSE2_A0_ANGSTROM
+        m_eff = TAIGE_WSE2_M_EFF
+        moire_potential_mev = TAIGE_WSE2_V_MEV
+        phi_deg = TAIGE_WSE2_PHI_DEG
+        tunneling_mev = TAIGE_WSE2_W_MEV
+    else:
+        raise ValueError(f"unknown Taige material {material!r}")
     return ContinuumModelParams(
+        material=material_label,
         theta_deg=float(theta_deg),
-        a0_angstrom=TAIGE_A0_ANGSTROM,
-        m_eff=TAIGE_M_EFF,
-        moire_potential_mev=TAIGE_V_MEV,
-        phi_deg=TAIGE_PHI_DEG,
-        tunneling_mev=TAIGE_W_MEV,
+        a0_angstrom=a0_angstrom,
+        m_eff=m_eff,
+        moire_potential_mev=moire_potential_mev,
+        phi_deg=phi_deg,
+        tunneling_mev=tunneling_mev,
         displacement_mev=float(u_D),
         plane_wave_shell=int(plane_wave_shell),
         n_bands=int(n_bands),
@@ -181,7 +211,99 @@ def taige_model_params(
     )
 
 
+def taige_wse2_model_params(
+    *,
+    theta_deg: float = TAIGE_THETA_DEG,
+    u_D: float = 0.0,
+    plane_wave_shell: int = 1,
+    n_bands: int = 2,
+    n_active_bands_per_valley: int = 1,
+) -> ContinuumModelParams:
+    """Return Taige Table-SI WSe2 continuum parameters in the local C3 gauge."""
+
+    return taige_model_params(
+        material="wse2",
+        theta_deg=theta_deg,
+        u_D=u_D,
+        plane_wave_shell=plane_wave_shell,
+        n_bands=n_bands,
+        n_active_bands_per_valley=n_active_bands_per_valley,
+    )
+
+
+def _normalize_taige_material(material: str) -> TaigeMaterial:
+    key = str(material).strip().lower().replace("-", "").replace("_", "")
+    if key in {"mote2", "mo"}:
+        return "mote2"
+    if key in {"wse2", "wse"}:
+        return "wse2"
+    raise ValueError("Taige material must be 'mote2' or 'wse2'")
+
+
+def taige_material_label(material: str) -> str:
+    """Return the artifact label for a supported Taige material preset."""
+
+    key = _normalize_taige_material(material)
+    return TAIGE_MOTE2_MATERIAL if key == "mote2" else TAIGE_WSE2_MATERIAL
+
+
+def taige_material_smear_length_nm(material: str) -> float:
+    """Return the default Taige Gaussian smear length for a material."""
+
+    key = _normalize_taige_material(material)
+    a0 = TAIGE_A0_ANGSTROM if key == "mote2" else TAIGE_WSE2_A0_ANGSTROM
+    return float(a0 / 10.0)
+
+
 def taige_interaction_params(
+    *,
+    material: TaigeMaterial = "mote2",
+    include_q0: bool = True,
+    q_mesh: Literal["shell", "full"] = "shell",
+    q_shell: int = 1,
+    local_field_cutoff: int = 0,
+    epsilon: float = TAIGE_EPSILON,
+    gate_distance_nm: float = TAIGE_GATE_DISTANCE_NM,
+    smear_length_nm: float | None = None,
+    interaction_strength_scale: float = 1.0,
+    hartree_scale: float = 1.0,
+    exchange_scale: float = 1.0,
+    vertex_workers: int = 1,
+    exchange_workers: int = 1,
+    density_vertex_retention: Literal["full", "hartree_only"] = "full",
+    density_vertex_layout: Literal["auto", "dense", "valley_compact"] = "auto",
+    exchange_representation: Literal["auto", "dense", "valley_sector"] = "auto",
+    form_factor_backend: Literal["auto", "scalar", "cached_gather", "vectorized"] = "auto",
+) -> ContinuumInteractionParams:
+    """Return dual-gated smeared Coulomb parameters for a Taige TMD preset."""
+
+    smear = (
+        taige_material_smear_length_nm(material)
+        if smear_length_nm is None
+        else float(smear_length_nm)
+    )
+    return ContinuumInteractionParams(
+        v0=float(interaction_strength_scale),
+        coulomb_kind="dual_gate",
+        epsilon=float(epsilon),
+        gate_distance_nm=float(gate_distance_nm),
+        include_q0=bool(include_q0),
+        smear_length_nm=smear,
+        q_mesh=q_mesh,
+        q_shell=int(q_shell),
+        local_field_cutoff=int(local_field_cutoff),
+        hartree_scale=float(hartree_scale),
+        exchange_scale=float(exchange_scale),
+        vertex_workers=int(vertex_workers),
+        exchange_workers=int(exchange_workers),
+        density_vertex_retention=density_vertex_retention,
+        density_vertex_layout=density_vertex_layout,
+        exchange_representation=exchange_representation,
+        form_factor_backend=form_factor_backend,
+    )
+
+
+def taige_wse2_interaction_params(
     *,
     include_q0: bool = True,
     q_mesh: Literal["shell", "full"] = "shell",
@@ -200,23 +322,22 @@ def taige_interaction_params(
     exchange_representation: Literal["auto", "dense", "valley_sector"] = "auto",
     form_factor_backend: Literal["auto", "scalar", "cached_gather", "vectorized"] = "auto",
 ) -> ContinuumInteractionParams:
-    """Return dual-gated smeared Coulomb parameters for Taige MoTe2."""
+    """Return dual-gated smeared Coulomb parameters for Taige WSe2."""
 
-    smear = TAIGE_A0_ANGSTROM / 10.0 if smear_length_nm is None else float(smear_length_nm)
-    return ContinuumInteractionParams(
-        v0=float(interaction_strength_scale),
-        coulomb_kind="dual_gate",
-        epsilon=float(epsilon),
-        gate_distance_nm=float(gate_distance_nm),
-        include_q0=bool(include_q0),
-        smear_length_nm=smear,
+    return taige_interaction_params(
+        material="wse2",
+        include_q0=include_q0,
         q_mesh=q_mesh,
-        q_shell=int(q_shell),
-        local_field_cutoff=int(local_field_cutoff),
-        hartree_scale=float(hartree_scale),
-        exchange_scale=float(exchange_scale),
-        vertex_workers=int(vertex_workers),
-        exchange_workers=int(exchange_workers),
+        q_shell=q_shell,
+        local_field_cutoff=local_field_cutoff,
+        epsilon=epsilon,
+        gate_distance_nm=gate_distance_nm,
+        smear_length_nm=smear_length_nm,
+        interaction_strength_scale=interaction_strength_scale,
+        hartree_scale=hartree_scale,
+        exchange_scale=exchange_scale,
+        vertex_workers=vertex_workers,
+        exchange_workers=exchange_workers,
         density_vertex_retention=density_vertex_retention,
         density_vertex_layout=density_vertex_layout,
         exchange_representation=exchange_representation,

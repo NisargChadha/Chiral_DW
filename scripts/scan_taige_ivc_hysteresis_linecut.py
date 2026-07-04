@@ -48,16 +48,23 @@ from chiral_dw.continuum import (  # noqa: E402
     taige_backend_cache_path,
     taige_backend_cache_signature,
     taige_interaction_params,
+    taige_material_label,
     taige_model_params,
     transport_projector_between_frames,
     trial_theta_rows,
     vp_hf_chern_rows,
 )
 
+DEFAULT_OUTPUT_ROOTS = {
+    "mote2": "results/taige_ivc_hysteresis",
+    "wse2": "results/wse2_ivc_hysteresis",
+}
+
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output-root", default="results/taige_ivc_hysteresis")
+    parser.add_argument("--material", choices=["mote2", "wse2"], default="mote2")
+    parser.add_argument("--output-root", default=None)
     parser.add_argument("--cache-root", default=None)
     parser.add_argument(
         "--sweep-axis",
@@ -86,7 +93,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--omit-q0", action="store_true")
     parser.add_argument("--epsilon", type=float, default=16.7)
     parser.add_argument("--gate-distance-nm", type=float, default=30.0)
-    parser.add_argument("--smear-length-nm", type=float, default=0.347)
+    parser.add_argument("--smear-length-nm", type=float, default=None)
     parser.add_argument("--v0", type=float, default=1.0)
     parser.add_argument("--exchange-scale", type=float, default=1.0)
     parser.add_argument("--hartree-scale", type=float, default=1.0)
@@ -202,7 +209,7 @@ def _selected_tasks(args: argparse.Namespace) -> list[tuple[str, int, str]]:
 
 
 def _output_root(args: argparse.Namespace) -> Path:
-    root = Path(args.output_root)
+    root = Path(args.output_root or DEFAULT_OUTPUT_ROOTS[str(args.material)])
     if not root.is_absolute():
         root = ROOT / root
     return root
@@ -245,6 +252,7 @@ def _ordered_line(
 
 def _model_for_point(args: argparse.Namespace, point: TaigeHysteresisPoint):
     return taige_model_params(
+        material=args.material,
         theta_deg=point.theta_deg,
         u_D=point.u_D,
         plane_wave_shell=args.plane_wave_shell,
@@ -255,6 +263,7 @@ def _model_for_point(args: argparse.Namespace, point: TaigeHysteresisPoint):
 
 def _interaction(args: argparse.Namespace):
     return taige_interaction_params(
+        material=args.material,
         include_q0=not args.omit_q0,
         q_mesh=args.q_mesh,
         q_shell=args.q_shell,
@@ -997,6 +1006,10 @@ def _run_branch(
 ) -> None:
     branch_dir = _branch_dir(args, sweep_axis, fixed_index, direction)
     branch_dir.mkdir(parents=True, exist_ok=True)
+    print(
+        f"Running {taige_material_label(args.material)} IVC hysteresis "
+        f"{sweep_axis} fixed_index={fixed_index} direction={direction}"
+    )
     points = _ordered_line(args, sweep_axis, fixed_index, direction)
     records: list[dict[str, Any] | TaigeHysteresisBranchRecord] = []
     previous_projector = None
@@ -1122,6 +1135,7 @@ def _dry_run_plan(args: argparse.Namespace) -> list[dict[str, Any]]:
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     output_root = _output_root(args)
+    args.output_root = str(output_root)
     output_root.mkdir(parents=True, exist_ok=True)
     plan_rows = _dry_run_plan(args)
     _write_csv(output_root / "hysteresis_branch_plan.csv", plan_rows)
