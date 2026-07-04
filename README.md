@@ -333,14 +333,18 @@ sbatch jobs/submit_wse2_ivc_hysteresis_full_pipeline.sh
 
 The WSe2 finite-size production sweeps mirror the MoTe2 `n_k` workflow. The
 cG sweep defaults to `n_k=18,20,22,24`; the hysteresis finite-size pipeline
-defaults to `n_k=18..24` on the `21 x 21` hysteresis grid and keeps backend
-caches under a scratch root:
+defaults to the first chunk, `n_k=18..22`, on the `41 x 41` hysteresis grid and
+keeps backend caches under a scratch root. Run `n_k=23,24` as a second chunk to
+avoid account job-limit pressure:
 
 ```bash
 sbatch jobs/submit_wse2_finite_size_by_nk.sh
 
 export CACHE_BASE_ROOT=/path/to/lab/scratch/chiral_dw_cache
-sbatch jobs/submit_wse2_ivc_hysteresis_finite_size_pipeline.sh
+SUBMIT_FINAL_MERGE=0 sbatch jobs/submit_wse2_ivc_hysteresis_finite_size_pipeline.sh
+
+N_K_LIST=23,24 FINAL_N_K_LIST=18,19,20,21,22,23,24 \
+  sbatch jobs/submit_wse2_ivc_hysteresis_finite_size_pipeline.sh
 ```
 
 If `CACHE_BASE_ROOT` is not set, the WSe2 finite-size hysteresis submitter uses
