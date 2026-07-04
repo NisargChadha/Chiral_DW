@@ -65,18 +65,15 @@ MERGE_TIME=${MERGE_TIME:-"02:00:00"}
 FINAL_MERGE_TIME=${FINAL_MERGE_TIME:-"02:00:00"}
 MERGE_MEM_GB=${MERGE_MEM_GB:-"8"}
 FINAL_MERGE_MEM_GB=${FINAL_MERGE_MEM_GB:-"8"}
-CLEANUP_BACKEND_CACHE=${CLEANUP_BACKEND_CACHE:-"0"}
+CLEANUP_BACKEND_CACHE=${CLEANUP_BACKEND_CACHE:-"1"}
+CLEANUP_TIME=${CLEANUP_TIME:-"01:00:00"}
+CLEANUP_MEM_GB=${CLEANUP_MEM_GB:-"2"}
 MAX_CONCURRENT_CACHE=${MAX_CONCURRENT_CACHE:-""}
 MAX_CONCURRENT_SCAN=${MAX_CONCURRENT_SCAN:-""}
 SUBMIT_FINAL_MERGE=${SUBMIT_FINAL_MERGE:-"1"}
 DEPENDENCY_AFTEROK=${DEPENDENCY_AFTEROK:-""}
 FINAL_DEPENDENCY_AFTEROK=${FINAL_DEPENDENCY_AFTEROK:-""}
 DRY_RUN=${DRY_RUN:-"0"}
-
-if [[ "$CLEANUP_BACKEND_CACHE" == "1" ]]; then
-  echo "WSe2 finite-size hysteresis caches are scratch-backed; leave CLEANUP_BACKEND_CACHE=0 to preserve them." >&2
-  exit 2
-fi
 
 if [[ "$DRY_RUN" != "1" ]]; then
   mkdir -p "$CACHE_BASE_ROOT"
@@ -141,6 +138,7 @@ for raw_nk in "${nks[@]}"; do
     "OUTPUT_ROOT=${mesh_root}"
     "CACHE_ROOT=${cache_root}"
     "CACHE_BASE_ROOT=${CACHE_BASE_ROOT}"
+    "RUN_SLUG=${RUN_SLUG}"
     "N_K=${nk}"
     "U_D_MIN=${U_D_MIN}"
     "U_D_MAX=${U_D_MAX}"
@@ -246,9 +244,29 @@ for raw_nk in "${nks[@]}"; do
     merge_job="$(submit_or_echo "${merge_cmd[@]}")"
   fi
   barrier_job="$merge_job"
+  cleanup_job=""
+  if [[ "$CLEANUP_BACKEND_CACHE" == "1" ]]; then
+    cleanup_cmd=(
+      "${mesh_env[@]}"
+      sbatch --parsable
+      "--mem=${CLEANUP_MEM_GB}G"
+      "--time=${CLEANUP_TIME}"
+      "--cpus-per-task=1"
+      --dependency=afterok:"$merge_job"
+      "--export=ALL"
+      jobs/cleanup_wse2_backend_cache.sh
+    )
+    if [[ "$DRY_RUN" == "1" ]]; then
+      submit_or_echo "${cleanup_cmd[@]}"
+      cleanup_job="dry_cleanup_${nk}"
+    else
+      cleanup_job="$(submit_or_echo "${cleanup_cmd[@]}")"
+    fi
+    barrier_job="$cleanup_job"
+  fi
   if [[ "$DRY_RUN" != "1" ]]; then
     barrier_job_ids+=("$barrier_job")
-    echo "n_k=${nk} cache=${cache_job} scan=${scan_job} merge=${merge_job} cache_root=${cache_root}"
+    echo "n_k=${nk} cache=${cache_job} scan=${scan_job} merge=${merge_job} cleanup=${cleanup_job:-disabled} cache_root=${cache_root}"
   fi
   previous_barrier_job="$barrier_job"
 done

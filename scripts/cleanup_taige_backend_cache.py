@@ -49,6 +49,15 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-root", required=True)
     parser.add_argument("--cache-root", default=None)
+    parser.add_argument(
+        "--allowed-cache-base-root",
+        action="append",
+        default=None,
+        help=(
+            "Optional base directory under which an out-of-output backend cache "
+            "may be deleted. Repeat to allow multiple scratch/project roots."
+        ),
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--disabled", action="store_true")
     return parser
@@ -62,15 +71,35 @@ def _resolve(path: str | Path) -> Path:
     return Path(path).expanduser().resolve(strict=False)
 
 
-def _assert_safe_cache_root(output_root: Path, cache_root: Path) -> None:
+def _assert_safe_cache_root(
+    output_root: Path,
+    cache_root: Path,
+    allowed_cache_base_roots: tuple[Path, ...] = (),
+) -> None:
     if cache_root.name != "backend_cache":
         raise ValueError(f"refusing to delete cache root that does not end in backend_cache: {cache_root}")
     if cache_root == output_root:
         raise ValueError("refusing to delete OUTPUT_ROOT itself")
     try:
         cache_root.relative_to(output_root)
+        return
     except ValueError as exc:
-        raise ValueError(f"refusing to delete cache root outside output root: {cache_root}") from exc
+        output_root_error = exc
+    for base_root in allowed_cache_base_roots:
+        if base_root == Path(base_root.anchor):
+            continue
+        try:
+            cache_root.relative_to(base_root)
+        except ValueError:
+            continue
+        if cache_root == base_root:
+            continue
+        return
+    allowed = ", ".join(str(path) for path in allowed_cache_base_roots) or "none"
+    raise ValueError(
+        "refusing to delete cache root outside output root and outside allowed cache bases: "
+        f"{cache_root}; allowed_cache_base_roots={allowed}"
+    ) from output_root_error
 
 
 def _missing_required_outputs(output_root: Path) -> tuple[str, ...]:
@@ -106,7 +135,8 @@ def cleanup_backend_cache(args: argparse.Namespace) -> BackendCacheCleanupManife
     started = _utc_now()
     output_root = _resolve(args.output_root)
     cache_root = _resolve(args.cache_root or output_root / "backend_cache")
-    _assert_safe_cache_root(output_root, cache_root)
+    allowed_cache_base_roots = tuple(_resolve(path) for path in (args.allowed_cache_base_root or ()))
+    _assert_safe_cache_root(output_root, cache_root, allowed_cache_base_roots)
     missing = _missing_required_outputs(output_root)
     if args.disabled:
         manifest = BackendCacheCleanupManifest(

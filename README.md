@@ -349,7 +349,9 @@ N_K_LIST=23,24 FINAL_N_K_LIST=18,19,20,21,22,23,24 \
 
 If `CACHE_BASE_ROOT` is not set, the WSe2 finite-size hysteresis submitter uses
 `LAB_SCRATCH_ROOT`, then `SCRATCH`, then a local fallback under
-`results/wse2_backend_cache_scratch`.
+`results/wse2_backend_cache_scratch`. Scratch backend caches are cleaned after
+each per-mesh merge by default; set `CLEANUP_BACKEND_CACHE=0` to preserve them
+for debugging.
 
 As with MoTe2, all WSe2 defaults are command-line or environment-variable
 overridable; the WSe2 jobs default to `SMEAR_LENGTH_NM=0.332`, i.e. `a0/10`.

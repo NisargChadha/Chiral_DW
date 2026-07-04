@@ -13,7 +13,7 @@ if str(SRC) not in sys.path:
 
 from merge_taige_ivc_hysteresis_finite_size import main  # noqa: E402
 
-DEFAULT_OUTPUT_ROOT = "results/wse2_ivc_hysteresis_finite_size_nk18_24_grid21"
+DEFAULT_OUTPUT_ROOT = "results/wse2_ivc_hysteresis_finite_size_nk18_24_grid41"
 DEFAULT_N_K_LIST = "18,19,20,21,22,23,24"
 
 

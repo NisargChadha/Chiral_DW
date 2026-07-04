@@ -34,6 +34,8 @@ FS_CG_JOB = ROOT / "jobs" / "scan_wse2_finite_size_cg_array.sh"
 FS_CG_MERGE_JOB = ROOT / "jobs" / "merge_wse2_finite_size_cg.sh"
 FS_CG_SUBMIT_JOB = ROOT / "jobs" / "submit_wse2_finite_size_by_nk.sh"
 FS_HYST_MERGE_JOB = ROOT / "jobs" / "merge_wse2_ivc_hysteresis_finite_size.sh"
+WSE2_CLEANUP_JOB = ROOT / "jobs" / "cleanup_wse2_backend_cache.sh"
+BACKEND_CLEANUP_SCRIPT = ROOT / "scripts" / "cleanup_taige_backend_cache.py"
 
 
 def test_wse2_taige_presets_and_mote2_defaults():
@@ -261,6 +263,7 @@ def test_wse2_job_scripts_mirror_taige_controls():
             str(FS_CG_SUBMIT_JOB),
             str(FS_HYST_MERGE_JOB),
             str(FINITE_SUBMIT_JOB),
+            str(WSE2_CLEANUP_JOB),
         ],
         check=True,
     )
@@ -311,12 +314,22 @@ def test_wse2_job_scripts_mirror_taige_controls():
     assert "jobs/precompute_wse2_backend_cache_array.sh" in finite_submit_text
     assert "jobs/scan_wse2_ivc_hysteresis_all_linecuts_array.sh" in finite_submit_text
     assert "jobs/merge_wse2_ivc_hysteresis_sweep.sh" in finite_submit_text
-    assert 'CLEANUP_BACKEND_CACHE=${CLEANUP_BACKEND_CACHE:-"0"}' in finite_submit_text
+    assert 'CLEANUP_BACKEND_CACHE=${CLEANUP_BACKEND_CACHE:-"1"}' in finite_submit_text
+    assert 'CLEANUP_TIME=${CLEANUP_TIME:-"01:00:00"}' in finite_submit_text
+    assert 'CLEANUP_MEM_GB=${CLEANUP_MEM_GB:-"2"}' in finite_submit_text
     assert "CACHE_BASE_ROOT" in finite_submit_text
     assert "LAB_SCRATCH_ROOT" in finite_submit_text
     assert "SCRATCH" in finite_submit_text
+    assert "jobs/cleanup_wse2_backend_cache.sh" in finite_submit_text
     assert "jobs/merge_wse2_ivc_hysteresis_finite_size.sh" in finite_submit_text
-    assert "scripts/merge_wse2_ivc_hysteresis_finite_size.py" in FS_HYST_MERGE_JOB.read_text()
+    fs_hyst_merge_text = FS_HYST_MERGE_JOB.read_text()
+    assert "scripts/merge_wse2_ivc_hysteresis_finite_size.py" in fs_hyst_merge_text
+    assert 'OUTPUT_ROOT=${OUTPUT_ROOT:-"results/wse2_ivc_hysteresis_finite_size_nk18_24_grid41"}' in fs_hyst_merge_text
+    assert "export OMP_NUM_THREADS=1" in fs_hyst_merge_text
+
+    cleanup_text = WSE2_CLEANUP_JOB.read_text()
+    assert "scripts/cleanup_taige_backend_cache.py" in cleanup_text
+    assert "--allowed-cache-base-root" in cleanup_text
 
 
 def test_wse2_finite_size_cg_submitter_dry_run_builds_by_nk_commands(tmp_path):
@@ -373,6 +386,7 @@ def test_wse2_finite_size_submitter_dry_run_builds_split_mesh_commands(tmp_path)
     assert "jobs/scan_wse2_ivc_hysteresis_all_linecuts_array.sh" in out
     assert "jobs/merge_wse2_ivc_hysteresis_sweep.sh" in out
     assert "jobs/cleanup_taige_backend_cache.sh" not in out
+    assert "jobs/cleanup_wse2_backend_cache.sh" in out
     assert "jobs/merge_wse2_ivc_hysteresis_finite_size.sh" in out
     assert "--array=0-5" in out
     assert "--array=0-9" in out
@@ -384,5 +398,58 @@ def test_wse2_finite_size_submitter_dry_run_builds_split_mesh_commands(tmp_path)
     assert "N_K=18" in out
     assert "N_K=22" in out
     assert "--dependency=afterok:dry_merge_18" in out
-    assert "--dependency=afterok:dry_merge_22" in out
+    assert "--dependency=afterok:dry_cleanup_18" in out
+    assert "--dependency=afterok:dry_cleanup_22" in out
     assert "Dry run task counts: cache=12 scan=20" in out
+
+
+def test_wse2_cleanup_allows_declared_scratch_cache_after_merge_outputs(tmp_path):
+    output_root = tmp_path / "out" / "nk_018"
+    output_root.mkdir(parents=True)
+    for name in (
+        "hysteresis_sweep.csv",
+        "hysteresis_comparison.csv",
+        "hysteresis_all_branch_candidates.csv",
+        "hysteresis_selected_trial_theta.csv",
+        "hysteresis_vp_chern_numbers.csv",
+    ):
+        (output_root / name).write_text("ok\n")
+
+    cache_base = tmp_path / "scratch_cache"
+    cache_root = cache_base / "run" / "nk_018" / "backend_cache"
+    cache_root.mkdir(parents=True)
+    (cache_root / "cache_point.npz").write_bytes(b"cache")
+
+    refused = subprocess.run(
+        [
+            sys.executable,
+            str(BACKEND_CLEANUP_SCRIPT),
+            "--output-root",
+            str(output_root),
+            "--cache-root",
+            str(cache_root),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert refused.returncode == 2
+    assert cache_root.exists()
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(BACKEND_CLEANUP_SCRIPT),
+            "--output-root",
+            str(output_root),
+            "--cache-root",
+            str(cache_root),
+            "--allowed-cache-base-root",
+            str(cache_base),
+        ],
+        check=True,
+    )
+    assert not cache_root.exists()
+    manifest = json.loads((output_root / "backend_cache_cleanup_manifest.json").read_text())
+    assert manifest["status"] == "deleted"
+    assert manifest["deleted"] is True
+    assert manifest["file_count"] == 1
