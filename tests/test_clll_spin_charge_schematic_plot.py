@@ -50,13 +50,29 @@ def test_clll_charge_density_grid_preserves_integrated_charge():
 def test_origin_artifact_regularization_is_display_only():
     module = _load_plot_module()
     x, y = np.meshgrid(np.array([-1.0, 0.0, 1.0]), np.array([-1.0, 0.0, 1.0]), indexing="ij")
-    density = np.zeros((3, 3), dtype=float)
+    density = -2.0 * np.ones((3, 3), dtype=float)
     density[1, 1] = 100.0
 
-    cleaned = module.regularize_origin_artifact(density, x, y, radius=0.25)
+    cleaned = module.regularize_origin_artifact(
+        density,
+        x,
+        y,
+        radius=0.25,
+        transition_radius=1.0,
+    )
 
-    assert cleaned[1, 1] == 0.0
+    assert cleaned[1, 1] == -2.0
     assert density[1, 1] == 100.0
+
+
+def test_default_wall_lengths_use_requested_values():
+    module = _load_plot_module()
+    params = module.CLLLSchematicPlotParams()
+    magnetic_length = module.triangular_moire_magnetic_length()
+    radius, width = module.clll_wall_lengths(params)
+
+    assert np.isclose(radius / magnetic_length, 25.0)
+    assert np.isclose(width / magnetic_length, 8.0)
 
 
 def test_charge_display_grid_is_upsampled_from_numerical_density():
@@ -70,6 +86,20 @@ def test_charge_display_grid_is_upsampled_from_numerical_density():
     assert display.rho_density.shape[1] == charge.rho_density.shape[1] * params.charge_upsample
     assert display.x_edges.shape == tuple(size + 1 for size in display.rho_density.shape)
     assert display.y_edges.shape == display.x_edges.shape
+
+
+def test_charge_display_grid_uses_plot_half_width():
+    module = _load_plot_module()
+    params = _small_plot_params(module).model_copy(update={"plot_half_width_lB": 3.0})
+    result = module.compute_clll_response(params)
+    charge = module.compute_charge_density_grid(result)
+    display = module.compute_charge_display_grid(charge, params)
+    half_width = module.plot_half_width(params)
+
+    assert np.isclose(np.min(display.x_edges), -half_width)
+    assert np.isclose(np.max(display.x_edges), half_width)
+    assert np.isclose(np.min(display.y_edges), -half_width)
+    assert np.isclose(np.max(display.y_edges), half_width)
 
 
 def test_clll_spin_charge_schematic_writes_png_and_pdf(tmp_path: Path):

@@ -43,16 +43,18 @@ class CLLLSchematicPlotParams(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     n_k: int = Field(default=5, ge=1)
-    n_r: int = Field(default=81, ge=3)
-    radius_lB: float = Field(default=14.0, gt=0.0)
-    width_lB: float = Field(default=4.5, gt=0.0)
-    patch_length_lB: float = Field(default=90.0, gt=0.0)
+    n_r: int = Field(default=121, ge=3)
+    radius_lB: float = Field(default=25.0, gt=0.0)
+    width_lB: float = Field(default=8.0, gt=0.0)
+    patch_length_lB: float = Field(default=110.0, gt=0.0)
+    plot_half_width_lB: float = Field(default=41.0, gt=0.0)
     winding: int = 1
     helicity: float = 0.0
-    spin_stride: int = Field(default=3, ge=1)
+    spin_stride: int = Field(default=4, ge=1)
     theta_count: int = Field(default=42, ge=3)
     charge_upsample: int = Field(default=6, ge=1)
     origin_regularization_lB: float = Field(default=1.25, ge=0.0)
+    origin_transition_lB: float = Field(default=2.5, ge=0.0)
     color_percentile: float = Field(default=99.5, gt=0.0, le=100.0)
     output: Path = Path("results/plots/clll_spin_charge_schematic.png")
     dpi: int = Field(default=300, ge=72)
@@ -150,20 +152,46 @@ def origin_regularization_radius(params: CLLLSchematicPlotParams) -> float:
     return float(params.origin_regularization_lB) * triangular_moire_magnetic_length()
 
 
+def origin_transition_radius(params: CLLLSchematicPlotParams) -> float:
+    return float(params.origin_transition_lB) * triangular_moire_magnetic_length()
+
+
+def plot_half_width(params: CLLLSchematicPlotParams) -> float:
+    return float(params.plot_half_width_lB) * triangular_moire_magnetic_length()
+
+
 def regularize_origin_artifact(
     density: np.ndarray,
     x_centers: np.ndarray,
     y_centers: np.ndarray,
     *,
     radius: float,
+    transition_radius: float,
 ) -> np.ndarray:
-    """Remove the display-only central plaquette artifact from the cLLL charge map."""
+    """Smoothly inpaint the display-only central plaquette artifact."""
 
     cleaned = np.asarray(density, dtype=float).copy()
     if radius <= 0.0:
         return cleaned
     rr = np.sqrt(np.asarray(x_centers, dtype=float) ** 2 + np.asarray(y_centers, dtype=float) ** 2)
-    cleaned[rr <= float(radius)] = 0.0
+    transition = max(float(transition_radius), 1e-14)
+    annulus = (rr > float(radius)) & (rr <= float(radius) + transition)
+    fallback = rr > float(radius)
+    if np.any(annulus):
+        fill_value = float(np.nanmedian(cleaned[annulus]))
+    elif np.any(fallback):
+        nearest_idx = int(np.nanargmin(np.where(fallback, rr, np.inf)))
+        fill_value = float(cleaned.reshape(-1)[nearest_idx])
+    else:
+        fill_value = 0.0
+
+    inner = rr <= float(radius)
+    blend = (rr > float(radius)) & (rr < float(radius) + transition)
+    cleaned[inner] = fill_value
+    if np.any(blend):
+        t = (rr[blend] - float(radius)) / transition
+        weight = t * t * (3.0 - 2.0 * t)
+        cleaned[blend] = (1.0 - weight) * fill_value + weight * cleaned[blend]
     return cleaned
 
 
@@ -178,26 +206,26 @@ def compute_charge_display_grid(
         charge.x_centers,
         charge.y_centers,
         radius=origin_regularization_radius(params),
+        transition_radius=origin_transition_radius(params),
     )
     upsample = int(params.charge_upsample)
-    if upsample <= 1:
-        return ChargeDisplayGrid(
-            x_edges=charge.x_edges,
-            y_edges=charge.y_edges,
-            rho_density=density,
-        )
 
     x_axis = np.asarray(charge.x_centers[:, 0], dtype=float)
     y_axis = np.asarray(charge.y_centers[0, :], dtype=float)
     n_x, n_y = density.shape
+    half_width = plot_half_width(params)
+    x_min = max(float(np.min(charge.x_edges)), -half_width)
+    x_max = min(float(np.max(charge.x_edges)), half_width)
+    y_min = max(float(np.min(charge.y_edges)), -half_width)
+    y_max = min(float(np.max(charge.y_edges)), half_width)
     x_edge_axis = np.linspace(
-        float(np.min(charge.x_edges)),
-        float(np.max(charge.x_edges)),
+        x_min,
+        x_max,
         n_x * upsample + 1,
     )
     y_edge_axis = np.linspace(
-        float(np.min(charge.y_edges)),
-        float(np.max(charge.y_edges)),
+        y_min,
+        y_max,
         n_y * upsample + 1,
     )
     x_center_axis = 0.5 * (x_edge_axis[:-1] + x_edge_axis[1:])
@@ -663,9 +691,16 @@ def render_clll_spin_charge_schematic(
     xy = np.asarray(result.solution.xy, dtype=float)
     field = np.asarray(result.solution.wall_field, dtype=float)
     spin_slice = (slice(None, None, params.spin_stride), slice(None, None, params.spin_stride))
-    x_spin = xy[..., 0][spin_slice]
-    y_spin = xy[..., 1][spin_slice]
-    field_spin = field[spin_slice]
+    x_spin_raw = xy[..., 0][spin_slice]
+    y_spin_raw = xy[..., 1][spin_slice]
+    field_spin_raw = field[spin_slice]
+    visible_half_width = plot_half_width(params)
+    visible_spin = (np.abs(x_spin_raw) <= visible_half_width) & (
+        np.abs(y_spin_raw) <= visible_half_width
+    )
+    x_spin = x_spin_raw[visible_spin]
+    y_spin = y_spin_raw[visible_spin]
+    field_spin = field_spin_raw[visible_spin]
     grid_step = max(
         abs(_uniform_grid_step(xy[:, 0, 0], "x")),
         abs(_uniform_grid_step(xy[0, :, 1], "y")),
@@ -745,6 +780,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=CLLLSchematicPlotParams.model_fields["patch_length_lB"].default,
     )
     parser.add_argument(
+        "--plot-half-width-lb",
+        type=float,
+        default=CLLLSchematicPlotParams.model_fields["plot_half_width_lB"].default,
+    )
+    parser.add_argument(
         "--winding",
         type=int,
         default=CLLLSchematicPlotParams.model_fields["winding"].default,
@@ -775,6 +815,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=CLLLSchematicPlotParams.model_fields["origin_regularization_lB"].default,
     )
     parser.add_argument(
+        "--origin-transition-lb",
+        type=float,
+        default=CLLLSchematicPlotParams.model_fields["origin_transition_lB"].default,
+    )
+    parser.add_argument(
         "--color-percentile",
         type=float,
         default=CLLLSchematicPlotParams.model_fields["color_percentile"].default,
@@ -796,12 +841,14 @@ def main(argv: list[str] | None = None) -> None:
         radius_lB=args.radius_lb,
         width_lB=args.width_lb,
         patch_length_lB=args.patch_length_lb,
+        plot_half_width_lB=args.plot_half_width_lb,
         winding=args.winding,
         helicity=args.helicity,
         spin_stride=args.spin_stride,
         theta_count=args.theta_count,
         charge_upsample=args.charge_upsample,
         origin_regularization_lB=args.origin_regularization_lb,
+        origin_transition_lB=args.origin_transition_lb,
         color_percentile=args.color_percentile,
         output=args.output,
         dpi=args.dpi,
