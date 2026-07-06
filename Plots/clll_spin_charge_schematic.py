@@ -249,6 +249,12 @@ def compute_charge_display_grid(
     )
 
 
+def electron_charge_density_over_e(number_density: np.ndarray) -> np.ndarray:
+    """Convert carrier number density to electron charge density divided by e."""
+
+    return -np.asarray(number_density, dtype=float)
+
+
 def _uniform_grid_step(values: np.ndarray, label: str) -> float:
     arr = np.asarray(values, dtype=float)
     if arr.ndim != 1 or len(arr) < 2:
@@ -658,13 +664,14 @@ def draw_charge_panel_projected(
     ylim: tuple[float, float] | None = None,
 ):
     x_proj, y_proj = project_plane_via_camera(projection_ax, charge.x_edges, charge.y_edges)
-    vmax = float(np.nanpercentile(np.abs(charge.rho_density), color_percentile))
+    charge_density = electron_charge_density_over_e(charge.rho_density)
+    vmax = float(np.nanpercentile(np.abs(charge_density), color_percentile))
     if not np.isfinite(vmax) or vmax <= 1e-15:
         vmax = 1.0
     mesh = ax.pcolormesh(
         x_proj,
         y_proj,
-        charge.rho_density,
+        charge_density,
         cmap="RdBu_r",
         shading="flat",
         vmin=-vmax,
@@ -749,7 +756,7 @@ def render_clll_spin_charge_schematic(
     draw_projected_guides(spin_ax, projection_ax, radii)
     style_projected_panel(spin_ax, xlim, ylim)
     colorbar = fig.colorbar(mesh, cax=cbar_ax)
-    colorbar.set_label(r"$\rho a_M^2$", rotation=90, labelpad=10)
+    colorbar.set_label(r"$\rho_Q a_M^2/e$", rotation=90, labelpad=10)
     colorbar.ax.tick_params(labelsize=9)
 
     fig.savefig(output, dpi=params.dpi)

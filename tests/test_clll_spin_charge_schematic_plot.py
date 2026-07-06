@@ -102,6 +102,16 @@ def test_charge_display_grid_uses_plot_half_width():
     assert np.isclose(np.max(display.y_edges), half_width)
 
 
+def test_electron_charge_density_display_uses_negative_e_sign():
+    module = _load_plot_module()
+    number_density = np.array([-2.0, 0.0, 3.5])
+
+    assert np.allclose(
+        module.electron_charge_density_over_e(number_density),
+        np.array([2.0, -0.0, -3.5]),
+    )
+
+
 def test_clll_spin_charge_schematic_writes_png_and_pdf(tmp_path: Path):
     module = _load_plot_module()
     output = tmp_path / "clll_spin_charge_schematic.png"
