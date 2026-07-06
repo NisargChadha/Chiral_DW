@@ -119,6 +119,15 @@ def test_electron_charge_density_display_uses_negative_e_sign():
     )
 
 
+def test_charge_density_colormap_softens_extrema():
+    module = _load_plot_module()
+    base = module.matplotlib.colormaps["RdBu_r"](np.array([0.0, 1.0]))
+    softened = module.charge_density_colormap()(np.array([0.0, 1.0]))
+
+    assert np.all(softened[:, :3] > base[:, :3])
+    assert np.allclose(softened[:, 3], 1.0)
+
+
 def test_clll_spin_charge_schematic_writes_png_and_pdf(tmp_path: Path):
     module = _load_plot_module()
     output = tmp_path / "clll_spin_charge_schematic.png"

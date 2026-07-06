@@ -20,7 +20,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.collections import PolyCollection
-from matplotlib.colors import Normalize
+from matplotlib.colors import ListedColormap, Normalize
 from scipy.interpolate import RegularGridInterpolator
 from mpl_toolkits.mplot3d import proj3d
 
@@ -253,6 +253,15 @@ def electron_charge_density_over_e(number_density: np.ndarray) -> np.ndarray:
     """Convert carrier number density to electron charge density divided by e."""
 
     return -np.asarray(number_density, dtype=float)
+
+
+def charge_density_colormap(lighten_fraction: float = 0.42) -> ListedColormap:
+    """Return a softened red-blue map for the charge-density panel."""
+
+    base = matplotlib.colormaps["RdBu_r"]
+    colors = base(np.linspace(0.0, 1.0, 256))
+    colors[:, :3] = (1.0 - lighten_fraction) * colors[:, :3] + lighten_fraction
+    return ListedColormap(colors, name="softened_RdBu_r")
 
 
 def _uniform_grid_step(values: np.ndarray, label: str) -> float:
@@ -619,10 +628,10 @@ def draw_projected_scale_arrows(ax, projection_ax, radius: float, width: float) 
             0.53 * xr[1] + 0.47 * xr[0],
             0.53 * yr[1] + 0.47 * yr[0],
         ),
-        xytext=(12, 10),
+        xytext=(0, 9),
         textcoords="offset points",
         fontsize=18,
-        ha="left",
+        ha="center",
         va="bottom",
         color="black",
     )
@@ -676,7 +685,7 @@ def draw_charge_panel_projected(
         x_proj,
         y_proj,
         charge_density,
-        cmap="RdBu_r",
+        cmap=charge_density_colormap(),
         shading="flat",
         vmin=-vmax,
         vmax=vmax,
