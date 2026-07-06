@@ -613,13 +613,17 @@ def draw_projected_scale_arrows(ax, projection_ax, radius: float, width: float) 
         xytext=(xr[0], yr[0]),
         arrowprops={"arrowstyle": "<->", "color": "black", "linewidth": 1.8, "shrinkA": 0, "shrinkB": 0},
     )
-    ax.text(
-        0.53 * xr[1] + 0.47 * xr[0],
-        0.53 * yr[1] + 0.47 * yr[0],
+    ax.annotate(
         r"$R$",
+        xy=(
+            0.53 * xr[1] + 0.47 * xr[0],
+            0.53 * yr[1] + 0.47 * yr[0],
+        ),
+        xytext=(12, 10),
+        textcoords="offset points",
         fontsize=18,
         ha="left",
-        va="center",
+        va="bottom",
         color="black",
     )
 
