@@ -37,7 +37,10 @@ from chiral_dw.continuum import (
     symmetric_convex_path,
     symmetric_convex_projector,
 )
-from chiral_dw.ideal_conjugate_lll import run_ideal_conjugate_lll_charge_benchmark
+from chiral_dw.ideal_conjugate_lll import (
+    run_explicit_chiral_domain_wall_texture_response,
+    run_ideal_conjugate_lll_charge_benchmark,
+)
 from chiral_dw.response import (
     KThetaResult,
     compute_cG,
@@ -82,6 +85,7 @@ __all__ = [
     "k_theta_from_projectors",
     "k_theta_from_projectors_with_basis",
     "run_ideal_conjugate_lll_charge_benchmark",
+    "run_explicit_chiral_domain_wall_texture_response",
     "run_continuum_symmetric_hf_workflow",
     "run_taige_branch_selected_symmetric_hf_workflow",
     "run_qhfm_charge_benchmark",

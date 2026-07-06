@@ -9,12 +9,16 @@ from pathlib import Path
 
 import numpy as np
 
+from chiral_dw.ac.response import k_theta_from_ac_projectors
 from chiral_dw.ac.nonideal import NonIdealACLLModel
 from chiral_dw.artifacts import RunArtifact, RunManifest
 from chiral_dw.config import (
+    DomainWallParams,
     IdealConjugateLLLChargeBenchmarkParams,
     IdealConjugateLLLChargeSummary,
 )
+from chiral_dw.domain_wall import DomainWallChargeProfile, charge_density_radial
+from chiral_dw.response import KThetaResult
 
 
 def _safe_link(overlap: complex, eps: float = 1e-14) -> complex:
@@ -76,6 +80,25 @@ class IdealConjugateLLLChargeBenchmarkResult:
     manifest: RunManifest | None = None
 
 
+@dataclass(frozen=True)
+class ExplicitConjugateLLLTextureResponseResult:
+    """No-HF response for an explicitly supplied conjugate-LLL texture."""
+
+    params: IdealConjugateLLLChargeBenchmarkParams
+    theta_edges: np.ndarray
+    phi_nodes: np.ndarray
+    theta_projectors: np.ndarray
+    response: KThetaResult
+    charge_profile: DomainWallChargeProfile
+    solution: IdealConjugateProjectorSolution
+    curvature_components: dict[str, np.ndarray]
+    rho_top: np.ndarray
+    rho_analytic: np.ndarray
+    q_sk: np.ndarray
+    n_z_center: np.ndarray
+    radial_profiles: dict[str, np.ndarray | float]
+
+
 class IdealConjugateLLLBasis:
     """Flat C=+1/C=-1 LLL active-band basis built from the AC backend."""
 
@@ -125,6 +148,12 @@ class IdealConjugateLLLBasis:
     def k_grid(self, extended: bool = False) -> np.ndarray:
         frac = self.fractional_k_grid(extended=extended)
         return frac[..., 0, None] * self.b1 + frac[..., 1, None] * self.b2
+
+    def k_from_fractional(self, frac: tuple[float, float] | np.ndarray) -> np.ndarray:
+        f = np.asarray(frac, dtype=float)
+        if f.shape != (2,):
+            raise ValueError("fractional momentum must have shape (2,)")
+        return f[0] * self.b1 + f[1] * self.b2
 
     def real_space_grid(self) -> np.ndarray:
         n = int(self.params.real_space.n_r)
@@ -180,6 +209,26 @@ class IdealConjugateLLLBasis:
             )
         )
 
+    def active_overlap(self, k: np.ndarray, p: np.ndarray) -> np.ndarray:
+        """Return diagonal overlap in the C=+1/C=-1 active two-band frame."""
+
+        return np.diag(
+            [
+                self.up_overlap(k, p),
+                self.down_overlap(k, p),
+            ]
+        ).astype(complex)
+
+    def active_overlap_fractional(
+        self,
+        frac_k: tuple[float, float] | np.ndarray,
+        frac_p: tuple[float, float] | np.ndarray,
+    ) -> np.ndarray:
+        return self.active_overlap(
+            self.k_from_fractional(frac_k),
+            self.k_from_fractional(frac_p),
+        )
+
     def band_cherns(self, n_k: int = 9) -> tuple[float, float]:
         # The validated benchmark limit is exactly the flat LLL; the opposite
         # sector is its time-reversed partner. Tests still exercise the backend
@@ -215,6 +264,292 @@ def circular_domain_wall_field(
             np.cos(theta),
         ],
         axis=-1,
+    )
+
+
+def normalize_spinors(spinors: np.ndarray, eps: float = 1e-14) -> np.ndarray:
+    """Return normalized two-component spinors."""
+
+    z = np.asarray(spinors, dtype=complex)
+    if z.shape[-1] != 2:
+        raise ValueError("spinors must have final dimension 2")
+    norm = np.linalg.norm(z, axis=-1, keepdims=True)
+    if np.any(norm < float(eps)):
+        raise ValueError("cannot normalize a spinor with near-zero norm")
+    return z / norm
+
+
+def projectors_from_spinors(spinors: np.ndarray, *, normalize: bool = True) -> np.ndarray:
+    """Return rank-one projectors |z><z| for explicit two-component spinors."""
+
+    z = normalize_spinors(spinors) if normalize else np.asarray(spinors, dtype=complex)
+    if z.shape[-1] != 2:
+        raise ValueError("spinors must have final dimension 2")
+    return z[..., :, None] * z[..., None, :].conj()
+
+
+def spinors_from_unit_vector_texture(
+    texture: np.ndarray,
+    *,
+    normalize: bool = True,
+) -> np.ndarray:
+    """Return spinors with <sigma> equal to a supplied two-band texture."""
+
+    n = np.asarray(texture, dtype=float)
+    if n.shape[-1] != 3:
+        raise ValueError("texture must have final dimension 3")
+    if normalize:
+        norm = np.linalg.norm(n, axis=-1, keepdims=True)
+        if np.any(norm < 1e-14):
+            raise ValueError("cannot normalize a texture vector with near-zero norm")
+        n = n / norm
+    theta = np.arccos(np.clip(n[..., 2], -1.0, 1.0))
+    phi = np.arctan2(n[..., 1], n[..., 0])
+    return np.stack(
+        [
+            np.cos(0.5 * theta),
+            np.exp(1j * phi) * np.sin(0.5 * theta),
+        ],
+        axis=-1,
+    )
+
+
+def chiral_domain_wall_spinor_texture(
+    xy: np.ndarray,
+    *,
+    radius: float,
+    width: float,
+    winding: int,
+    helicity: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return the explicit spinor texture and unit vector for the circular wall."""
+
+    field = circular_domain_wall_field(
+        xy,
+        radius=radius,
+        width=width,
+        winding=winding,
+        helicity=helicity,
+    )
+    return spinors_from_unit_vector_texture(field), field
+
+
+def uniform_conjugate_projector_path(
+    theta_edges: np.ndarray,
+    n_k: int,
+    *,
+    phi: float = 0.0,
+) -> np.ndarray:
+    """Return k-independent rank-one projectors for z=(cos th/2,e^{i phi} sin th/2)."""
+
+    theta = np.asarray(theta_edges, dtype=float)
+    if theta.ndim != 1:
+        raise ValueError("theta_edges must be one-dimensional")
+    n = int(n_k)
+    if n < 1:
+        raise ValueError("n_k must be at least 1")
+    projectors = np.zeros((len(theta), n, n, 2, 2), dtype=complex)
+    for it, th in enumerate(theta):
+        spinor = np.array(
+            [
+                np.cos(0.5 * float(th)),
+                np.exp(1j * float(phi)) * np.sin(0.5 * float(th)),
+            ],
+            dtype=complex,
+        )
+        projectors[it, :, :] = projectors_from_spinors(spinor)
+    return projectors
+
+
+def k_theta_from_ideal_conjugate_projectors(
+    basis: IdealConjugateLLLBasis,
+    projectors: np.ndarray,
+    theta_edges: np.ndarray,
+    phi_nodes: np.ndarray | None = None,
+) -> KThetaResult:
+    """Compute K(theta) and cG for explicit conjugate-LLL rank-one projectors."""
+
+    phi = (
+        np.asarray(phi_nodes, dtype=float)
+        if phi_nodes is not None
+        else np.array([0.0, 0.2], dtype=float)
+    )
+    return k_theta_from_ac_projectors(
+        basis,
+        np.asarray(projectors, dtype=complex),
+        np.asarray(theta_edges, dtype=float),
+        phi,
+    )
+
+
+def _periodic_extend_k(values: np.ndarray) -> np.ndarray:
+    arr = np.asarray(values)
+    if arr.shape[0] != arr.shape[1]:
+        raise ValueError("first two axes must be a square momentum grid")
+    return np.concatenate(
+        [
+            np.concatenate([arr, arr[:1]], axis=0),
+            np.concatenate([arr[:, :1], arr[:1, :1]], axis=0),
+        ],
+        axis=1,
+    )
+
+
+def explicit_texture_solution_from_spinors(
+    basis: IdealConjugateLLLBasis,
+    spinors: np.ndarray,
+    *,
+    xy: np.ndarray | None = None,
+    wall_field: np.ndarray | None = None,
+    normalize: bool = True,
+) -> IdealConjugateProjectorSolution:
+    """Build a conjugate-LLL solution object directly from supplied spinors.
+
+    ``spinors`` may be k-independent with shape ``(n_r,n_r,2)``, periodic on
+    the unextended momentum mesh with shape ``(n_k,n_k,n_r,n_r,2)``, or already
+    extended with shape ``(n_k+1,n_k+1,n_r,n_r,2)``.
+    """
+
+    z_in = normalize_spinors(spinors) if normalize else np.asarray(spinors, dtype=complex)
+    n_k = int(basis.params.grid.n_k)
+    n_r = int(basis.params.real_space.n_r)
+    if z_in.shape == (n_r, n_r, 2):
+        z = np.broadcast_to(z_in, (n_k + 1, n_k + 1, n_r, n_r, 2)).copy()
+    elif z_in.shape == (n_k, n_k, n_r, n_r, 2):
+        z = _periodic_extend_k(z_in)
+    elif z_in.shape == (n_k + 1, n_k + 1, n_r, n_r, 2):
+        z = z_in.copy()
+    else:
+        raise ValueError(
+            "spinors must have shape "
+            f"{(n_r, n_r, 2)}, {(n_k, n_k, n_r, n_r, 2)}, "
+            f"or {(n_k + 1, n_k + 1, n_r, n_r, 2)}"
+        )
+
+    xy_grid = basis.real_space_grid() if xy is None else np.asarray(xy, dtype=float)
+    if xy_grid.shape != (n_r, n_r, 2):
+        raise ValueError(f"xy must have shape {(n_r, n_r, 2)}")
+
+    projectors = projectors_from_spinors(z, normalize=False)
+    if wall_field is None:
+        p = projectors
+        field = np.stack(
+            [
+                2.0 * np.real(p[..., 0, 1]),
+                -2.0 * np.imag(p[..., 0, 1]),
+                np.real(p[..., 0, 0] - p[..., 1, 1]),
+            ],
+            axis=-1,
+        )
+        wall = np.mean(field, axis=(0, 1))
+    else:
+        wall = np.asarray(wall_field, dtype=float)
+        if wall.shape != (n_r, n_r, 3):
+            raise ValueError(f"wall_field must have shape {(n_r, n_r, 3)}")
+
+    eigenvalues = np.full((*z.shape[:-1], 2), np.nan, dtype=float)
+    gaps = np.full(z.shape[:-1], np.nan, dtype=float)
+    return IdealConjugateProjectorSolution(
+        k_points=basis.k_grid(extended=True),
+        k_fractional=basis.fractional_k_grid(extended=True),
+        xy=xy_grid,
+        wall_field=wall,
+        spinors=z,
+        band_projectors=projectors,
+        eigenvalues=eigenvalues,
+        gaps=gaps,
+    )
+
+
+def run_explicit_chiral_domain_wall_texture_response(
+    params: IdealConjugateLLLChargeBenchmarkParams | None = None,
+    *,
+    theta_edges: np.ndarray | None = None,
+    phi_nodes: np.ndarray | None = None,
+) -> ExplicitConjugateLLLTextureResponseResult:
+    """Evaluate cG and charge density for an explicitly supplied wall texture.
+
+    This path constructs the rank-one two-component wavefunction texture
+    directly and never diagonalizes a trial source Hamiltonian or runs HF.
+    """
+
+    texture_params = params or IdealConjugateLLLChargeBenchmarkParams()
+    basis = IdealConjugateLLLBasis(texture_params)
+    theta = (
+        np.asarray(theta_edges, dtype=float)
+        if theta_edges is not None
+        else np.linspace(0.0, np.pi, 42)
+    )
+    phi = (
+        np.asarray(phi_nodes, dtype=float)
+        if phi_nodes is not None
+        else np.array([0.0, 0.2], dtype=float)
+    )
+    theta_projectors = uniform_conjugate_projector_path(
+        theta,
+        texture_params.grid.n_k,
+    )
+    response = k_theta_from_ideal_conjugate_projectors(
+        basis,
+        theta_projectors,
+        theta,
+        phi,
+    )
+
+    xy = basis.real_space_grid()
+    spinors, field = chiral_domain_wall_spinor_texture(
+        xy,
+        radius=basis.radius,
+        width=basis.width,
+        winding=texture_params.winding,
+        helicity=texture_params.helicity,
+    )
+    solution = explicit_texture_solution_from_spinors(
+        basis,
+        spinors,
+        xy=xy,
+        wall_field=field,
+    )
+    evaluator = IdealConjugate4DCurvatureEvaluator(basis, solution)
+    components = evaluator.curvature_components_centered()
+    rho_top = evaluator.charge_per_realspace_plaquette_centered(components)
+    rho_analytic, q_sk, n_z_center = analytic_conjugate_charge_per_plaquette(solution)
+    radial_profiles_result = radial_diagnostics(
+        solution.xy,
+        rho_top,
+        rho_analytic,
+        q_sk,
+        radius=basis.radius,
+        width=basis.width,
+        winding=texture_params.winding,
+    )
+    r_max = max(2.0 * basis.radius, basis.radius + 8.0 * basis.width)
+    r = np.linspace(max(1e-6, r_max / 500.0), r_max, 500)
+    charge_profile = charge_density_radial(
+        r,
+        response.theta,
+        response.K,
+        DomainWallParams(
+            radius=basis.radius,
+            width=basis.width,
+            winding=texture_params.winding,
+            profile="logistic",
+        ),
+    )
+    return ExplicitConjugateLLLTextureResponseResult(
+        params=texture_params,
+        theta_edges=theta,
+        phi_nodes=phi,
+        theta_projectors=theta_projectors,
+        response=response,
+        charge_profile=charge_profile,
+        solution=solution,
+        curvature_components=components,
+        rho_top=rho_top,
+        rho_analytic=rho_analytic,
+        q_sk=q_sk,
+        n_z_center=n_z_center,
+        radial_profiles=radial_profiles_result,
     )
 
 
@@ -781,19 +1116,28 @@ def _artifact(
 
 
 __all__ = [
+    "ExplicitConjugateLLLTextureResponseResult",
     "IdealConjugate4DCurvatureEvaluator",
     "IdealConjugateLLLBasis",
     "IdealConjugateLLLChargeBenchmarkResult",
     "IdealConjugateProjectorSolution",
     "IdealConjugateTrialProjector",
     "analytic_conjugate_charge_per_plaquette",
+    "chiral_domain_wall_spinor_texture",
     "circular_domain_wall_field",
     "continuum_radial_charge_proxy",
+    "explicit_texture_solution_from_spinors",
+    "k_theta_from_ideal_conjugate_projectors",
+    "normalize_spinors",
     "plaquette_average",
+    "projectors_from_spinors",
     "radial_diagnostics",
+    "run_explicit_chiral_domain_wall_texture_response",
     "run_ideal_conjugate_lll_charge_benchmark",
+    "spinors_from_unit_vector_texture",
     "spinor_berry_phase_xy",
     "summarize_ideal_conjugate_charge",
     "triangular_moire_magnetic_length",
+    "uniform_conjugate_projector_path",
     "write_ideal_conjugate_lll_outputs",
 ]

@@ -12,8 +12,14 @@ from chiral_dw.ideal_conjugate_lll import (
     IdealConjugateLLLBasis,
     IdealConjugateProjectorSolution,
     IdealConjugateTrialProjector,
+    explicit_texture_solution_from_spinors,
+    k_theta_from_ideal_conjugate_projectors,
     plaquette_average,
+    projectors_from_spinors,
+    run_explicit_chiral_domain_wall_texture_response,
     run_ideal_conjugate_lll_charge_benchmark,
+    spinors_from_unit_vector_texture,
+    uniform_conjugate_projector_path,
 )
 
 
@@ -208,3 +214,81 @@ def test_ideal_conjugate_charge_writes_artifacts(tmp_path: Path):
     arrays = np.load(tmp_path / "ideal_conjugate_lll_charge.npz")
     for key in ("rho_top", "rho_analytic", "q_sk", "n_z_center", "charge_error", "Fkxky", "Fxy"):
         assert key in arrays
+
+
+def test_explicit_spinor_texture_builds_rank_one_projectors():
+    basis = IdealConjugateLLLBasis(_small_params(n_k=3, n_r=7))
+    xy = basis.real_space_grid()
+    field = np.zeros((*xy.shape[:2], 3), dtype=float)
+    field[..., 0] = 0.3
+    field[..., 1] = 0.4
+    field[..., 2] = np.sqrt(1.0 - 0.3**2 - 0.4**2)
+    spinors = spinors_from_unit_vector_texture(field)
+    solution = explicit_texture_solution_from_spinors(basis, spinors, wall_field=field)
+
+    p = solution.band_projectors
+    assert p.shape == (4, 4, 7, 7, 2, 2)
+    assert np.allclose(p, p.conj().swapaxes(-1, -2), atol=1e-12)
+    assert np.allclose(p @ p, p, atol=1e-12)
+    assert np.allclose(np.trace(p, axis1=-2, axis2=-1), 1.0, atol=1e-12)
+    assert np.allclose(solution.spin_expectation, field, atol=1e-12)
+
+
+def test_explicit_uniform_conjugate_projectors_give_expected_cg():
+    params = _small_params(n_k=5, n_r=7)
+    basis = IdealConjugateLLLBasis(params)
+    theta_edges = np.linspace(0.0, np.pi, 21)
+    projectors = uniform_conjugate_projector_path(theta_edges, params.grid.n_k)
+    response = k_theta_from_ideal_conjugate_projectors(
+        basis,
+        projectors,
+        theta_edges,
+        np.array([0.0, 0.2]),
+    )
+
+    assert abs(response.cG + 1.0 / (4.0 * np.pi)) < 1e-2
+    assert np.allclose(response.K + response.K[::-1], 0.0, atol=1e-10)
+
+
+def test_explicit_chiral_texture_response_matches_trial_charge_path():
+    params = _small_params(n_k=3, n_r=11)
+    explicit = run_explicit_chiral_domain_wall_texture_response(
+        params,
+        theta_edges=np.linspace(0.0, np.pi, 17),
+        phi_nodes=np.array([0.0, 0.2]),
+    )
+    trial = run_ideal_conjugate_lll_charge_benchmark(params)
+
+    assert np.isfinite(explicit.response.cG)
+    assert abs(explicit.response.cG) > 1e-3
+    assert np.allclose(explicit.rho_top, trial.rho_top, atol=1e-12)
+    assert np.allclose(explicit.rho_analytic, trial.rho_analytic, atol=1e-12)
+    assert np.allclose(explicit.solution.band_projectors, trial.solution.band_projectors, atol=1e-12)
+    assert np.all(np.isnan(explicit.solution.gaps))
+    assert explicit.charge_profile.rho_dimless.shape == (500,)
+
+
+def test_explicit_texture_charge_is_gauge_invariant_under_supplied_spinor_phase():
+    params = _small_params(n_k=3, n_r=9)
+    basis = IdealConjugateLLLBasis(params)
+    xy = basis.real_space_grid()
+    field = np.dstack(
+        [
+            np.zeros(xy.shape[:2]),
+            np.zeros(xy.shape[:2]),
+            np.ones(xy.shape[:2]),
+        ]
+    )
+    spinors = spinors_from_unit_vector_texture(field)
+    phase = np.exp(1j * (0.31 * xy[..., 0] + 0.17 * xy[..., 1]))
+    solution = explicit_texture_solution_from_spinors(
+        basis,
+        spinors * phase[..., None],
+        wall_field=field,
+    )
+
+    assert np.allclose(
+        solution.band_projectors,
+        projectors_from_spinors(spinors)[None, None],
+        atol=1e-12,
+    )
