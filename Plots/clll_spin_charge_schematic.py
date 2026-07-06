@@ -19,9 +19,10 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.collections import PolyCollection
 from matplotlib.colors import Normalize
+from scipy.interpolate import RegularGridInterpolator
 from mpl_toolkits.mplot3d import proj3d
-from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 from chiral_dw.config import (
     IdealConjugateLLLChargeBenchmarkParams,
@@ -41,15 +42,18 @@ class CLLLSchematicPlotParams(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    n_k: int = Field(default=7, ge=1)
-    n_r: int = Field(default=41, ge=3)
-    radius_lB: float = Field(default=10.0, gt=0.0)
-    width_lB: float = Field(default=3.5, gt=0.0)
-    patch_length_lB: float = Field(default=56.0, gt=0.0)
+    n_k: int = Field(default=5, ge=1)
+    n_r: int = Field(default=81, ge=3)
+    radius_lB: float = Field(default=14.0, gt=0.0)
+    width_lB: float = Field(default=4.5, gt=0.0)
+    patch_length_lB: float = Field(default=90.0, gt=0.0)
     winding: int = 1
     helicity: float = 0.0
-    spin_stride: int = Field(default=2, ge=1)
+    spin_stride: int = Field(default=3, ge=1)
     theta_count: int = Field(default=42, ge=3)
+    charge_upsample: int = Field(default=6, ge=1)
+    origin_regularization_lB: float = Field(default=1.25, ge=0.0)
+    color_percentile: float = Field(default=99.5, gt=0.0, le=100.0)
     output: Path = Path("results/plots/clll_spin_charge_schematic.png")
     dpi: int = Field(default=300, ge=72)
 
@@ -73,6 +77,15 @@ class ChargeDensityGrid:
     @property
     def integrated_charge_from_plaquettes(self) -> float:
         return float(np.sum(self.rho_per_plaquette))
+
+
+@dataclass(frozen=True)
+class ChargeDisplayGrid:
+    """Interpolated display-only charge density for the schematic panel."""
+
+    x_edges: np.ndarray
+    y_edges: np.ndarray
+    rho_density: np.ndarray
 
 
 def benchmark_params_from_plot_params(
@@ -130,6 +143,81 @@ def compute_charge_density_grid(
         rho_per_plaquette=rho_per_plaquette,
         rho_density=rho_per_plaquette / area,
         plaquette_area=area,
+    )
+
+
+def origin_regularization_radius(params: CLLLSchematicPlotParams) -> float:
+    return float(params.origin_regularization_lB) * triangular_moire_magnetic_length()
+
+
+def regularize_origin_artifact(
+    density: np.ndarray,
+    x_centers: np.ndarray,
+    y_centers: np.ndarray,
+    *,
+    radius: float,
+) -> np.ndarray:
+    """Remove the display-only central plaquette artifact from the cLLL charge map."""
+
+    cleaned = np.asarray(density, dtype=float).copy()
+    if radius <= 0.0:
+        return cleaned
+    rr = np.sqrt(np.asarray(x_centers, dtype=float) ** 2 + np.asarray(y_centers, dtype=float) ** 2)
+    cleaned[rr <= float(radius)] = 0.0
+    return cleaned
+
+
+def compute_charge_display_grid(
+    charge: ChargeDensityGrid,
+    params: CLLLSchematicPlotParams,
+) -> ChargeDisplayGrid:
+    """Return an interpolated charge-density grid for the tilted schematic plane."""
+
+    density = regularize_origin_artifact(
+        charge.rho_density,
+        charge.x_centers,
+        charge.y_centers,
+        radius=origin_regularization_radius(params),
+    )
+    upsample = int(params.charge_upsample)
+    if upsample <= 1:
+        return ChargeDisplayGrid(
+            x_edges=charge.x_edges,
+            y_edges=charge.y_edges,
+            rho_density=density,
+        )
+
+    x_axis = np.asarray(charge.x_centers[:, 0], dtype=float)
+    y_axis = np.asarray(charge.y_centers[0, :], dtype=float)
+    n_x, n_y = density.shape
+    x_edge_axis = np.linspace(
+        float(np.min(charge.x_edges)),
+        float(np.max(charge.x_edges)),
+        n_x * upsample + 1,
+    )
+    y_edge_axis = np.linspace(
+        float(np.min(charge.y_edges)),
+        float(np.max(charge.y_edges)),
+        n_y * upsample + 1,
+    )
+    x_center_axis = 0.5 * (x_edge_axis[:-1] + x_edge_axis[1:])
+    y_center_axis = 0.5 * (y_edge_axis[:-1] + y_edge_axis[1:])
+    xx, yy = np.meshgrid(x_center_axis, y_center_axis, indexing="ij")
+    interpolator = RegularGridInterpolator(
+        (x_axis, y_axis),
+        density,
+        method="linear",
+        bounds_error=False,
+        fill_value=0.0,
+    )
+    display_density = interpolator(np.stack([xx.ravel(), yy.ravel()], axis=-1)).reshape(
+        xx.shape
+    )
+    x_edges, y_edges = np.meshgrid(x_edge_axis, y_edge_axis, indexing="ij")
+    return ChargeDisplayGrid(
+        x_edges=x_edges,
+        y_edges=y_edges,
+        rho_density=display_density,
     )
 
 
@@ -286,8 +374,7 @@ def build_arrow_mesh(
     return shaft_faces + cone_faces, shaft_colors + cone_colors
 
 
-def draw_spin_arrows_3d(
-    ax,
+def build_spin_arrow_faces(
     x: np.ndarray,
     y: np.ndarray,
     field: np.ndarray,
@@ -296,7 +383,7 @@ def draw_spin_arrows_3d(
     shaft_radius: float,
     cone_radius: float,
     segments: int = 16,
-) -> Poly3DCollection:
+) -> tuple[list[np.ndarray], list[tuple[float, float, float, float]]]:
     cmap = matplotlib.colormaps["jet"]
     norm = Normalize(vmin=-1.0, vmax=1.0)
     all_faces = []
@@ -314,15 +401,7 @@ def draw_spin_arrows_3d(
         )
         all_faces.extend(faces)
         all_colors.extend(colors)
-    collection = Poly3DCollection(
-        all_faces,
-        facecolors=all_colors,
-        edgecolors="none",
-        linewidths=0.0,
-        rasterized=True,
-    )
-    ax.add_collection3d(collection)
-    return collection
+    return all_faces, all_colors
 
 
 def style_view_axis(
@@ -335,13 +414,14 @@ def style_view_axis(
     azim: float = -70.0,
     focal_length: float = 1.45,
     zoom: float = 1.65,
+    margin_fraction: float = 0.13,
 ) -> None:
     x_min = float(np.min(x_edges))
     x_max = float(np.max(x_edges))
     y_min = float(np.min(y_edges))
     y_max = float(np.max(y_edges))
     span = max(x_max - x_min, y_max - y_min)
-    margin = 0.04 * span
+    margin = float(margin_fraction) * span
     ax.set_xlim(x_min - margin, x_max + margin)
     ax.set_ylim(y_min - margin, y_max + margin)
     ax.set_zlim(-z_extent, z_extent)
@@ -368,25 +448,76 @@ def project_plane_via_camera(ax3d, x: np.ndarray, y: np.ndarray, z_level: float 
     return x_proj.reshape(shape), y_proj.reshape(shape)
 
 
-def draw_spin_guides_3d(ax, radii: tuple[float, float, float]) -> None:
-    for idx, radius in enumerate(radii):
-        if radius <= 0.0:
-            continue
-        theta = np.linspace(0.0, 2.0 * np.pi, 800)
-        x = radius * np.cos(theta)
-        y = radius * np.sin(theta)
-        z = np.full_like(theta, -0.04)
-        linewidth = 1.15 if idx == 1 else 0.8
-        dash_pattern = (10, 4.5) if idx == 1 else (5, 4)
-        ax.plot(
-            x,
-            y,
-            z,
-            color="black",
-            linewidth=linewidth,
-            linestyle="--",
-            dashes=dash_pattern,
-        )
+def project_vertices_via_camera(ax3d, vertices: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    verts = np.asarray(vertices, dtype=float)
+    if verts.ndim != 2 or verts.shape[1] != 3:
+        raise ValueError("vertices must have shape (n, 3)")
+    x_proj, y_proj, z_proj = proj3d.proj_transform(
+        verts[:, 0],
+        verts[:, 1],
+        verts[:, 2],
+        ax3d.get_proj(),
+    )
+    return np.asarray(x_proj), np.asarray(y_proj), np.asarray(z_proj)
+
+
+def projected_face_limits(
+    projection_ax,
+    faces: list[np.ndarray],
+    *,
+    margin_fraction: float = 0.03,
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    if not faces:
+        return ((-1.0, 1.0), (-1.0, 1.0))
+    x_values = []
+    y_values = []
+    for face in faces:
+        x_proj, y_proj, _ = project_vertices_via_camera(projection_ax, face)
+        x_values.append(x_proj)
+        y_values.append(y_proj)
+    x_all = np.concatenate(x_values)
+    y_all = np.concatenate(y_values)
+    x_margin = float(margin_fraction) * max(float(np.ptp(x_all)), 1e-12)
+    y_margin = float(margin_fraction) * max(float(np.ptp(y_all)), 1e-12)
+    return (
+        (float(np.min(x_all)) - x_margin, float(np.max(x_all)) + x_margin),
+        (float(np.min(y_all)) - y_margin, float(np.max(y_all)) + y_margin),
+    )
+
+
+def combine_limits(
+    first: tuple[tuple[float, float], tuple[float, float]],
+    second: tuple[tuple[float, float], tuple[float, float]],
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    return (
+        (min(first[0][0], second[0][0]), max(first[0][1], second[0][1])),
+        (min(first[1][0], second[1][0]), max(first[1][1], second[1][1])),
+    )
+
+
+def draw_spin_arrows_projected(
+    ax,
+    projection_ax,
+    faces: list[np.ndarray],
+    colors: list[tuple[float, float, float, float]],
+) -> PolyCollection:
+    projected = []
+    sort_keys = []
+    for face in faces:
+        x_proj, y_proj, z_proj = project_vertices_via_camera(projection_ax, face)
+        projected.append(np.column_stack([x_proj, y_proj]))
+        sort_keys.append(float(np.mean(z_proj)))
+    order = np.argsort(sort_keys)
+    collection = PolyCollection(
+        [projected[idx] for idx in order],
+        facecolors=[colors[idx] for idx in order],
+        edgecolors="none",
+        linewidths=0.0,
+        rasterized=True,
+        clip_on=False,
+    )
+    ax.add_collection(collection)
+    return collection
 
 
 def draw_projected_guides(ax, projection_ax, radii: tuple[float, float, float]) -> None:
@@ -407,6 +538,33 @@ def draw_projected_guides(ax, projection_ax, radii: tuple[float, float, float]) 
             linestyle="--",
             dashes=dash_pattern,
         )
+
+
+def projected_plane_limits(
+    projection_ax,
+    x_edges: np.ndarray,
+    y_edges: np.ndarray,
+    *,
+    margin_fraction: float = 0.03,
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    x_proj, y_proj = project_plane_via_camera(projection_ax, x_edges, y_edges)
+    x_margin = float(margin_fraction) * max(float(np.ptp(x_proj)), 1e-12)
+    y_margin = float(margin_fraction) * max(float(np.ptp(y_proj)), 1e-12)
+    return (
+        (float(np.min(x_proj)) - x_margin, float(np.max(x_proj)) + x_margin),
+        (float(np.min(y_proj)) - y_margin, float(np.max(y_proj)) + y_margin),
+    )
+
+
+def style_projected_panel(
+    ax,
+    xlim: tuple[float, float],
+    ylim: tuple[float, float],
+) -> None:
+    ax.set_xlim(*xlim)
+    ax.set_ylim(*ylim)
+    ax.set_aspect("equal")
+    ax.set_axis_off()
 
 
 def draw_projected_scale_arrows(ax, projection_ax, radius: float, width: float) -> None:
@@ -464,11 +622,15 @@ def draw_projected_scale_arrows(ax, projection_ax, radius: float, width: float) 
 def draw_charge_panel_projected(
     ax,
     projection_ax,
-    charge: ChargeDensityGrid,
+    charge: ChargeDisplayGrid,
     radii: tuple[float, float, float],
+    *,
+    color_percentile: float,
+    xlim: tuple[float, float] | None = None,
+    ylim: tuple[float, float] | None = None,
 ):
     x_proj, y_proj = project_plane_via_camera(projection_ax, charge.x_edges, charge.y_edges)
-    vmax = float(np.max(np.abs(charge.rho_density)))
+    vmax = float(np.nanpercentile(np.abs(charge.rho_density), color_percentile))
     if not np.isfinite(vmax) or vmax <= 1e-15:
         vmax = 1.0
     mesh = ax.pcolormesh(
@@ -483,12 +645,9 @@ def draw_charge_panel_projected(
     )
     draw_projected_guides(ax, projection_ax, radii)
     draw_projected_scale_arrows(ax, projection_ax, radii[1], radii[2] - radii[1])
-    x_margin = 0.03 * max(float(np.ptp(x_proj)), 1e-12)
-    y_margin = 0.03 * max(float(np.ptp(y_proj)), 1e-12)
-    ax.set_xlim(float(np.min(x_proj)) - x_margin, float(np.max(x_proj)) + x_margin)
-    ax.set_ylim(float(np.min(y_proj)) - y_margin, float(np.max(y_proj)) + y_margin)
-    ax.set_aspect("equal")
-    ax.set_axis_off()
+    if xlim is None or ylim is None:
+        xlim, ylim = projected_plane_limits(projection_ax, charge.x_edges, charge.y_edges)
+    style_projected_panel(ax, xlim, ylim)
     return mesh
 
 
@@ -497,6 +656,7 @@ def render_clll_spin_charge_schematic(
 ) -> tuple[Path, Path]:
     result = compute_clll_response(params)
     charge = compute_charge_density_grid(result)
+    display_charge = compute_charge_display_grid(charge, params)
     radius, width = clll_wall_lengths(params)
     radii = (max(radius - width, 0.0), radius, radius + width)
 
@@ -517,14 +677,7 @@ def render_clll_spin_charge_schematic(
     output.parent.mkdir(parents=True, exist_ok=True)
     pdf_output = output.with_suffix(".pdf")
 
-    fig = plt.figure(figsize=(9.6, 8.8), facecolor="white")
-    spin_ax = fig.add_axes([0.02, 0.53, 0.78, 0.43], projection="3d")
-    charge_ax = fig.add_axes([0.02, 0.07, 0.78, 0.43], frameon=False)
-    cbar_ax = fig.add_axes([0.84, 0.16, 0.026, 0.30])
-
-    draw_spin_guides_3d(spin_ax, radii)
-    draw_spin_arrows_3d(
-        spin_ax,
+    faces, colors = build_spin_arrow_faces(
         x_spin,
         y_spin,
         field_spin,
@@ -532,16 +685,40 @@ def render_clll_spin_charge_schematic(
         shaft_radius=0.055 * drawn_spacing,
         cone_radius=0.11 * drawn_spacing,
     )
-    style_view_axis(spin_ax, xy[..., 0], xy[..., 1])
-    fig.canvas.draw()
 
-    mesh = draw_charge_panel_projected(charge_ax, spin_ax, charge, radii)
+    fig = plt.figure(figsize=(9.8, 8.6), facecolor="white")
+    panel_box = [0.01, 0.06, 0.79, 0.42]
+    spin_panel_box = [panel_box[0], 0.54, panel_box[2], panel_box[3]]
+    projection_ax = fig.add_axes([0.0, 0.0, 0.01, 0.01], projection="3d")
+    spin_ax = fig.add_axes(spin_panel_box, frameon=False)
+    charge_ax = fig.add_axes(panel_box, frameon=False)
+    cbar_ax = fig.add_axes([0.84, 0.16, 0.028, 0.31])
+
+    style_view_axis(projection_ax, xy[..., 0], xy[..., 1])
+    projection_ax.set_visible(False)
+    fig.canvas.draw()
+    plane_limits = projected_plane_limits(projection_ax, display_charge.x_edges, display_charge.y_edges)
+    arrow_limits = projected_face_limits(projection_ax, faces)
+    xlim, ylim = combine_limits(plane_limits, arrow_limits)
+
+    mesh = draw_charge_panel_projected(
+        charge_ax,
+        projection_ax,
+        display_charge,
+        radii,
+        color_percentile=params.color_percentile,
+        xlim=xlim,
+        ylim=ylim,
+    )
+    draw_spin_arrows_projected(spin_ax, projection_ax, faces, colors)
+    draw_projected_guides(spin_ax, projection_ax, radii)
+    style_projected_panel(spin_ax, xlim, ylim)
     colorbar = fig.colorbar(mesh, cax=cbar_ax)
     colorbar.set_label(r"$\rho a_M^2$", rotation=90, labelpad=10)
     colorbar.ax.tick_params(labelsize=9)
 
-    fig.savefig(output, dpi=params.dpi, bbox_inches="tight", pad_inches=0.05)
-    fig.savefig(pdf_output, dpi=params.dpi, bbox_inches="tight", pad_inches=0.05)
+    fig.savefig(output, dpi=params.dpi)
+    fig.savefig(pdf_output, dpi=params.dpi)
     plt.close(fig)
     return output, pdf_output
 
@@ -588,6 +765,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=CLLLSchematicPlotParams.model_fields["theta_count"].default,
     )
     parser.add_argument(
+        "--charge-upsample",
+        type=int,
+        default=CLLLSchematicPlotParams.model_fields["charge_upsample"].default,
+    )
+    parser.add_argument(
+        "--origin-regularization-lb",
+        type=float,
+        default=CLLLSchematicPlotParams.model_fields["origin_regularization_lB"].default,
+    )
+    parser.add_argument(
+        "--color-percentile",
+        type=float,
+        default=CLLLSchematicPlotParams.model_fields["color_percentile"].default,
+    )
+    parser.add_argument("--dpi", type=int, default=CLLLSchematicPlotParams.model_fields["dpi"].default)
+    parser.add_argument(
         "--output",
         type=Path,
         default=CLLLSchematicPlotParams.model_fields["output"].default,
@@ -607,7 +800,11 @@ def main(argv: list[str] | None = None) -> None:
         helicity=args.helicity,
         spin_stride=args.spin_stride,
         theta_count=args.theta_count,
+        charge_upsample=args.charge_upsample,
+        origin_regularization_lB=args.origin_regularization_lb,
+        color_percentile=args.color_percentile,
         output=args.output,
+        dpi=args.dpi,
     )
     png_path, pdf_path = render_clll_spin_charge_schematic(params)
     print(f"wrote {png_path}")

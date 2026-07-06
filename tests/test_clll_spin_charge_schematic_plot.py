@@ -47,6 +47,31 @@ def test_clll_charge_density_grid_preserves_integrated_charge():
     )
 
 
+def test_origin_artifact_regularization_is_display_only():
+    module = _load_plot_module()
+    x, y = np.meshgrid(np.array([-1.0, 0.0, 1.0]), np.array([-1.0, 0.0, 1.0]), indexing="ij")
+    density = np.zeros((3, 3), dtype=float)
+    density[1, 1] = 100.0
+
+    cleaned = module.regularize_origin_artifact(density, x, y, radius=0.25)
+
+    assert cleaned[1, 1] == 0.0
+    assert density[1, 1] == 100.0
+
+
+def test_charge_display_grid_is_upsampled_from_numerical_density():
+    module = _load_plot_module()
+    params = _small_plot_params(module)
+    result = module.compute_clll_response(params)
+    charge = module.compute_charge_density_grid(result)
+    display = module.compute_charge_display_grid(charge, params)
+
+    assert display.rho_density.shape[0] == charge.rho_density.shape[0] * params.charge_upsample
+    assert display.rho_density.shape[1] == charge.rho_density.shape[1] * params.charge_upsample
+    assert display.x_edges.shape == tuple(size + 1 for size in display.rho_density.shape)
+    assert display.y_edges.shape == display.x_edges.shape
+
+
 def test_clll_spin_charge_schematic_writes_png_and_pdf(tmp_path: Path):
     module = _load_plot_module()
     output = tmp_path / "clll_spin_charge_schematic.png"
