@@ -56,7 +56,7 @@ class CLLLSchematicPlotParams(BaseModel):
     origin_regularization_lB: float = Field(default=1.25, ge=0.0)
     origin_transition_lB: float = Field(default=2.5, ge=0.0)
     color_percentile: float = Field(default=99.5, gt=0.0, le=100.0)
-    output: Path = Path("results/plots/clll_spin_charge_schematic.png")
+    output: Path = Path("Plots/figures/clll_spin_charge_schematic.png")
     dpi: int = Field(default=300, ge=72)
 
 

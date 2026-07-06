@@ -75,6 +75,13 @@ def test_default_wall_lengths_use_requested_values():
     assert np.isclose(width / magnetic_length, 8.0)
 
 
+def test_default_output_goes_to_plots_figures():
+    module = _load_plot_module()
+    params = module.CLLLSchematicPlotParams()
+
+    assert params.output == Path("Plots/figures/clll_spin_charge_schematic.png")
+
+
 def test_charge_display_grid_is_upsampled_from_numerical_density():
     module = _load_plot_module()
     params = _small_plot_params(module)
