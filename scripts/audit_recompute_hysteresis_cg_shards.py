@@ -173,6 +173,8 @@ def audit(args: argparse.Namespace) -> dict[str, Any]:
     n_point_tasks = int(args.n_point_tasks)
     missing_task_ids: list[int] = []
     complete_task_ids: list[int] = []
+    complete_phase_points = 0
+    missing_phase_points = 0
     missing_record_count = 0
     missing_source_projectors = 0
     incomplete_groups: list[dict[str, Any]] = []
@@ -189,6 +191,7 @@ def audit(args: argparse.Namespace) -> dict[str, Any]:
         missing_sources = [path for path in source_projectors if not path.exists()]
         if missing_records or (args.require_source_projectors and missing_sources):
             missing_task_ids.append(task_id)
+            missing_phase_points += 1
             missing_record_count += len(missing_records)
             missing_source_projectors += len(missing_sources)
             incomplete_groups.append(
@@ -206,6 +209,7 @@ def audit(args: argparse.Namespace) -> dict[str, Any]:
             )
         else:
             complete_task_ids.append(task_id)
+            complete_phase_points += 1
 
     missing_task_ids = sorted(set(missing_task_ids))
     complete_task_ids = sorted(set(complete_task_ids))
@@ -215,6 +219,10 @@ def audit(args: argparse.Namespace) -> dict[str, Any]:
         "n_source_rows": len(rows),
         "n_phase_points": len(grouped),
         "n_point_tasks": n_point_tasks,
+        "n_complete_phase_points": complete_phase_points,
+        "n_missing_phase_points": missing_phase_points,
+        "n_complete_shard_tasks": len(complete_task_ids),
+        "n_missing_shard_tasks": len(missing_task_ids),
         "n_complete_phase_tasks": len(complete_task_ids),
         "n_missing_phase_tasks": len(missing_task_ids),
         "n_missing_records": missing_record_count,
@@ -237,17 +245,24 @@ def audit(args: argparse.Namespace) -> dict[str, Any]:
 def main(argv: list[str] | None = None) -> int:
     summary = audit(_build_parser().parse_args(argv))
     print(
-        "phase_tasks complete={complete}/{total} missing={missing} missing_records={records}".format(
-            complete=summary["n_complete_phase_tasks"],
+        "phase_points complete={complete}/{total} missing={missing} missing_records={records}".format(
+            complete=summary["n_complete_phase_points"],
             total=summary["n_phase_points"],
-            missing=summary["n_missing_phase_tasks"],
+            missing=summary["n_missing_phase_points"],
             records=summary["n_missing_records"],
+        )
+    )
+    print(
+        "shard_tasks complete={complete}/{total} missing={missing}".format(
+            complete=summary["n_complete_shard_tasks"],
+            total=summary["n_point_tasks"],
+            missing=summary["n_missing_shard_tasks"],
         )
     )
     print(f"missing_slurm_array={summary['missing_slurm_array'] or '<none>'}")
     if summary["n_missing_source_projectors"]:
         print(f"missing_source_projectors={summary['n_missing_source_projectors']}")
-    return 1 if summary["n_missing_phase_tasks"] else 0
+    return 1 if summary["n_missing_shard_tasks"] else 0
 
 
 if __name__ == "__main__":

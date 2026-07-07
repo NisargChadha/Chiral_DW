@@ -651,11 +651,15 @@ def test_audit_recompute_hysteresis_cg_shards_reports_missing_task_ids(tmp_path:
         capture_output=True,
     )
     assert first.returncode == 1
+    assert "phase_points complete=1/2 missing=1 missing_records=2" in first.stdout
+    assert "shard_tasks complete=1/2 missing=1" in first.stdout
     assert "missing_slurm_array=1" in first.stdout
     assert array.read_text().strip() == "1"
     summary = json.loads(report.read_text())
-    assert summary["n_complete_phase_tasks"] == 1
-    assert summary["n_missing_phase_tasks"] == 1
+    assert summary["n_complete_phase_points"] == 1
+    assert summary["n_missing_phase_points"] == 1
+    assert summary["n_complete_shard_tasks"] == 1
+    assert summary["n_missing_shard_tasks"] == 1
     assert summary["n_missing_records"] == 2
 
     for branch_id in ("u_D_up", "theta_up"):
@@ -678,6 +682,8 @@ def test_audit_recompute_hysteresis_cg_shards_reports_missing_task_ids(tmp_path:
         text=True,
         capture_output=True,
     )
+    assert "phase_points complete=2/2 missing=0 missing_records=0" in second.stdout
+    assert "shard_tasks complete=2/2 missing=0" in second.stdout
     assert "missing_slurm_array=<none>" in second.stdout
 
 
