@@ -72,6 +72,13 @@ def test_default_output_goes_to_plots_figures():
     assert params.output == Path("Plots/figures/energy_vs_radius_schematic.png")
 
 
+def test_default_figure_canvas_is_square():
+    module = _load_plot_module()
+    params = module.EnergyRadiusSchematicParams()
+
+    assert params.figure_width == params.figure_height
+
+
 def test_nisarg_plot_style_uses_pt_serif_and_cm_mathtext():
     module = _load_plot_module()
 
@@ -107,3 +114,6 @@ def test_energy_radius_schematic_writes_png_and_pdf(tmp_path: Path):
     assert pdf_path.exists()
     assert png_path.stat().st_size > 0
     assert pdf_path.stat().st_size > 0
+
+    image = module.plt.imread(png_path)
+    assert image.shape[0] == image.shape[1]

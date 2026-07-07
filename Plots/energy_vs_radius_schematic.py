@@ -43,7 +43,7 @@ class EnergyRadiusSchematicParams(BaseModel):
     output: Path = Path("Plots/figures/energy_vs_radius_schematic.png")
     dpi: int = Field(default=320, ge=72)
     figure_width: float = Field(default=4.6, gt=0.0)
-    figure_height: float = Field(default=3.8, gt=0.0)
+    figure_height: float = Field(default=4.6, gt=0.0)
 
     @model_validator(mode="after")
     def _radius_window_contains_optimum(self) -> "EnergyRadiusSchematicParams":
@@ -181,6 +181,7 @@ def render_energy_radius_schematic(params: EnergyRadiusSchematicParams) -> tuple
     ax.set_xticks([r_star])
     ax.set_xticklabels([r"$R^{\!\ast}$"])
     ax.set_yticks([])
+    ax.set_box_aspect(1.0)
     ax.legend(
         loc="upper right",
         frameon=False,
@@ -195,8 +196,8 @@ def render_energy_radius_schematic(params: EnergyRadiusSchematicParams) -> tuple
     ax.margins(x=0.0)
 
     fig.tight_layout(pad=0.45)
-    fig.savefig(output, dpi=params.dpi, bbox_inches="tight", pad_inches=0.05)
-    fig.savefig(pdf_output, bbox_inches="tight", pad_inches=0.05)
+    fig.savefig(output, dpi=params.dpi)
+    fig.savefig(pdf_output)
     plt.close(fig)
     return output, pdf_output
 
