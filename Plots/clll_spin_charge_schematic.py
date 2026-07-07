@@ -55,7 +55,8 @@ NISARG_COLORS = {
 
 CHARGE_COLORBAR_LABEL = r"$\delta\rho(r)(a_M^2/e)$"
 CHARGE_COLORBAR_BOUNDS = (0.815, 0.135, 0.03, 0.36)
-CHARGE_COLORBAR_LABEL_POSITION = (1.0, 1.025)
+CHARGE_COLORBAR_LABEL_POSITION = (1.02, 1.025)
+CHARGE_COLORBAR_LABEL_HALIGN = "left"
 
 
 class CLLLSchematicPlotParams(BaseModel):
@@ -827,7 +828,7 @@ def render_clll_spin_charge_schematic(
         CHARGE_COLORBAR_LABEL_POSITION[1],
         CHARGE_COLORBAR_LABEL,
         transform=colorbar.ax.transAxes,
-        ha="right",
+        ha=CHARGE_COLORBAR_LABEL_HALIGN,
         va="bottom",
         fontsize=NISARG_FONTS["schematic_cbar_label"],
         color=NISARG_COLORS["axis"],

@@ -98,7 +98,8 @@ def test_charge_colorbar_geometry_is_left_shifted_and_taller():
     assert height > 0.31
     assert width >= 0.03
     assert y0 + height > 0.47
-    assert module.CHARGE_COLORBAR_LABEL_POSITION == (1.0, 1.025)
+    assert module.CHARGE_COLORBAR_LABEL_POSITION == (1.02, 1.025)
+    assert module.CHARGE_COLORBAR_LABEL_HALIGN == "left"
 
 
 def test_charge_display_grid_is_upsampled_from_numerical_density():
