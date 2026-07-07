@@ -20,7 +20,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.collections import PolyCollection
-from matplotlib.colors import ListedColormap, Normalize
+from matplotlib.colors import LinearSegmentedColormap, Normalize
 from scipy.interpolate import RegularGridInterpolator
 from mpl_toolkits.mplot3d import proj3d
 
@@ -35,6 +35,23 @@ from chiral_dw.ideal_conjugate_lll import (
     run_explicit_chiral_domain_wall_texture_response,
     triangular_moire_magnetic_length,
 )
+
+NISARG_FONTS = {
+    "base": 12,
+    "axis_label": 24,
+    "tick_label": 20,
+    "annotation": 18,
+    "schematic_cbar_label": 16,
+    "schematic_cbar_tick": 10,
+}
+
+NISARG_COLORS = {
+    "charge_negative": "#378d94",
+    "charge_center": "#f7f7f7",
+    "charge_positive": "#FD4C55",
+    "axis": "0.18",
+    "grid": "0.70",
+}
 
 
 class CLLLSchematicPlotParams(BaseModel):
@@ -255,13 +272,43 @@ def electron_charge_density_over_e(number_density: np.ndarray) -> np.ndarray:
     return -np.asarray(number_density, dtype=float)
 
 
-def charge_density_colormap(lighten_fraction: float = 0.42) -> ListedColormap:
-    """Return a softened red-blue map for the charge-density panel."""
+def charge_density_colormap() -> LinearSegmentedColormap:
+    """Return the Nisarg-style signed heatmap palette for charge density."""
 
-    base = matplotlib.colormaps["RdBu_r"]
-    colors = base(np.linspace(0.0, 1.0, 256))
-    colors[:, :3] = (1.0 - lighten_fraction) * colors[:, :3] + lighten_fraction
-    return ListedColormap(colors, name="softened_RdBu_r")
+    return LinearSegmentedColormap.from_list(
+        "nisarg_teal_red",
+        [
+            NISARG_COLORS["charge_negative"],
+            NISARG_COLORS["charge_center"],
+            NISARG_COLORS["charge_positive"],
+        ],
+        N=256,
+    )
+
+
+def apply_nisarg_plot_style() -> None:
+    plt.rcParams.update(
+        {
+            "font.family": "serif",
+            "font.serif": ["PT Serif Caption", "PT Serif", "DejaVu Serif"],
+            "mathtext.fontset": "cm",
+            "mathtext.rm": "serif",
+            "font.size": NISARG_FONTS["base"],
+            "axes.labelsize": NISARG_FONTS["axis_label"],
+            "xtick.labelsize": NISARG_FONTS["tick_label"],
+            "ytick.labelsize": NISARG_FONTS["tick_label"],
+            "axes.edgecolor": NISARG_COLORS["axis"],
+            "axes.linewidth": 1.15,
+            "axes.grid": True,
+            "grid.alpha": 0.22,
+            "grid.linewidth": 0.8,
+            "xtick.direction": "out",
+            "ytick.direction": "out",
+            "savefig.transparent": False,
+            "figure.facecolor": "white",
+            "axes.facecolor": "white",
+        }
+    )
 
 
 def _uniform_grid_step(values: np.ndarray, label: str) -> float:
@@ -630,7 +677,7 @@ def draw_projected_scale_arrows(ax, projection_ax, radius: float, width: float) 
         ),
         xytext=(0, 9),
         textcoords="offset points",
-        fontsize=18,
+        fontsize=NISARG_FONTS["annotation"],
         ha="center",
         va="bottom",
         color="black",
@@ -659,7 +706,7 @@ def draw_projected_scale_arrows(ax, projection_ax, radius: float, width: float) 
         xd[1],
         yd[1],
         r"$d_0$",
-        fontsize=18,
+        fontsize=NISARG_FONTS["annotation"],
         ha="left",
         va="center",
         color="black",
@@ -702,6 +749,7 @@ def draw_charge_panel_projected(
 def render_clll_spin_charge_schematic(
     params: CLLLSchematicPlotParams,
 ) -> tuple[Path, Path]:
+    apply_nisarg_plot_style()
     result = compute_clll_response(params)
     charge = compute_charge_density_grid(result)
     display_charge = compute_charge_display_grid(charge, params)
@@ -769,8 +817,13 @@ def render_clll_spin_charge_schematic(
     draw_projected_guides(spin_ax, projection_ax, radii)
     style_projected_panel(spin_ax, xlim, ylim)
     colorbar = fig.colorbar(mesh, cax=cbar_ax)
-    colorbar.set_label(r"$\rho_Q a_M^2/e$", rotation=90, labelpad=10)
-    colorbar.ax.tick_params(labelsize=9)
+    colorbar.set_label(
+        r"$\rho_Q a_M^2/e$",
+        rotation=90,
+        labelpad=10,
+        fontsize=NISARG_FONTS["schematic_cbar_label"],
+    )
+    colorbar.ax.tick_params(labelsize=NISARG_FONTS["schematic_cbar_tick"])
 
     fig.savefig(output, dpi=params.dpi)
     fig.savefig(pdf_output, dpi=params.dpi)

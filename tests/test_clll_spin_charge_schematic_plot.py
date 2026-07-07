@@ -119,13 +119,33 @@ def test_electron_charge_density_display_uses_negative_e_sign():
     )
 
 
-def test_charge_density_colormap_softens_extrema():
+def test_charge_density_colormap_uses_nisarg_signed_heatmap_colors():
     module = _load_plot_module()
-    base = module.matplotlib.colormaps["RdBu_r"](np.array([0.0, 1.0]))
-    softened = module.charge_density_colormap()(np.array([0.0, 1.0]))
+    endpoints = module.charge_density_colormap()(np.array([0.0, 1.0]))
+    expected = np.array(
+        [
+            [0x37 / 255.0, 0x8D / 255.0, 0x94 / 255.0],
+            [0xFD / 255.0, 0x4C / 255.0, 0x55 / 255.0],
+        ]
+    )
 
-    assert np.all(softened[:, :3] > base[:, :3])
-    assert np.allclose(softened[:, 3], 1.0)
+    assert np.allclose(endpoints[:, :3], expected)
+    assert np.allclose(endpoints[:, 3], 1.0)
+
+
+def test_nisarg_plot_style_uses_pt_serif_and_cm_mathtext():
+    module = _load_plot_module()
+
+    with module.matplotlib.rc_context():
+        module.apply_nisarg_plot_style()
+
+        assert module.plt.rcParams["font.family"] == ["serif"]
+        assert module.plt.rcParams["font.serif"][:3] == [
+            "PT Serif Caption",
+            "PT Serif",
+            "DejaVu Serif",
+        ]
+        assert module.plt.rcParams["mathtext.fontset"] == "cm"
 
 
 def test_clll_spin_charge_schematic_writes_png_and_pdf(tmp_path: Path):
