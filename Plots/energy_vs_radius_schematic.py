@@ -15,9 +15,9 @@ import matplotlib.pyplot as plt
 
 NISARG_FONTS = {
     "base": 12,
-    "axis_label": 28,
-    "tick_label": 20,
-    "legend": 13,
+    "axis_label": 30,
+    "tick_label": 22,
+    "legend": 14,
 }
 
 NISARG_COLORS = {
@@ -82,6 +82,15 @@ def apply_nisarg_plot_style() -> None:
             "axes.facecolor": "white",
         }
     )
+
+
+def style_boxed_axis(ax) -> None:
+    """Show a boxed four-sided axis frame in the Nisarg schematic style."""
+
+    for spine in ax.spines.values():
+        spine.set_visible(True)
+        spine.set_color(NISARG_COLORS["axis"])
+        spine.set_linewidth(1.15)
 
 
 def energy_terms(
@@ -190,9 +199,8 @@ def render_energy_radius_schematic(params: EnergyRadiusSchematicParams) -> tuple
         labelspacing=0.45,
     )
 
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
-    ax.tick_params(length=4.5, width=1.0)
+    style_boxed_axis(ax)
+    ax.tick_params(length=4.5, width=1.0, pad=5)
     ax.margins(x=0.0)
 
     fig.tight_layout(pad=0.45)

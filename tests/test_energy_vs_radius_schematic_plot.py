@@ -93,6 +93,22 @@ def test_nisarg_plot_style_uses_pt_serif_and_cm_mathtext():
         ]
         assert module.plt.rcParams["mathtext.fontset"] == "cm"
         assert module.plt.rcParams["legend.fontsize"] == module.NISARG_FONTS["legend"]
+        assert module.NISARG_FONTS["axis_label"] == 30
+        assert module.NISARG_FONTS["tick_label"] == 22
+        assert module.NISARG_FONTS["legend"] == 14
+
+
+def test_boxed_axis_keeps_all_spines_visible():
+    module = _load_plot_module()
+
+    with module.matplotlib.rc_context():
+        fig, ax = module.plt.subplots()
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        module.style_boxed_axis(ax)
+
+        assert all(spine.get_visible() for spine in ax.spines.values())
+        module.plt.close(fig)
 
 
 def test_energy_radius_schematic_writes_png_and_pdf(tmp_path: Path):
