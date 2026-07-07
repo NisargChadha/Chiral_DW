@@ -17,7 +17,7 @@ NISARG_FONTS = {
     "base": 12,
     "axis_label": 28,
     "tick_label": 20,
-    "legend": 17,
+    "legend": 13,
 }
 
 NISARG_COLORS = {
@@ -174,14 +174,20 @@ def render_energy_radius_schematic(params: EnergyRadiusSchematicParams) -> tuple
         zorder=5,
     )
 
-    ax.set_xlabel(r"$R$")
+    ax.set_xlabel(r"$R$", labelpad=-5)
     ax.set_ylabel(r"$E$")
     ax.set_xlim(params.r_min, params.r_max)
     ax.set_ylim(0.0, 1.08 * float(np.max(total)))
     ax.set_xticks([r_star])
-    ax.set_xticklabels([r"$R^\ast$"])
+    ax.set_xticklabels([r"$R^{\!\ast}$"])
     ax.set_yticks([])
-    ax.legend(loc="upper right", frameon=False, handlelength=2.6)
+    ax.legend(
+        loc="upper right",
+        frameon=False,
+        handlelength=2.1,
+        handletextpad=0.55,
+        labelspacing=0.45,
+    )
 
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)

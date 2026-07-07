@@ -85,6 +85,7 @@ def test_nisarg_plot_style_uses_pt_serif_and_cm_mathtext():
             "DejaVu Serif",
         ]
         assert module.plt.rcParams["mathtext.fontset"] == "cm"
+        assert module.plt.rcParams["legend.fontsize"] == module.NISARG_FONTS["legend"]
 
 
 def test_energy_radius_schematic_writes_png_and_pdf(tmp_path: Path):
