@@ -35,6 +35,7 @@ from chiral_dw.continuum import (
 ROOT = Path(__file__).resolve().parents[1]
 PRECOMPUTE_SCRIPT = ROOT / "scripts" / "precompute_taige_backend_cache.py"
 BRANCH_SCRIPT = ROOT / "scripts" / "scan_taige_ivc_hysteresis_linecut.py"
+RECOMPUTE_SCRIPT = ROOT / "scripts" / "recompute_hysteresis_cg_from_projectors.py"
 LEGACY_BRANCH_SCRIPT = ROOT / "scripts" / "scan_taige_ivc_hysteresis_by_theta.py"
 MERGE_SCRIPT = ROOT / "scripts" / "merge_taige_ivc_hysteresis_sweep.py"
 FINITE_MERGE_SCRIPT = ROOT / "scripts" / "merge_taige_ivc_hysteresis_finite_size.py"
@@ -47,6 +48,8 @@ SUBMIT_JOB = ROOT / "jobs" / "submit_taige_ivc_hysteresis_full_pipeline.sh"
 FINITE_MERGE_JOB = ROOT / "jobs" / "merge_taige_ivc_hysteresis_finite_size.sh"
 FINITE_SUBMIT_JOB = ROOT / "jobs" / "submit_taige_ivc_hysteresis_finite_size_pipeline.sh"
 CLEANUP_JOB = ROOT / "jobs" / "cleanup_taige_backend_cache.sh"
+RECOMPUTE_JOB = ROOT / "jobs" / "recompute_hysteresis_cg_from_projectors_by_mesh_array.sh"
+RECOMPUTE_SUBMIT_JOB = ROOT / "jobs" / "submit_recompute_hysteresis_cg_from_projectors_pipeline.sh"
 
 
 def _read_csv(path: Path) -> list[dict[str, str]]:
@@ -93,6 +96,49 @@ def _tiny_cli_args(output_root: Path) -> list[str]:
         "0.25",
         "--n-u-d",
         "2",
+        "--theta-min-deg",
+        "3.5",
+        "--theta-max-deg",
+        "3.5",
+        "--n-twist",
+        "1",
+        "--n-k",
+        "2",
+        "--plane-wave-shell",
+        "0",
+        "--n-bands",
+        "1",
+        "--n-active-bands-per-valley",
+        "1",
+        "--q-mesh",
+        "shell",
+        "--q-shell",
+        "0",
+        "--local-field-cutoff",
+        "0",
+        "--v0",
+        "0.0",
+        "--exchange-scale",
+        "0.0",
+        "--hartree-scale",
+        "0.0",
+        "--max-iter",
+        "1",
+        "--min-iter",
+        "0",
+        "--mixing-method",
+        "linear",
+    ]
+
+
+def _tiny_model_cli_args() -> list[str]:
+    return [
+        "--u-d-min",
+        "0",
+        "--u-d-max",
+        "0",
+        "--n-u-d",
+        "1",
         "--theta-min-deg",
         "3.5",
         "--theta-max-deg",
@@ -432,6 +478,93 @@ def test_hysteresis_scripts_smoke_resume_and_merge(tmp_path: Path):
     assert _read_csv(output_root / "hysteresis_vp_chern_numbers.csv")
 
 
+def test_recompute_hysteresis_cg_from_stored_projectors_rebuilds_missing_cache(tmp_path: Path):
+    source_root = tmp_path / "source_hysteresis"
+    recompute_root = tmp_path / "recomputed_hysteresis"
+    model_args = _tiny_model_cli_args()
+    subprocess.run(
+        [sys.executable, str(PRECOMPUTE_SCRIPT), "--output-root", str(source_root), *model_args],
+        check=True,
+        timeout=120,
+    )
+
+    branch_base = [
+        sys.executable,
+        str(BRANCH_SCRIPT),
+        "--output-root",
+        str(source_root),
+        *model_args,
+        "--random-seeds",
+        "7",
+        "--no-include-ordered-seed",
+        "--n-theta",
+        "3",
+        "--require-cache",
+    ]
+    for task_id in range(4):
+        subprocess.run(
+            [*branch_base, "--sweep-axis", "both", "--task-id", str(task_id)],
+            check=True,
+            timeout=120,
+        )
+    subprocess.run(
+        [sys.executable, str(MERGE_SCRIPT), "--output-root", str(source_root)],
+        check=True,
+        timeout=120,
+    )
+    source_projectors = list(source_root.rglob("projector_final.npz"))
+    assert len(source_projectors) == 4
+
+    recompute_cmd = [
+        sys.executable,
+        str(RECOMPUTE_SCRIPT),
+        "--material",
+        "mote2",
+        "--source-output-root",
+        str(source_root),
+        "--output-root",
+        str(recompute_root),
+        "--cache-root",
+        str(recompute_root / "rebuilt_cache"),
+        *model_args,
+        "--n-theta",
+        "3",
+        "--trial-interpolation",
+        "linear_interaction",
+    ]
+    subprocess.run(recompute_cmd, check=True, timeout=120)
+
+    branch_rows = _read_csv(recompute_root / "hysteresis_sweep.csv")
+    candidate_rows = _read_csv(recompute_root / "hysteresis_all_branch_candidates.csv")
+    trial_rows = _read_csv(recompute_root / "hysteresis_trial_theta.csv")
+    selected_rows = _read_csv(recompute_root / "hysteresis_selected_trial_theta.csv")
+    assert len(branch_rows) == 4
+    assert len(candidate_rows) == 4
+    assert len(trial_rows) == 12
+    assert selected_rows
+    assert {row["trial_interpolation"] for row in branch_rows} == {"linear_interaction"}
+    assert {row["trial_interpolation"] for row in trial_rows} == {"linear_interaction"}
+    assert {row["recomputed_from_stored_projector"] for row in branch_rows} == {"True"}
+    assert {row["recomputed_from_stored_projector"] for row in candidate_rows} == {"True"}
+    assert {row["recomputed_from_stored_projector"] for row in trial_rows} == {"True"}
+    assert all(Path(row["projector_path"]).is_relative_to(source_root) for row in branch_rows)
+    assert all(Path(row["source_projector_path"]).is_relative_to(source_root) for row in branch_rows)
+    assert not list(recompute_root.rglob("projector_final.npz"))
+    assert list((recompute_root / "rebuilt_cache").rglob("*.npz"))
+
+    rerun = subprocess.run(
+        recompute_cmd,
+        check=True,
+        timeout=120,
+        text=True,
+        capture_output=True,
+    )
+    assert "Skipping existing recomputed point" in rerun.stdout
+    summary = json.loads((recompute_root / "hysteresis_recompute_summary.json").read_text())
+    assert summary["recomputed_from_stored_projector"] is True
+    assert summary["n_skipped_existing"] == 4
+
+
 def test_hysteresis_finite_size_merge_writes_clean_fit_tables(tmp_path: Path):
     output_root = tmp_path / "fs_hysteresis"
     for n_k, cG in [(18, 1.2), (20, 1.1), (22, 1.05), (24, 1.0)]:
@@ -708,6 +841,8 @@ def test_hysteresis_slurm_wrappers_pass_cluster_defaults():
             str(FINITE_MERGE_JOB),
             str(FINITE_SUBMIT_JOB),
             str(CLEANUP_JOB),
+            str(RECOMPUTE_JOB),
+            str(RECOMPUTE_SUBMIT_JOB),
         ],
         check=True,
     )
@@ -719,6 +854,8 @@ def test_hysteresis_slurm_wrappers_pass_cluster_defaults():
     finite_merge_text = FINITE_MERGE_JOB.read_text()
     finite_submit_text = FINITE_SUBMIT_JOB.read_text()
     cleanup_text = CLEANUP_JOB.read_text()
+    recompute_text = RECOMPUTE_JOB.read_text()
+    recompute_submit_text = RECOMPUTE_SUBMIT_JOB.read_text()
 
     assert "#SBATCH -p serial_requeue" in cache_text
     assert "#SBATCH --array=0-440" in cache_text
@@ -775,6 +912,19 @@ def test_hysteresis_slurm_wrappers_pass_cluster_defaults():
     assert "jobs/cleanup_taige_backend_cache.sh" in finite_submit_text
     assert "--export=ALL" in finite_submit_text
     assert "cleanup_taige_backend_cache.py" in cleanup_text
+    assert "scripts/recompute_hysteresis_cg_from_projectors.py" in recompute_text
+    assert "SOURCE_OUTPUT_ROOT" in recompute_text
+    assert 'TRIAL_INTERPOLATION=${TRIAL_INTERPOLATION:-"linear_interaction"}' in recompute_text
+    assert 'N_THETA=${N_THETA:-"81"}' in recompute_text
+    assert "--source-output-root \"$source_mesh_root\"" in recompute_text
+    assert "--cache-root \"$cache_root\"" in recompute_text
+    assert "export OMP_NUM_THREADS=1" in recompute_text
+    assert "jobs/recompute_hysteresis_cg_from_projectors_by_mesh_array.sh" in recompute_submit_text
+    assert "jobs/merge_taige_ivc_hysteresis_finite_size.sh" in recompute_submit_text
+    assert "jobs/merge_wse2_ivc_hysteresis_finite_size.sh" in recompute_submit_text
+    assert 'NK_MEMORY_GB_MAP=${NK_MEMORY_GB_MAP:-"18:12,19:14,20:16,21:18,22:20,23:22,24:24"}' in recompute_submit_text
+    assert 'TRIAL_INTERPOLATION=${TRIAL_INTERPOLATION:-"linear_interaction"}' in recompute_submit_text
+    assert "CACHE_BASE_ROOT" in recompute_submit_text
 
     dry = subprocess.run(
         [str(FINITE_SUBMIT_JOB)],
@@ -797,3 +947,27 @@ def test_hysteresis_slurm_wrappers_pass_cluster_defaults():
     assert "--dependency=afterok:dry_cleanup_18" in dry
     assert "--dependency=afterok:dry_cleanup_19" in dry
     assert "--dependency=afterok:dry_cleanup_20" in dry
+
+    recompute_dry = subprocess.run(
+        [str(RECOMPUTE_SUBMIT_JOB)],
+        check=True,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "DRY_RUN": "1",
+            "SOURCE_OUTPUT_ROOT": str(ROOT / "results/source"),
+            "OUTPUT_ROOT": str(ROOT / "results/source_linear_interaction_recomputed"),
+            "N_K_LIST": "18,20",
+            "CACHE_BASE_ROOT": str(ROOT / "results/recompute_cache"),
+        },
+    ).stdout
+    assert "Dry run task counts: recompute=2 final_merge=1" in recompute_dry
+    assert "MATERIAL=mote2" in recompute_dry
+    assert "--mem=12G" in recompute_dry
+    assert "--mem=16G" in recompute_dry
+    assert "TRIAL_INTERPOLATION=linear_interaction" in recompute_dry
+    assert "SOURCE_OUTPUT_ROOT=" in recompute_dry
+    assert "jobs/recompute_hysteresis_cg_from_projectors_by_mesh_array.sh" in recompute_dry
+    assert "jobs/merge_taige_ivc_hysteresis_finite_size.sh" in recompute_dry
+    assert "--dependency=afterok:dry_recompute_18:dry_recompute_20" in recompute_dry

@@ -28,6 +28,7 @@ BY_THETA_JOB = ROOT / "jobs" / "scan_wse2_ivc_hysteresis_by_theta.sh"
 MERGE_JOB = ROOT / "jobs" / "merge_wse2_ivc_hysteresis_sweep.sh"
 SUBMIT_JOB = ROOT / "jobs" / "submit_wse2_ivc_hysteresis_full_pipeline.sh"
 FINITE_SUBMIT_JOB = ROOT / "jobs" / "submit_wse2_ivc_hysteresis_finite_size_pipeline.sh"
+RECOMPUTE_SUBMIT_JOB = ROOT / "jobs" / "submit_recompute_hysteresis_cg_from_projectors_pipeline.sh"
 FS_CG_SCRIPT = ROOT / "scripts" / "scan_wse2_finite_size_cg.py"
 FS_HYST_MERGE_SCRIPT = ROOT / "scripts" / "merge_wse2_ivc_hysteresis_finite_size.py"
 FS_CG_JOB = ROOT / "jobs" / "scan_wse2_finite_size_cg_array.sh"
@@ -263,6 +264,7 @@ def test_wse2_job_scripts_mirror_taige_controls():
             str(FS_CG_SUBMIT_JOB),
             str(FS_HYST_MERGE_JOB),
             str(FINITE_SUBMIT_JOB),
+            str(RECOMPUTE_SUBMIT_JOB),
             str(WSE2_CLEANUP_JOB),
         ],
         check=True,
@@ -325,6 +327,7 @@ def test_wse2_job_scripts_mirror_taige_controls():
     assert "SCRATCH" in finite_submit_text
     assert "jobs/cleanup_wse2_backend_cache.sh" in finite_submit_text
     assert "jobs/merge_wse2_ivc_hysteresis_finite_size.sh" in finite_submit_text
+    assert "submit_recompute_hysteresis_cg_from_projectors_pipeline.sh" in str(RECOMPUTE_SUBMIT_JOB)
     fs_hyst_merge_text = FS_HYST_MERGE_JOB.read_text()
     assert "scripts/merge_wse2_ivc_hysteresis_finite_size.py" in fs_hyst_merge_text
     assert 'OUTPUT_ROOT=${OUTPUT_ROOT:-"results/wse2_ivc_hysteresis_linear_interaction_finite_size_nk18_24_grid41"}' in fs_hyst_merge_text
@@ -405,6 +408,37 @@ def test_wse2_finite_size_submitter_dry_run_builds_split_mesh_commands(tmp_path)
     assert "--dependency=afterok:dry_cleanup_18" in out
     assert "--dependency=afterok:dry_cleanup_22" in out
     assert "Dry run task counts: cache=12 scan=20" in out
+
+
+def test_wse2_recompute_submitter_dry_run_uses_material_defaults(tmp_path):
+    env = os.environ.copy()
+    env.update(
+        {
+            "DRY_RUN": "1",
+            "MATERIAL": "wse2",
+            "SOURCE_OUTPUT_ROOT": str(tmp_path / "wse2_source"),
+            "OUTPUT_ROOT": str(tmp_path / "wse2_recomputed"),
+            "N_K_LIST": "18,22",
+            "CACHE_BASE_ROOT": str(tmp_path / "cache"),
+        }
+    )
+    proc = subprocess.run(
+        [str(RECOMPUTE_SUBMIT_JOB)],
+        check=True,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    out = proc.stdout
+
+    assert "MATERIAL=wse2" in out
+    assert "SMEAR_LENGTH_NM=0.332" in out
+    assert "--mem=12G" in out
+    assert "--mem=20G" in out
+    assert "TRIAL_INTERPOLATION=linear_interaction" in out
+    assert "jobs/recompute_hysteresis_cg_from_projectors_by_mesh_array.sh" in out
+    assert "jobs/merge_wse2_ivc_hysteresis_finite_size.sh" in out
+    assert "Dry run task counts: recompute=2 final_merge=1" in out
 
 
 def test_wse2_cleanup_allows_declared_scratch_cache_after_merge_outputs(tmp_path):

@@ -109,6 +109,18 @@ def _safe_float(row: dict[str, Any], key: str, default: float = float("nan")) ->
     return float(value)
 
 
+def _safe_bool(value: Any) -> bool:
+    if value is None or value == "":
+        return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "t", "yes", "y"}
+    return bool(value)
+
+
 def _trial_interpolation(row: dict[str, Any]) -> str:
     value = row.get("trial_interpolation")
     if value in {None, ""}:
@@ -328,6 +340,21 @@ def _all_candidate_summary(
         "max_commutator_norm": max(_safe_float(row, "commutator_norm") for row in ordered),
         "max_delta_P": max(_safe_float(row, "delta_P") for row in ordered),
         "max_delta_energy_abs": max(abs(_safe_float(row, "delta_energy", 0.0)) for row in ordered),
+        "recomputed_from_stored_projector": any(
+            _safe_bool(row.get("recomputed_from_stored_projector")) for row in ordered
+        ),
+        "source_output_roots": ";".join(
+            sorted({str(row.get("source_output_root")) for row in ordered if row.get("source_output_root")})
+        ),
+        "source_trial_interpolations": ";".join(
+            sorted(
+                {
+                    str(row.get("source_trial_interpolation"))
+                    for row in ordered
+                    if row.get("source_trial_interpolation")
+                }
+            )
+        ),
     }
     for row in ordered:
         label = _branch_id(row)
@@ -412,6 +439,10 @@ def merge_outputs(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[
                     "vp_minus_clean": row.get("vp_minus_clean"),
                     "run_id": row.get("run_id"),
                     "projector_path": row.get("projector_path"),
+                    "source_output_root": row.get("source_output_root"),
+                    "source_projector_path": row.get("source_projector_path"),
+                    "source_trial_interpolation": row.get("source_trial_interpolation"),
+                    "recomputed_from_stored_projector": row.get("recomputed_from_stored_projector"),
                     **_chern_columns(row),
                 }
             )
