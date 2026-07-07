@@ -54,8 +54,8 @@ class CLLLKappaThetaPlotParams(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    n_k: int = Field(default=9, ge=3)
-    theta_count: int = Field(default=161, ge=3)
+    n_k: int = Field(default=18, ge=3)
+    theta_count: int = Field(default=321, ge=3)
     phi_step: float = Field(default=0.2, gt=0.0)
     n_r: int = Field(default=7, ge=3)
     output: Path = Path("Plots/figures/clll_kappa_vs_theta.png")

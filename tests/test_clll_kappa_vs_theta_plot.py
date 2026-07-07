@@ -36,6 +36,8 @@ def test_default_output_goes_to_plots_figures():
     params = module.CLLLKappaThetaPlotParams()
 
     assert params.output == Path("Plots/figures/clll_kappa_vs_theta.png")
+    assert params.n_k == 18
+    assert params.theta_count == 321
 
 
 def test_nisarg_plot_style_uses_pt_serif_and_cm_mathtext():
