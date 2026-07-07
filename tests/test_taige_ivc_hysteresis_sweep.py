@@ -36,6 +36,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PRECOMPUTE_SCRIPT = ROOT / "scripts" / "precompute_taige_backend_cache.py"
 BRANCH_SCRIPT = ROOT / "scripts" / "scan_taige_ivc_hysteresis_linecut.py"
 RECOMPUTE_SCRIPT = ROOT / "scripts" / "recompute_hysteresis_cg_from_projectors.py"
+RECOMPUTE_AUDIT_SCRIPT = ROOT / "scripts" / "audit_recompute_hysteresis_cg_shards.py"
 LEGACY_BRANCH_SCRIPT = ROOT / "scripts" / "scan_taige_ivc_hysteresis_by_theta.py"
 MERGE_SCRIPT = ROOT / "scripts" / "merge_taige_ivc_hysteresis_sweep.py"
 FINITE_MERGE_SCRIPT = ROOT / "scripts" / "merge_taige_ivc_hysteresis_finite_size.py"
@@ -567,6 +568,117 @@ def test_recompute_hysteresis_cg_from_stored_projectors_rebuilds_missing_cache(t
     assert summary["recomputed_from_stored_projector"] is True
     assert summary["n_skipped_existing"] == 4
     assert summary["n_backend_contexts_loaded"] == 0
+
+
+def test_audit_recompute_hysteresis_cg_shards_reports_missing_task_ids(tmp_path: Path):
+    source_root = tmp_path / "source"
+    output_root = tmp_path / "recomputed"
+    source_root.mkdir()
+    rows = [
+        {
+            "u_index": 0,
+            "theta_index": 0,
+            "u_D_meV": 0.0,
+            "theta_deg": 2.0,
+            "point_label": "u_000_theta_000",
+            "branch_id": "u_D_up",
+            "sweep_axis": "u_D",
+            "direction": "up",
+            "projector_path": "branches/a/projector_final.npz",
+        },
+        {
+            "u_index": 0,
+            "theta_index": 0,
+            "u_D_meV": 0.0,
+            "theta_deg": 2.0,
+            "point_label": "u_000_theta_000",
+            "branch_id": "theta_up",
+            "sweep_axis": "theta",
+            "direction": "up",
+            "projector_path": "branches/b/projector_final.npz",
+        },
+        {
+            "u_index": 1,
+            "theta_index": 0,
+            "u_D_meV": 0.5,
+            "theta_deg": 2.0,
+            "point_label": "u_001_theta_000",
+            "branch_id": "u_D_up",
+            "sweep_axis": "u_D",
+            "direction": "up",
+            "projector_path": "branches/c/projector_final.npz",
+        },
+        {
+            "u_index": 1,
+            "theta_index": 0,
+            "u_D_meV": 0.5,
+            "theta_deg": 2.0,
+            "point_label": "u_001_theta_000",
+            "branch_id": "theta_up",
+            "sweep_axis": "theta",
+            "direction": "up",
+            "projector_path": "branches/d/projector_final.npz",
+        },
+    ]
+    with (source_root / "hysteresis_all_branch_candidates.csv").open("w", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+
+    for branch_id in ("u_D_up", "theta_up"):
+        point_dir = output_root / "branches" / "recomputed" / branch_id / "points" / "u_000_theta_000"
+        point_dir.mkdir(parents=True)
+        (point_dir / "point_record.json").write_text("{}\n")
+
+    report = tmp_path / "audit.json"
+    array = tmp_path / "missing.array"
+    first = subprocess.run(
+        [
+            sys.executable,
+            str(RECOMPUTE_AUDIT_SCRIPT),
+            "--source-output-root",
+            str(source_root),
+            "--output-root",
+            str(output_root),
+            "--n-point-tasks",
+            "2",
+            "--json-output",
+            str(report),
+            "--array-output",
+            str(array),
+        ],
+        text=True,
+        capture_output=True,
+    )
+    assert first.returncode == 1
+    assert "missing_slurm_array=1" in first.stdout
+    assert array.read_text().strip() == "1"
+    summary = json.loads(report.read_text())
+    assert summary["n_complete_phase_tasks"] == 1
+    assert summary["n_missing_phase_tasks"] == 1
+    assert summary["n_missing_records"] == 2
+
+    for branch_id in ("u_D_up", "theta_up"):
+        point_dir = output_root / "branches" / "recomputed" / branch_id / "points" / "u_001_theta_000"
+        point_dir.mkdir(parents=True)
+        (point_dir / "point_record.json").write_text("{}\n")
+
+    second = subprocess.run(
+        [
+            sys.executable,
+            str(RECOMPUTE_AUDIT_SCRIPT),
+            "--source-output-root",
+            str(source_root),
+            "--output-root",
+            str(output_root),
+            "--n-point-tasks",
+            "2",
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    assert "missing_slurm_array=<none>" in second.stdout
 
 
 def test_hysteresis_finite_size_merge_writes_clean_fit_tables(tmp_path: Path):
