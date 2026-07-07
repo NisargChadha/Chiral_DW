@@ -82,6 +82,13 @@ def test_default_output_goes_to_plots_figures():
     assert params.output == Path("Plots/figures/clll_spin_charge_schematic.png")
 
 
+def test_charge_colorbar_label_uses_horizontal_delta_rho_convention():
+    module = _load_plot_module()
+
+    assert module.CHARGE_COLORBAR_LABEL == r"$\delta\rho(r)(a_M^2/e)$"
+    assert module.NISARG_FONTS["annotation"] >= 22
+
+
 def test_charge_display_grid_is_upsampled_from_numerical_density():
     module = _load_plot_module()
     params = _small_plot_params(module)

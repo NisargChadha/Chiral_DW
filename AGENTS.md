@@ -67,6 +67,16 @@ and resolve that mismatch before committing and moving on.
 - Keep generated outputs under `results/` unless a test intentionally writes to
   a temporary directory.
 
+## Plotting Discipline
+
+- For plotting tasks, render and visually review the actual output before
+  reporting completion. Check for label, legend, colorbar, tick, and annotation
+  overlap; clipping; unreadable text; misplaced colorbars; distorted aspect
+  ratios; and phase-boundary visibility. Fix visible layout problems before
+  handing the plot back.
+- Display colorbar labels horizontally by default, placed above or near the
+  upper-right of the colorbar unless a plot-specific layout requires otherwise.
+
 ## Paired Notebook Workflow
 
 - Use Jupytext percent-format `.py` companions for substantial notebooks, e.g.

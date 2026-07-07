@@ -40,7 +40,7 @@ NISARG_FONTS = {
     "base": 12,
     "axis_label": 24,
     "tick_label": 20,
-    "annotation": 18,
+    "annotation": 22,
     "schematic_cbar_label": 16,
     "schematic_cbar_tick": 10,
 }
@@ -52,6 +52,8 @@ NISARG_COLORS = {
     "axis": "0.18",
     "grid": "0.70",
 }
+
+CHARGE_COLORBAR_LABEL = r"$\delta\rho(r)(a_M^2/e)$"
 
 
 class CLLLSchematicPlotParams(BaseModel):
@@ -702,10 +704,11 @@ def draw_projected_scale_arrows(ax, projection_ax, radius: float, width: float) 
         xytext=(xd[0], yd[0]),
         arrowprops={"arrowstyle": "<->", "color": "black", "linewidth": 1.8, "shrinkA": 0, "shrinkB": 0},
     )
-    ax.text(
-        xd[1],
-        yd[1],
+    ax.annotate(
         r"$d_0$",
+        xy=(xd[1], yd[1]),
+        xytext=(10, 0),
+        textcoords="offset points",
         fontsize=NISARG_FONTS["annotation"],
         ha="left",
         va="center",
@@ -817,11 +820,15 @@ def render_clll_spin_charge_schematic(
     draw_projected_guides(spin_ax, projection_ax, radii)
     style_projected_panel(spin_ax, xlim, ylim)
     colorbar = fig.colorbar(mesh, cax=cbar_ax)
-    colorbar.set_label(
-        r"$\rho_Q a_M^2/e$",
-        rotation=90,
-        labelpad=10,
+    colorbar.ax.text(
+        1.0,
+        1.035,
+        CHARGE_COLORBAR_LABEL,
+        transform=colorbar.ax.transAxes,
+        ha="right",
+        va="bottom",
         fontsize=NISARG_FONTS["schematic_cbar_label"],
+        color=NISARG_COLORS["axis"],
     )
     colorbar.ax.tick_params(labelsize=NISARG_FONTS["schematic_cbar_tick"])
 
