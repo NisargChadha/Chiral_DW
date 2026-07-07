@@ -34,6 +34,24 @@ Before every substantive implementation step:
 If a step drifts from the plan or reveals a physics/convention ambiguity, stop
 and resolve that mismatch before committing and moving on.
 
+## Cluster Run Discipline
+
+- Before recommending, submitting, or scaling any large SLURM array, cluster
+  phase-diagram sweep, finite-size sweep, or thousands-point recompute, first
+  run a single-point or single-shard smoke test through the exact same code path
+  and verify that the expected logs, scalar outputs, projector/output records,
+  and merge inputs are written correctly.
+- Do not launch or ask the user to launch thousand-point sweeps before the
+  single-point test has completed successfully. If the user explicitly asks to
+  bypass this rule, state the fairshare and queue-risk tradeoff clearly before
+  proceeding.
+- Scale cluster jobs gradually after the smoke test: one shard/point, then a
+  small batch or one mesh, then the full sweep. Prefer low-concurrency repair
+  runs over flooding the scheduler with many small jobs.
+- For cluster repair workflows, audit existing outputs first and rerun only the
+  missing or invalid work. Treat whole-mesh missing outputs as an orchestration
+  failure to diagnose, not as a reason to blindly submit all shards again.
+
 ## Implementation Conventions
 
 - All user-facing parameters, conventions, and artifact summaries should be
