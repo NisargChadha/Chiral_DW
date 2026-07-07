@@ -41,8 +41,8 @@ NISARG_FONTS = {
     "axis_label": 24,
     "tick_label": 20,
     "annotation": 22,
-    "schematic_cbar_label": 16,
-    "schematic_cbar_tick": 10,
+    "schematic_cbar_label": 18,
+    "schematic_cbar_tick": 11,
 }
 
 NISARG_COLORS = {
@@ -54,6 +54,8 @@ NISARG_COLORS = {
 }
 
 CHARGE_COLORBAR_LABEL = r"$\delta\rho(r)(a_M^2/e)$"
+CHARGE_COLORBAR_BOUNDS = (0.815, 0.135, 0.03, 0.36)
+CHARGE_COLORBAR_LABEL_POSITION = (1.0, 1.025)
 
 
 class CLLLSchematicPlotParams(BaseModel):
@@ -798,7 +800,7 @@ def render_clll_spin_charge_schematic(
     projection_ax = fig.add_axes([0.0, 0.0, 0.01, 0.01], projection="3d")
     spin_ax = fig.add_axes(spin_panel_box, frameon=False)
     charge_ax = fig.add_axes(panel_box, frameon=False)
-    cbar_ax = fig.add_axes([0.84, 0.16, 0.028, 0.31])
+    cbar_ax = fig.add_axes(CHARGE_COLORBAR_BOUNDS)
 
     style_view_axis(projection_ax, xy[..., 0], xy[..., 1])
     projection_ax.set_visible(False)
@@ -821,8 +823,8 @@ def render_clll_spin_charge_schematic(
     style_projected_panel(spin_ax, xlim, ylim)
     colorbar = fig.colorbar(mesh, cax=cbar_ax)
     colorbar.ax.text(
-        1.0,
-        1.035,
+        CHARGE_COLORBAR_LABEL_POSITION[0],
+        CHARGE_COLORBAR_LABEL_POSITION[1],
         CHARGE_COLORBAR_LABEL,
         transform=colorbar.ax.transAxes,
         ha="right",

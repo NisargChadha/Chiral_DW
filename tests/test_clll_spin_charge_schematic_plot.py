@@ -87,6 +87,18 @@ def test_charge_colorbar_label_uses_horizontal_delta_rho_convention():
 
     assert module.CHARGE_COLORBAR_LABEL == r"$\delta\rho(r)(a_M^2/e)$"
     assert module.NISARG_FONTS["annotation"] >= 22
+    assert module.NISARG_FONTS["schematic_cbar_label"] >= 18
+
+
+def test_charge_colorbar_geometry_is_left_shifted_and_taller():
+    module = _load_plot_module()
+    x0, y0, width, height = module.CHARGE_COLORBAR_BOUNDS
+
+    assert x0 < 0.84
+    assert height > 0.31
+    assert width >= 0.03
+    assert y0 + height > 0.47
+    assert module.CHARGE_COLORBAR_LABEL_POSITION == (1.0, 1.025)
 
 
 def test_charge_display_grid_is_upsampled_from_numerical_density():
