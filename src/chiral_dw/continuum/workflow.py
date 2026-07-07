@@ -562,6 +562,7 @@ def write_continuum_symmetric_hf_outputs(
         fieldnames = [
             "theta",
             "theta_over_pi",
+            "trial_interpolation",
             "K_theta",
             "cG",
             "w_vp_plus",

@@ -17,7 +17,7 @@ source .venv/bin/activate
 
 mkdir -p logs
 
-OUTPUT_ROOT=${OUTPUT_ROOT:-"results/wse2_ivc_hysteresis_finite_size_nk18_24_grid41"}
+OUTPUT_ROOT=${OUTPUT_ROOT:-"results/wse2_ivc_hysteresis_linear_interaction_finite_size_nk18_24_grid41"}
 N_K_LIST=${N_K_LIST:-"18,19,20,21,22,23,24"}
 MESH_DIR_TEMPLATE=${MESH_DIR_TEMPLATE:-"nk_{n_k:03d}"}
 FIT_MIN_CLEAN=${FIT_MIN_CLEAN:-"3"}

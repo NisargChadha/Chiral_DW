@@ -18,7 +18,7 @@ source .venv/bin/activate
 
 mkdir -p logs
 
-OUTPUT_ROOT=${OUTPUT_ROOT:-"results/taige_ivc_hysteresis_nk24_active2_shell5_theta2_4_u0_20"}
+OUTPUT_ROOT=${OUTPUT_ROOT:-"results/taige_ivc_hysteresis_linear_interaction_nk24_active2_shell5_theta2_4_u0_20"}
 CACHE_ROOT=${CACHE_ROOT:-"${OUTPUT_ROOT}/backend_cache"}
 
 U_D_MIN=${U_D_MIN:-"0.0"}

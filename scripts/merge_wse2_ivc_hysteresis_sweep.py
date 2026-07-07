@@ -13,7 +13,7 @@ if str(SRC) not in sys.path:
 
 from merge_taige_ivc_hysteresis_sweep import main  # noqa: E402
 
-DEFAULT_OUTPUT_ROOT = "results/wse2_ivc_hysteresis"
+DEFAULT_OUTPUT_ROOT = "results/wse2_ivc_hysteresis_linear_interaction"
 
 
 def _has_output_root(argv: list[str]) -> bool:

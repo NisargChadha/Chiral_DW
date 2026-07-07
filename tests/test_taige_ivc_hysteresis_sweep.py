@@ -390,6 +390,7 @@ def test_hysteresis_scripts_smoke_resume_and_merge(tmp_path: Path):
         "trace_error",
         "clean_branch",
         "trial_theta_csv",
+        "trial_interpolation",
         "vp_plus_energy_per_cell",
         "vp_minus_energy_per_cell",
         "vp_plus_clean",
@@ -404,6 +405,7 @@ def test_hysteresis_scripts_smoke_resume_and_merge(tmp_path: Path):
         "lowest_energy_raw_cG",
         "lowest_energy_clean_cG",
         "row_reliability",
+        "trial_interpolation",
     } <= set(comparison_rows[0])
     assert {"energy_up_minus_down", "mean_projector_overlap"} <= set(displacement_rows[0])
     assert {"energy_up_minus_down", "mean_projector_overlap"} <= set(twist_rows[0])
@@ -423,6 +425,10 @@ def test_hysteresis_scripts_smoke_resume_and_merge(tmp_path: Path):
         assert (output_root / name).exists()
     assert len(_read_csv(output_root / "hysteresis_trial_theta.csv")) == 16 * 3
     assert len(_read_csv(output_root / "hysteresis_selected_trial_theta.csv")) == 4 * 3
+    assert {
+        row["trial_interpolation"]
+        for row in _read_csv(output_root / "hysteresis_trial_theta.csv")
+    } == {"linear_interaction"}
     assert _read_csv(output_root / "hysteresis_vp_chern_numbers.csv")
 
 
@@ -502,6 +508,47 @@ def test_hysteresis_finite_size_merge_writes_clean_fit_tables(tmp_path: Path):
     assert selected[0]["n_clean_finite"] == "4"
     assert (output_root / "hysteresis_finite_size_selected_trial_theta.csv").exists()
     assert (output_root / "hysteresis_finite_size_vp_chern_boundary.csv").exists()
+
+
+def test_hysteresis_finite_size_merge_rejects_mixed_trial_interpolations(tmp_path: Path):
+    output_root = tmp_path / "fs_hysteresis_mixed"
+    for n_k, mode in [(18, "convex_full_hf"), (20, "linear_interaction")]:
+        mesh = output_root / f"nk_{n_k:03d}"
+        mesh.mkdir(parents=True)
+        (mesh / "hysteresis_comparison.csv").write_text(
+            "theta_index,u_index,theta_deg,u_D_meV,trial_interpolation,"
+            "lowest_energy_raw_branch,lowest_energy_raw_cG,lowest_energy_raw_clean,row_reliability\n"
+            f"0,0,3.5,10.0,{mode},u_D_up,1.0,true,clean\n"
+        )
+        (mesh / "hysteresis_all_branch_candidates.csv").write_text(
+            "theta_index,u_index,theta_deg,u_D_meV,trial_interpolation,branch_id,"
+            "gap_family_label,energy_total_per_cell,cG,clean_branch\n"
+            f"0,0,3.5,10.0,{mode},u_D_up,small_gap,-1.0,1.0,true\n"
+        )
+        (mesh / "hysteresis_selected_trial_theta.csv").write_text(
+            "theta_index,u_index,theta_deg,u_D_meV,theta,trial_interpolation,cG\n"
+            f"0,0,3.5,10.0,0.1,{mode},1.0\n"
+        )
+        (mesh / "hysteresis_vp_chern_numbers.csv").write_text(
+            "theta_index,u_index,theta_deg,u_D_meV,reference,band,chern\n"
+            "0,0,3.5,10.0,VP+,0,1.0\n"
+        )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(FINITE_MERGE_SCRIPT),
+            "--output-root",
+            str(output_root),
+            "--n-k-list",
+            "18,20",
+        ],
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode != 0
+    assert "mixes trial_interpolation modes" in result.stderr
 
 
 def test_cleanup_taige_backend_cache_is_safe_and_preserves_outputs(tmp_path: Path):
@@ -694,6 +741,7 @@ def test_hysteresis_slurm_wrappers_pass_cluster_defaults():
     assert 'MAX_ITER=${MAX_ITER:-"800"}' in all_branch_text
     assert 'MAX_ITER=${MAX_ITER:-"800"}' in cache_text
     assert 'N_THETA=${N_THETA:-"81"}' in all_branch_text
+    assert 'TRIAL_INTERPOLATION=${TRIAL_INTERPOLATION:-"linear_interaction"}' in all_branch_text
     assert 'RANDOM_SEEDS=${RANDOM_SEEDS:-"1,7,13,29,53"}' in branch_text
     assert 'REQUIRE_CACHE=${REQUIRE_CACHE:-"1"}' in branch_text
     assert 'TOTAL_TASKS=$((2 * (N_TWIST + N_U_D)))' in all_branch_text
@@ -705,6 +753,7 @@ def test_hysteresis_slurm_wrappers_pass_cluster_defaults():
     assert "--task-id \"$TASK_ID\"" in branch_text
     assert "--sweep-axis both" in all_branch_text
     assert "--sweep-axis u_D" in branch_text
+    assert "--trial-interpolation \"$TRIAL_INTERPOLATION\"" in all_branch_text
     assert "--density-vertex-retention \"$DENSITY_VERTEX_RETENTION\"" in cache_text
     assert "--density-vertex-layout \"$DENSITY_VERTEX_LAYOUT\"" in branch_text
     assert "--exchange-representation \"$EXCHANGE_REPRESENTATION\"" in branch_text
@@ -719,6 +768,7 @@ def test_hysteresis_slurm_wrappers_pass_cluster_defaults():
     assert 'NK_MEMORY_GB_MAP=${NK_MEMORY_GB_MAP:-"18:12,19:14,20:16"}' in finite_submit_text
     assert 'SEQUENTIAL_MESHES=${SEQUENTIAL_MESHES:-"1"}' in finite_submit_text
     assert 'CLEANUP_BACKEND_CACHE=${CLEANUP_BACKEND_CACHE:-"1"}' in finite_submit_text
+    assert 'TRIAL_INTERPOLATION=${TRIAL_INTERPOLATION:-"linear_interaction"}' in finite_submit_text
     assert "jobs/precompute_taige_backend_cache_array.sh" in finite_submit_text
     assert "jobs/scan_taige_ivc_hysteresis_all_linecuts_array.sh" in finite_submit_text
     assert "jobs/merge_taige_ivc_hysteresis_finite_size.sh" in finite_submit_text
@@ -743,6 +793,7 @@ def test_hysteresis_slurm_wrappers_pass_cluster_defaults():
     assert "--mem=12G" in dry
     assert "--mem=14G" in dry
     assert "--mem=16G" in dry
+    assert "TRIAL_INTERPOLATION=linear_interaction" in dry
     assert "--dependency=afterok:dry_cleanup_18" in dry
     assert "--dependency=afterok:dry_cleanup_19" in dry
     assert "--dependency=afterok:dry_cleanup_20" in dry

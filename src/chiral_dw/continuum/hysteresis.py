@@ -21,9 +21,10 @@ from chiral_dw.continuum.models import (
 )
 from chiral_dw.continuum.observables import active_basis_frames
 from chiral_dw.continuum.references import (
-    convex_weights,
+    TrialInterpolationMode,
+    interpolation_weights,
+    projector_path_for_interpolation,
     reference_diagnostics,
-    symmetric_convex_path,
 )
 from chiral_dw.continuum.workflow import (
     ContinuumSymmetricHFWorkflowResult,
@@ -250,10 +251,14 @@ def _reference_summary(refs: SymmetricHFReferences) -> dict[str, Any]:
     }
 
 
-def _nan_path_diagnostics(theta: np.ndarray) -> tuple[ConvexPathDiagnostics, ...]:
+def _nan_path_diagnostics(
+    theta: np.ndarray,
+    *,
+    trial_interpolation: TrialInterpolationMode = "convex_full_hf",
+) -> tuple[ConvexPathDiagnostics, ...]:
     rows: list[ConvexPathDiagnostics] = []
     for angle in theta:
-        w_plus, w_minus, w_ivc = convex_weights(float(angle))
+        w_plus, w_minus, w_ivc = interpolation_weights(float(angle), trial_interpolation)
         rows.append(
             ConvexPathDiagnostics(
                 theta=float(angle),
@@ -280,6 +285,7 @@ def build_branch_response_result(
     branch_label: str,
     suppress_texture_when_ivc_below_vp: bool = True,
     texture_energy_tie_atol: float = 1e-9,
+    trial_interpolation: TrialInterpolationMode = "convex_full_hf",
 ) -> ContinuumSymmetricHFWorkflowResult:
     """Build a VP+/VP-/branch-IVC response without re-solving cold IVC refs."""
 
@@ -311,6 +317,7 @@ def build_branch_response_result(
         "texture_invalid_reason": None if texture_valid else "ivc_energy_below_vp_reference",
         "texture_nan_policy": bool(suppress_texture_when_ivc_below_vp),
         "texture_energy_tie_atol": float(texture_energy_tie_atol),
+        "trial_interpolation": str(trial_interpolation),
     }
     theta = continuum_theta_nodes(params)
     if suppress_texture_when_ivc_below_vp and not texture_valid:
@@ -331,7 +338,10 @@ def build_branch_response_result(
             K=np.full(theta.shape, np.nan, dtype=float),
             cG=float("nan"),
         )
-        path_diagnostics = _nan_path_diagnostics(theta)
+        path_diagnostics = _nan_path_diagnostics(
+            theta,
+            trial_interpolation=trial_interpolation,
+        )
         summary = ChargeResponseSummary(
             cG=float("nan"),
             kappa_min=float("nan"),
@@ -340,7 +350,12 @@ def build_branch_response_result(
             valid_local_gap=False,
         )
     else:
-        projectors_flat, path_diagnostics = symmetric_convex_path(refs, theta)
+        projectors_flat, path_diagnostics = projector_path_for_interpolation(
+            refs,
+            theta,
+            trial_interpolation=trial_interpolation,
+            h0=bundle.backend.h0,
+        )
         projectors = projectors_flat.reshape(
             theta.size,
             bundle.grid.n_k,

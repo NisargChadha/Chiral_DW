@@ -93,6 +93,32 @@ def _bool_or_false(value: Any) -> bool:
     return False
 
 
+def _trial_interpolation(row: dict[str, Any]) -> str:
+    value = row.get("trial_interpolation")
+    if value in {None, ""}:
+        return "convex_full_hf"
+    return str(value)
+
+
+def _require_single_trial_interpolation(
+    rows: list[dict[str, Any]],
+    *,
+    context: str,
+) -> str:
+    modes = sorted({_trial_interpolation(row) for row in rows if row})
+    if not modes:
+        return "convex_full_hf"
+    if len(modes) > 1:
+        raise ValueError(
+            f"{context} mixes trial_interpolation modes {modes}; "
+            "run finite-size merges separately for convex_full_hf and linear_interaction"
+        )
+    mode = modes[0]
+    for row in rows:
+        row.setdefault("trial_interpolation", mode)
+    return mode
+
+
 def _mesh_fields(n_k: int, mesh_root: Path) -> dict[str, Any]:
     return {
         "n_k": int(n_k),
@@ -137,6 +163,7 @@ def _fit_source_from_comparisons(rows: list[dict[str, Any]]) -> list[dict[str, A
             "u_index": int(row["u_index"]),
             "theta_deg": _float_or_nan(row.get("theta_deg")),
             "u_D_meV": _float_or_nan(row.get("u_D_meV")),
+            "trial_interpolation": _trial_interpolation(row),
         }
         clean_branch = row.get("lowest_energy_clean_branch")
         if clean_branch not in {None, ""}:
@@ -180,6 +207,7 @@ def _fit_source_from_candidates(rows: list[dict[str, Any]]) -> list[dict[str, An
             "u_index": int(row["u_index"]),
             "theta_deg": _float_or_nan(row.get("theta_deg")),
             "u_D_meV": _float_or_nan(row.get("u_D_meV")),
+            "trial_interpolation": _trial_interpolation(row),
             "cG": _float_or_nan(row.get("cG")),
             "clean": _bool_or_false(row.get("clean_branch")),
         }
@@ -261,6 +289,7 @@ def _fit_one(group: list[dict[str, Any]], *, fit_min_clean: int, fit_degree: int
         "u_index": int(first["u_index"]),
         "theta_deg": _float_or_nan(first.get("theta_deg")),
         "u_D_meV": _float_or_nan(first.get("u_D_meV")),
+        "trial_interpolation": _trial_interpolation(first),
         "branch_label": first["branch_label"],
         "selection_kind": first.get("selection_kind"),
         "fit_status": status,
@@ -333,6 +362,10 @@ def merge_finite_size(args: argparse.Namespace) -> dict[str, Any]:
         filename="hysteresis_vp_chern_numbers.csv",
         output_name="hysteresis_finite_size_vp_chern_numbers.csv",
     )
+    trial_interpolation = _require_single_trial_interpolation(
+        [*comparison_rows, *candidate_rows, *trial_rows],
+        context=f"finite-size outputs under {output_root}",
+    )
     fit_source = [
         *_fit_source_from_comparisons(comparison_rows),
         *_fit_source_from_candidates(candidate_rows),
@@ -363,6 +396,7 @@ def merge_finite_size(args: argparse.Namespace) -> dict[str, Any]:
         "n_selected_trial_theta_rows": len(trial_rows),
         "n_vp_chern_rows": len(vp_chern_rows),
         "n_fit_rows": len(fit_rows),
+        "trial_interpolation": trial_interpolation,
         "tables": {
             "selected": str(output_root / "hysteresis_finite_size_selected.csv"),
             "branch_candidates": str(output_root / "hysteresis_finite_size_branch_candidates.csv"),

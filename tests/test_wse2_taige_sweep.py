@@ -278,13 +278,15 @@ def test_wse2_job_scripts_mirror_taige_controls():
 
     cache_text = CACHE_JOB.read_text()
     assert "scripts/precompute_wse2_backend_cache.py" in cache_text
-    assert 'OUTPUT_ROOT=${OUTPUT_ROOT:-"results/wse2_ivc_hysteresis_nk24_active2_shell5_theta2_4_u0_20"}' in cache_text
+    assert 'OUTPUT_ROOT=${OUTPUT_ROOT:-"results/wse2_ivc_hysteresis_linear_interaction_nk24_active2_shell5_theta2_4_u0_20"}' in cache_text
     assert 'SMEAR_LENGTH_NM=${SMEAR_LENGTH_NM:-"0.332"}' in cache_text
     assert "--no-vp-references" in cache_text
 
     hyst_text = HYST_JOB.read_text()
     assert "scripts/scan_wse2_ivc_hysteresis_linecut.py" in hyst_text
     assert "--sweep-axis both" in hyst_text
+    assert 'TRIAL_INTERPOLATION=${TRIAL_INTERPOLATION:-"linear_interaction"}' in hyst_text
+    assert "--trial-interpolation \"$TRIAL_INTERPOLATION\"" in hyst_text
     assert 'SMEAR_LENGTH_NM=${SMEAR_LENGTH_NM:-"0.332"}' in hyst_text
     assert "--compute-invalid-texture-cg" in hyst_text
 
@@ -304,13 +306,14 @@ def test_wse2_job_scripts_mirror_taige_controls():
     assert "jobs/scan_wse2_finite_size_cg_array.sh" in FS_CG_SUBMIT_JOB.read_text()
 
     finite_submit_text = FINITE_SUBMIT_JOB.read_text()
-    assert 'OUTPUT_ROOT=${OUTPUT_ROOT:-"results/wse2_ivc_hysteresis_finite_size_nk18_22_grid41"}' in finite_submit_text
+    assert 'OUTPUT_ROOT=${OUTPUT_ROOT:-"results/wse2_ivc_hysteresis_linear_interaction_finite_size_nk18_22_grid41"}' in finite_submit_text
     assert 'N_K_LIST=${N_K_LIST:-"18,19,20,21,22"}' in finite_submit_text
     assert 'FINAL_N_K_LIST=${FINAL_N_K_LIST:-"$N_K_LIST"}' in finite_submit_text
     assert 'NK_MEMORY_GB_MAP=${NK_MEMORY_GB_MAP:-"18:12,19:14,20:16,21:18,22:20,23:22,24:24"}' in finite_submit_text
     assert 'N_U_D=${N_U_D:-"41"}' in finite_submit_text
     assert 'N_TWIST=${N_TWIST:-"41"}' in finite_submit_text
     assert 'SMEAR_LENGTH_NM=${SMEAR_LENGTH_NM:-"0.332"}' in finite_submit_text
+    assert 'TRIAL_INTERPOLATION=${TRIAL_INTERPOLATION:-"linear_interaction"}' in finite_submit_text
     assert "jobs/precompute_wse2_backend_cache_array.sh" in finite_submit_text
     assert "jobs/scan_wse2_ivc_hysteresis_all_linecuts_array.sh" in finite_submit_text
     assert "jobs/merge_wse2_ivc_hysteresis_sweep.sh" in finite_submit_text
@@ -324,7 +327,7 @@ def test_wse2_job_scripts_mirror_taige_controls():
     assert "jobs/merge_wse2_ivc_hysteresis_finite_size.sh" in finite_submit_text
     fs_hyst_merge_text = FS_HYST_MERGE_JOB.read_text()
     assert "scripts/merge_wse2_ivc_hysteresis_finite_size.py" in fs_hyst_merge_text
-    assert 'OUTPUT_ROOT=${OUTPUT_ROOT:-"results/wse2_ivc_hysteresis_finite_size_nk18_24_grid41"}' in fs_hyst_merge_text
+    assert 'OUTPUT_ROOT=${OUTPUT_ROOT:-"results/wse2_ivc_hysteresis_linear_interaction_finite_size_nk18_24_grid41"}' in fs_hyst_merge_text
     assert "export OMP_NUM_THREADS=1" in fs_hyst_merge_text
 
     cleanup_text = WSE2_CLEANUP_JOB.read_text()
@@ -393,6 +396,7 @@ def test_wse2_finite_size_submitter_dry_run_builds_split_mesh_commands(tmp_path)
     assert "--mem=12G" in out
     assert "--mem=20G" in out
     assert "SMEAR_LENGTH_NM=0.332" in out
+    assert "TRIAL_INTERPOLATION=linear_interaction" in out
     assert f"CACHE_BASE_ROOT={tmp_path / 'cache'}" in out
     assert f"CACHE_ROOT={tmp_path / 'cache' / 'wse2_fs' / 'nk_018' / 'backend_cache'}" in out
     assert "N_K=18" in out

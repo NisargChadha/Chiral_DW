@@ -135,6 +135,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--default-random-seed", type=int, default=7)
 
     parser.add_argument("--n-theta", type=int, default=81)
+    parser.add_argument(
+        "--trial-interpolation",
+        choices=["convex_full_hf", "linear_interaction"],
+        default="linear_interaction",
+        help="Trial-Hamiltonian path used for branch-resolved cG.",
+    )
     parser.add_argument("--endpoint-eps", type=float, default=1e-5)
     parser.add_argument("--domain-radius", type=float, default=20.0)
     parser.add_argument("--domain-width", type=float, default=3.0)
@@ -590,6 +596,7 @@ def _response_fields(
         branch_label=direction,
         suppress_texture_when_ivc_below_vp=not args.allow_texture_in_ivc_ground_state,
         texture_energy_tie_atol=args.texture_energy_tie_atol,
+        trial_interpolation=args.trial_interpolation,
     )
     diagnostic_cg = None
     if args.compute_invalid_texture_cg and not bool(physical.branch_selection["texture_valid"]):
@@ -602,6 +609,7 @@ def _response_fields(
             branch_label=direction,
             suppress_texture_when_ivc_below_vp=False,
             texture_energy_tie_atol=args.texture_energy_tie_atol,
+            trial_interpolation=args.trial_interpolation,
         )
         diagnostic_cg = float(diagnostic.summary.cG)
     elif bool(physical.branch_selection["texture_valid"]):
@@ -614,6 +622,7 @@ def _response_fields(
     cG_warning_reason = ";".join(warning_reasons) or None
     scalar = {
         "cG": float(physical.summary.cG),
+        "trial_interpolation": str(args.trial_interpolation),
         "cG_diagnostic": diagnostic_cg,
         "cG_warning_flag": bool(warning_reasons),
         "cG_warning_reason": cG_warning_reason,

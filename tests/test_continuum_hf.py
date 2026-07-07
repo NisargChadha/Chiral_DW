@@ -20,7 +20,11 @@ from chiral_dw.continuum import (
     build_symmetric_hf_references,
     convex_weights,
     evaluate_hf_high_symmetry_path,
+    linear_interaction_hamiltonian,
+    linear_interaction_path,
+    linear_interaction_weights,
     mesh_inversion_map,
+    projector_path_for_interpolation,
     projector_maps,
     reference_diagnostics,
     rotate_valley_u1,
@@ -46,6 +50,50 @@ def _small_bundle():
         grid=ContinuumGridParams(n_k=3),
         interaction=ContinuumInteractionParams(v0=0.2, q_shell=0, gate_distance=1.0),
     )
+
+
+def _synthetic_refs() -> SymmetricHFReferences:
+    h_vp_plus = np.asarray([[[0.0, 0.0], [0.0, 5.0]]], dtype=complex)
+    h_vp_minus = np.asarray([[[5.0, 0.0], [0.0, 0.0]]], dtype=complex)
+    h_ivc = np.asarray([[[2.5, -1.0], [-1.0, 2.5]]], dtype=complex)
+    return SymmetricHFReferences(
+        vp_plus=SimpleNamespace(H_hf=h_vp_plus),
+        vp_minus=SimpleNamespace(H_hf=h_vp_minus),
+        ivc=SimpleNamespace(H_hf=h_ivc),
+        n_occ_per_k=1,
+    )
+
+
+def test_linear_interaction_path_uses_h0_once_and_preserves_legacy_mode():
+    refs = _synthetic_refs()
+    h0 = np.asarray([[[1.0, 0.2], [0.2, 1.8]]], dtype=complex)
+    theta = np.asarray([0.0, np.pi / 3.0, np.pi / 2.0, np.pi])
+
+    projectors, diagnostics = linear_interaction_path(refs, theta, h0)
+    old_projectors, old_diagnostics = projector_path_for_interpolation(
+        refs,
+        theta,
+        trial_interpolation="convex_full_hf",
+    )
+    direct_old_projectors, direct_old_diagnostics = symmetric_convex_path(refs, theta)
+
+    assert np.allclose(projectors[0], symmetric_convex_projector(refs, 0.0)[0])
+    assert np.allclose(projectors[2], symmetric_convex_projector(refs, np.pi / 2.0)[0])
+    assert np.allclose(projectors[3], symmetric_convex_projector(refs, np.pi)[0])
+    assert np.allclose(old_projectors, direct_old_projectors)
+    assert [row.w_ivc for row in old_diagnostics] == pytest.approx(
+        [row.w_ivc for row in direct_old_diagnostics]
+    )
+
+    w_plus, w_minus, w_ivc = linear_interaction_weights(np.pi / 3.0)
+    expected = h0 + w_plus * (refs.H_vp_plus - h0) + w_minus * (
+        refs.H_vp_minus - h0
+    ) + w_ivc * (refs.H_ivc - h0)
+    actual = linear_interaction_hamiltonian(refs, np.pi / 3.0, h0)
+    assert np.allclose(actual, hermitize(expected))
+    assert diagnostics[1].w_vp_plus == pytest.approx(0.5)
+    assert diagnostics[1].w_vp_minus == pytest.approx(0.0)
+    assert diagnostics[1].w_ivc == pytest.approx(np.sin(np.pi / 3.0))
 
 
 def _slow_hartree(backend: ContinuumHFBackend, Q: np.ndarray) -> np.ndarray:

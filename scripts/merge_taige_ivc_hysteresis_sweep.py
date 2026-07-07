@@ -109,6 +109,32 @@ def _safe_float(row: dict[str, Any], key: str, default: float = float("nan")) ->
     return float(value)
 
 
+def _trial_interpolation(row: dict[str, Any]) -> str:
+    value = row.get("trial_interpolation")
+    if value in {None, ""}:
+        return "convex_full_hf"
+    return str(value)
+
+
+def _require_single_trial_interpolation(
+    rows: list[dict[str, Any]],
+    *,
+    context: str,
+) -> str:
+    modes = sorted({_trial_interpolation(row) for row in rows if row})
+    if not modes:
+        return "convex_full_hf"
+    if len(modes) > 1:
+        raise ValueError(
+            f"{context} mixes trial_interpolation modes {modes}; "
+            "write linear_interaction and convex_full_hf outputs to separate roots"
+        )
+    mode = modes[0]
+    for row in rows:
+        row.setdefault("trial_interpolation", mode)
+    return mode
+
+
 def _chern_columns(row: dict[str, Any]) -> dict[str, Any]:
     return {str(key): value for key, value in row.items() if str(key).startswith("chern_")}
 
@@ -227,6 +253,7 @@ def _write_pair_comparison(
         )
         row = comparison.model_dump(mode="json")
         row["sweep_axis"] = sweep_axis
+        row["trial_interpolation"] = _trial_interpolation(by_direction["up"])
         row["branch_up"] = _branch_id(by_direction["up"])
         row["branch_down"] = _branch_id(by_direction["down"])
         row["lowest_energy_raw_branch"] = (
@@ -267,6 +294,7 @@ def _all_candidate_summary(
         "u_index": key[1],
         "theta_deg": float(ordered[0]["theta_deg"]),
         "u_D_meV": float(ordered[0]["u_D_meV"]),
+        "trial_interpolation": _trial_interpolation(ordered[0]),
         "n_branch_candidates": len(ordered),
         "available_branches": ";".join(_branch_id(row) for row in ordered),
         "lowest_energy_raw_branch": _branch_id(raw),
@@ -319,6 +347,10 @@ def _all_candidate_summary(
 def merge_outputs(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     output_root = _output_root(args)
     records = [_load_record(path) for path in _record_paths(output_root)]
+    trial_interpolation = _require_single_trial_interpolation(
+        records,
+        context=f"branch records under {output_root}",
+    )
     records.sort(
         key=lambda row: (
             int(row["theta_index"]),
@@ -349,6 +381,7 @@ def merge_outputs(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[
                     "theta_deg": row.get("theta_deg"),
                     "u_D_meV": row.get("u_D_meV"),
                     "branch_id": branch_id,
+                    "trial_interpolation": _trial_interpolation(row),
                     "sweep_axis": row.get("sweep_axis", "u_D"),
                     "direction": row.get("direction"),
                     "gap_family_label": gap_families.get(branch_id),
@@ -424,6 +457,10 @@ def merge_outputs(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[
         trial_path = Path(row.get("trial_theta_csv") or Path(row["point_record_path"]).parent / "trial_theta.csv")
         for trial in _read_csv(trial_path):
             trial_rows.append(trial)
+    _require_single_trial_interpolation(
+        [*records, *trial_rows],
+        context=f"trial-theta rows under {output_root}",
+    )
     _write_csv(output_root / "hysteresis_trial_theta.csv", trial_rows)
 
     selected_by_point = {
@@ -465,6 +502,7 @@ def merge_outputs(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[
                 "theta_deg": row["theta_deg"],
                 "lowest_energy_raw_branch": row["lowest_energy_raw_branch"],
                 "lowest_energy_clean_branch": row["lowest_energy_clean_branch"],
+                "trial_interpolation": row.get("trial_interpolation", trial_interpolation),
                 "row_reliability": row["row_reliability"],
                 **_chern_columns(row),
             }
@@ -481,6 +519,7 @@ def merge_outputs(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[
                 "small_gap_branch": row.get("small_gap_branch"),
                 "intermediate_gap_branch": row.get("intermediate_gap_branch"),
                 "large_gap_branch": row.get("large_gap_branch"),
+                "trial_interpolation": row.get("trial_interpolation", trial_interpolation),
             }
             for row in comparison_rows
         ],
@@ -495,6 +534,7 @@ def merge_outputs(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[
                 "cG_lowest_energy_clean": row["lowest_energy_clean_cG"],
                 "lowest_energy_raw_branch": row["lowest_energy_raw_branch"],
                 "lowest_energy_clean_branch": row["lowest_energy_clean_branch"],
+                "trial_interpolation": row.get("trial_interpolation", trial_interpolation),
                 "row_reliability": row["row_reliability"],
                 **_chern_columns(row),
             }
@@ -511,6 +551,7 @@ def merge_outputs(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[
                 "large_gap_branch": row.get("large_gap_branch"),
                 "low_gap_branch": row["low_gap_branch"],
                 "high_gap_branch": row["high_gap_branch"],
+                "trial_interpolation": row.get("trial_interpolation", trial_interpolation),
             }
             for row in comparison_rows
         ],
@@ -552,6 +593,7 @@ def merge_outputs(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[
             "n_vp_chern_rows": len(vp_chern_rows),
             "n_displacement_comparison_rows": len(displacement_rows),
             "n_twist_comparison_rows": len(twist_rows),
+            "trial_interpolation": trial_interpolation,
         },
     )
     return records, comparison_rows

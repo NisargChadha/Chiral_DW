@@ -303,6 +303,7 @@ def trial_theta_rows(workflow_result: Any) -> list[dict[str, Any]]:
     theta = np.asarray(workflow_result.theta, dtype=float)
     path_diagnostics = tuple(workflow_result.path_diagnostics)
     branch_selection = dict(getattr(workflow_result, "branch_selection", {}))
+    trial_interpolation = str(branch_selection.get("trial_interpolation", "convex_full_hf"))
     if (
         branch_selection.get("texture_valid") is False
         and branch_selection.get("texture_nan_policy", True)
@@ -314,6 +315,7 @@ def trial_theta_rows(workflow_result: Any) -> list[dict[str, Any]]:
                 {
                     "theta": float(angle),
                     "theta_over_pi": float(angle / np.pi),
+                    "trial_interpolation": trial_interpolation,
                     "K_theta": float("nan"),
                     "cG": float("nan"),
                     "w_vp_plus": float(diag.w_vp_plus),
@@ -345,6 +347,7 @@ def trial_theta_rows(workflow_result: Any) -> list[dict[str, Any]]:
             {
                 "theta": float(angle),
                 "theta_over_pi": float(angle / np.pi),
+                "trial_interpolation": trial_interpolation,
                 "K_theta": float(workflow_result.response.K[idx]),
                 "cG": float(workflow_result.response.cG),
                 "w_vp_plus": float(diag.w_vp_plus),

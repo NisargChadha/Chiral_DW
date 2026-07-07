@@ -17,7 +17,7 @@ source .venv/bin/activate
 
 mkdir -p logs
 
-OUTPUT_ROOT=${OUTPUT_ROOT:-"results/taige_ivc_hysteresis_finite_size_nk18_20_grid21"}
+OUTPUT_ROOT=${OUTPUT_ROOT:-"results/taige_ivc_hysteresis_linear_interaction_finite_size_nk18_20_grid21"}
 N_K_LIST=${N_K_LIST:-"18,19,20"}
 MESH_DIR_TEMPLATE=${MESH_DIR_TEMPLATE:-"nk_{n_k:03d}"}
 FIT_MIN_CLEAN=${FIT_MIN_CLEAN:-"3"}
