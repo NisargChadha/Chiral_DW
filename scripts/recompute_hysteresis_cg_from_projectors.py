@@ -60,6 +60,23 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help=argparse.SUPPRESS,
     )
+    parser.add_argument(
+        "--point-task-id",
+        type=int,
+        default=0,
+        help="Phase-point shard index for array recompute tasks.",
+    )
+    parser.add_argument(
+        "--n-point-tasks",
+        type=int,
+        default=1,
+        help="Number of phase-point shards. Rows are grouped by (theta,u_D).",
+    )
+    parser.add_argument(
+        "--skip-merge",
+        action="store_true",
+        help="Only write recomputed point records/trial rows; merge in a dependent job.",
+    )
     return parser
 
 
@@ -258,12 +275,16 @@ def _load_vp_references(args: argparse.Namespace, loaded: Any) -> tuple[Any, Any
     )
 
 
-def _recompute_one(
+def _recompute_with_context(
     *,
     args: argparse.Namespace,
     source_root: Path,
     output_root: Path,
     row: dict[str, Any],
+    loaded: Any,
+    cache_path: str,
+    vp_plus: Any,
+    vp_minus: Any,
 ) -> dict[str, Any]:
     point = _point_from_row(row)
     point_dir = _point_output_dir(output_root, row, point)
@@ -273,9 +294,7 @@ def _recompute_one(
 
     projector_path = _path_from_row(row, "projector_path", source_root=source_root)
     P_ivc, H_ivc = _load_projector_payload(projector_path)
-    loaded, cache_path = _load_or_build_cache(args, point)
     bundle = loaded.bundle
-    vp_plus, vp_minus = _load_vp_references(args, loaded)
     energy = bundle.backend.energy(P_ivc)
     _P_hf, _evals, direct_gap, indirect_gap = bundle.backend.update_density_per_k(
         H_ivc,
@@ -352,6 +371,68 @@ def _recompute_one(
     return record
 
 
+def _recompute_one(
+    *,
+    args: argparse.Namespace,
+    source_root: Path,
+    output_root: Path,
+    row: dict[str, Any],
+) -> dict[str, Any]:
+    point = _point_from_row(row)
+    loaded, cache_path = _load_or_build_cache(args, point)
+    vp_plus, vp_minus = _load_vp_references(args, loaded)
+    return _recompute_with_context(
+        args=args,
+        source_root=source_root,
+        output_root=output_root,
+        row=row,
+        loaded=loaded,
+        cache_path=cache_path,
+        vp_plus=vp_plus,
+        vp_minus=vp_minus,
+    )
+
+
+def _group_rows_by_point(
+    rows: list[dict[str, Any]],
+    plan_rows: list[dict[str, Any]],
+) -> dict[tuple[int, int], list[tuple[dict[str, Any], dict[str, Any]]]]:
+    grouped: dict[tuple[int, int], list[tuple[dict[str, Any], dict[str, Any]]]] = {}
+    for row, plan in zip(rows, plan_rows):
+        point = _point_from_row(row)
+        key = (int(point.theta_index), int(point.u_index))
+        grouped.setdefault(key, []).append((row, plan))
+    return grouped
+
+
+def _selected_group_items(
+    args: argparse.Namespace,
+    grouped: dict[tuple[int, int], list[tuple[dict[str, Any], dict[str, Any]]]],
+) -> list[tuple[tuple[int, int], list[tuple[dict[str, Any], dict[str, Any]]]]]:
+    n_tasks = int(args.n_point_tasks)
+    task_id = int(args.point_task_id)
+    if n_tasks < 1:
+        raise ValueError("--n-point-tasks must be positive")
+    if task_id < 0 or task_id >= n_tasks:
+        raise ValueError("--point-task-id must be in [0, n_point_tasks)")
+    items = list(grouped.items())
+    if n_tasks == 1:
+        return items
+    return [item for index, item in enumerate(items) if index % n_tasks == task_id]
+
+
+def _task_suffix(args: argparse.Namespace) -> str:
+    if int(args.n_point_tasks) <= 1:
+        return ""
+    return f"_task_{int(args.point_task_id):05d}_of_{int(args.n_point_tasks):05d}"
+
+
+def _selected_plan_rows(
+    group_items: list[tuple[tuple[int, int], list[tuple[dict[str, Any], dict[str, Any]]]]],
+) -> list[dict[str, Any]]:
+    return [plan for _key, pairs in group_items for _row, plan in pairs]
+
+
 def _prepare_args(args: argparse.Namespace) -> tuple[Path, Path]:
     source_root = _resolve_root(args.source_output_root)
     if args.output_root is None:
@@ -413,18 +494,44 @@ def recompute(args: argparse.Namespace) -> dict[str, Any]:
     if args.max_rows is not None:
         rows = rows[: int(args.max_rows)]
     plan_rows = _plan_rows(args=args, source_root=source_root, output_root=output_root, rows=rows)
-    _write_csv(output_root / "hysteresis_recompute_plan.csv", plan_rows)
+    grouped = _group_rows_by_point(rows, plan_rows)
+    group_items = _selected_group_items(args, grouped)
+    selected_plan_rows = _selected_plan_rows(group_items)
+    suffix = _task_suffix(args)
+    task_dir = output_root / "recompute_tasks"
+    plan_csv = (
+        task_dir / f"hysteresis_recompute_plan{suffix}.csv"
+        if suffix
+        else output_root / "hysteresis_recompute_plan.csv"
+    )
+    plan_json = (
+        task_dir / f"hysteresis_recompute_plan{suffix}.json"
+        if suffix
+        else output_root / "hysteresis_recompute_plan.json"
+    )
+    summary_json = (
+        task_dir / f"hysteresis_recompute_summary{suffix}.json"
+        if suffix or args.skip_merge
+        else output_root / "hysteresis_recompute_summary.json"
+    )
+    _write_csv(plan_csv, selected_plan_rows)
     _write_json(
-        output_root / "hysteresis_recompute_plan.json",
+        plan_json,
         {
             "source_output_root": str(source_root),
             "output_root": str(output_root),
             "cache_root": str(_cache_root(args)),
             "n_rows": len(rows),
+            "n_phase_points": len(grouped),
+            "n_selected_rows": len(selected_plan_rows),
+            "n_selected_phase_points": len(group_items),
+            "point_task_id": int(args.point_task_id),
+            "n_point_tasks": int(args.n_point_tasks),
             "trial_interpolation": args.trial_interpolation,
             "material": args.material,
             "dry_run": bool(args.dry_run),
-            "rows": plan_rows,
+            "skip_merge": bool(args.skip_merge),
+            "rows": selected_plan_rows,
         },
     )
     if args.dry_run:
@@ -433,44 +540,77 @@ def recompute(args: argparse.Namespace) -> dict[str, Any]:
             "output_root": str(output_root),
             "cache_root": str(_cache_root(args)),
             "n_rows": len(rows),
+            "n_phase_points": len(grouped),
+            "n_selected_rows": len(selected_plan_rows),
+            "n_selected_phase_points": len(group_items),
             "n_recomputed": 0,
-            "n_skipped_existing": sum(int(row["would_skip_existing"]) for row in plan_rows),
+            "n_skipped_existing": sum(int(row["would_skip_existing"]) for row in selected_plan_rows),
             "dry_run": True,
         }
 
     records: list[dict[str, Any]] = []
     skipped = 0
-    for row, plan in zip(rows, plan_rows):
-        if plan["would_skip_existing"]:
-            skipped += 1
-            print(f"Skipping existing recomputed point {plan['output_point_record']}")
-        records.append(
-            _recompute_one(
-                args=args,
-                source_root=source_root,
-                output_root=output_root,
-                row=row,
+    n_backend_contexts_loaded = 0
+    for _key, group_rows in group_items:
+        pending = [
+            (row, plan)
+            for row, plan in group_rows
+            if not bool(plan["would_skip_existing"])
+        ]
+        loaded = None
+        cache_path = None
+        vp_plus = None
+        vp_minus = None
+        if pending:
+            point = _point_from_row(pending[0][0])
+            loaded, cache_path = _load_or_build_cache(args, point)
+            vp_plus, vp_minus = _load_vp_references(args, loaded)
+            n_backend_contexts_loaded += 1
+        for row, plan in group_rows:
+            if plan["would_skip_existing"]:
+                skipped += 1
+                print(f"Skipping existing recomputed point {plan['output_point_record']}")
+                records.append(json.loads(Path(plan["output_point_record"]).read_text()))
+                continue
+            records.append(
+                _recompute_with_context(
+                    args=args,
+                    source_root=source_root,
+                    output_root=output_root,
+                    row=row,
+                    loaded=loaded,
+                    cache_path=str(cache_path),
+                    vp_plus=vp_plus,
+                    vp_minus=vp_minus,
+                )
             )
+    if not args.skip_merge:
+        merge_args = argparse.Namespace(
+            output_root=str(output_root),
+            cache_root=str(_cache_root(args)),
+            n_occ_per_k=int(args.n_occ_per_k),
+            allow_missing_directions=True,
         )
-    merge_args = argparse.Namespace(
-        output_root=str(output_root),
-        cache_root=str(_cache_root(args)),
-        n_occ_per_k=int(args.n_occ_per_k),
-        allow_missing_directions=True,
-    )
-    merge_outputs(merge_args)
+        merge_outputs(merge_args)
     summary = {
         "source_output_root": str(source_root),
         "output_root": str(output_root),
         "cache_root": str(_cache_root(args)),
         "n_rows": len(rows),
+        "n_phase_points": len(grouped),
+        "n_selected_rows": len(selected_plan_rows),
+        "n_selected_phase_points": len(group_items),
+        "n_backend_contexts_loaded": n_backend_contexts_loaded,
         "n_recomputed_or_loaded": len(records),
         "n_skipped_existing": skipped,
+        "point_task_id": int(args.point_task_id),
+        "n_point_tasks": int(args.n_point_tasks),
+        "skip_merge": bool(args.skip_merge),
         "trial_interpolation": args.trial_interpolation,
         "material": args.material,
         "recomputed_from_stored_projector": True,
     }
-    _write_json(output_root / "hysteresis_recompute_summary.json", summary)
+    _write_json(summary_json, summary)
     return summary
 
 

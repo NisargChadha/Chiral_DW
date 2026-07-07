@@ -420,6 +420,8 @@ def test_wse2_recompute_submitter_dry_run_uses_material_defaults(tmp_path):
             "OUTPUT_ROOT": str(tmp_path / "wse2_recomputed"),
             "N_K_LIST": "18,22",
             "CACHE_BASE_ROOT": str(tmp_path / "cache"),
+            "POINT_TASKS_PER_MESH": "3",
+            "MAX_CONCURRENT_RECOMPUTE": "2",
         }
     )
     proc = subprocess.run(
@@ -435,10 +437,14 @@ def test_wse2_recompute_submitter_dry_run_uses_material_defaults(tmp_path):
     assert "SMEAR_LENGTH_NM=0.332" in out
     assert "--mem=12G" in out
     assert "--mem=20G" in out
+    assert "--array=0-2%2" in out
+    assert "POINT_TASKS_PER_MESH=3" in out
+    assert "SKIP_MERGE=1" in out
     assert "TRIAL_INTERPOLATION=linear_interaction" in out
     assert "jobs/recompute_hysteresis_cg_from_projectors_by_mesh_array.sh" in out
+    assert "jobs/merge_wse2_ivc_hysteresis_sweep.sh" in out
     assert "jobs/merge_wse2_ivc_hysteresis_finite_size.sh" in out
-    assert "Dry run task counts: recompute=2 final_merge=1" in out
+    assert "Dry run task counts: recompute_meshes=2 point_tasks_per_mesh=3 total_recompute_tasks=6 final_merge=1" in out
 
 
 def test_wse2_cleanup_allows_declared_scratch_cache_after_merge_outputs(tmp_path):

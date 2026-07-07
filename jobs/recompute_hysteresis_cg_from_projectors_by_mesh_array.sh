@@ -24,6 +24,7 @@ SOURCE_OUTPUT_ROOT=${SOURCE_OUTPUT_ROOT:?SOURCE_OUTPUT_ROOT is required}
 OUTPUT_ROOT=${OUTPUT_ROOT:-"${SOURCE_OUTPUT_ROOT%/}_linear_interaction_recomputed"}
 MATERIAL=${MATERIAL:-"mote2"}
 N_K_LIST=${N_K_LIST:-"18,19,20,21,22,23,24"}
+POINT_TASKS_PER_MESH=${POINT_TASKS_PER_MESH:-"1"}
 RUN_SLUG=${RUN_SLUG:-"$(basename "${OUTPUT_ROOT%/}")"}
 CACHE_BASE_ROOT=${CACHE_BASE_ROOT:-${LAB_SCRATCH_ROOT:-${SCRATCH:-"results/recompute_backend_cache_scratch"}}}
 if [[ "$CACHE_BASE_ROOT" != /* ]]; then
@@ -81,6 +82,7 @@ TEXTURE_ENERGY_TIE_ATOL=${TEXTURE_ENERGY_TIE_ATOL:-"1e-9"}
 COMPUTE_INVALID_TEXTURE_CG=${COMPUTE_INVALID_TEXTURE_CG:-"0"}
 RERUN_EXISTING=${RERUN_EXISTING:-"0"}
 REQUIRE_CACHE=${REQUIRE_CACHE:-"0"}
+SKIP_MERGE=${SKIP_MERGE:-"0"}
 
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
@@ -89,11 +91,14 @@ export NUMEXPR_NUM_THREADS=1
 
 IFS=',' read -r -a nks <<< "$N_K_LIST"
 TASK_ID=${SLURM_ARRAY_TASK_ID:-0}
-if (( TASK_ID >= ${#nks[@]} )); then
-  echo "Task ${TASK_ID} is outside recompute mesh count ${#nks[@]}; exiting."
+TOTAL_TASKS=$((${#nks[@]} * POINT_TASKS_PER_MESH))
+if (( TASK_ID >= TOTAL_TASKS )); then
+  echo "Task ${TASK_ID} is outside recompute task count ${TOTAL_TASKS}; exiting."
   exit 0
 fi
-N_K="$(echo "${nks[$TASK_ID]}" | xargs)"
+MESH_INDEX=$((TASK_ID / POINT_TASKS_PER_MESH))
+POINT_TASK_ID=$((TASK_ID % POINT_TASKS_PER_MESH))
+N_K="$(echo "${nks[$MESH_INDEX]}" | xargs)"
 nk_dir="$(printf "nk_%03d" "$N_K")"
 
 if [[ -f "${SOURCE_OUTPUT_ROOT%/}/hysteresis_all_branch_candidates.csv" && "${#nks[@]}" -eq 1 ]]; then
@@ -134,8 +139,12 @@ REQUIRE_CACHE_FLAG=()
 if [[ "$REQUIRE_CACHE" == "1" ]]; then
   REQUIRE_CACHE_FLAG=(--require-cache)
 fi
+SKIP_MERGE_FLAG=()
+if [[ "$SKIP_MERGE" == "1" ]]; then
+  SKIP_MERGE_FLAG=(--skip-merge)
+fi
 
-echo "Recomputing ${MATERIAL} hysteresis cG for n_k=${N_K}"
+echo "Recomputing ${MATERIAL} hysteresis cG for n_k=${N_K} point_task=${POINT_TASK_ID}/${POINT_TASKS_PER_MESH}"
 echo "Source=${source_mesh_root} Output=${output_mesh_root} Cache=${cache_root}"
 echo "Resources: SLURM_CPUS_PER_TASK=${SLURM_CPUS_PER_TASK:-unset} VERTEX_WORKERS=${VERTEX_WORKERS} EXCHANGE_WORKERS=${EXCHANGE_WORKERS} TRIAL_INTERPOLATION=${TRIAL_INTERPOLATION} SLURM_MEM_PER_NODE=${SLURM_MEM_PER_NODE:-unset} SLURM_MEM_PER_CPU=${SLURM_MEM_PER_CPU:-unset}"
 
@@ -180,6 +189,8 @@ python scripts/recompute_hysteresis_cg_from_projectors.py \
   --final-residual-tolerance "$FINAL_RESIDUAL_TOLERANCE" \
   --n-theta "$N_THETA" \
   --trial-interpolation "$TRIAL_INTERPOLATION" \
+  --point-task-id "$POINT_TASK_ID" \
+  --n-point-tasks "$POINT_TASKS_PER_MESH" \
   --endpoint-eps "$ENDPOINT_EPS" \
   --domain-radius "$DOMAIN_RADIUS" \
   --domain-width "$DOMAIN_WIDTH" \
@@ -188,4 +199,5 @@ python scripts/recompute_hysteresis_cg_from_projectors.py \
   --texture-energy-tie-atol "$TEXTURE_ENERGY_TIE_ATOL" \
   "${DIAGNOSTIC_CG_FLAG[@]}" \
   "${RERUN_FLAG[@]}" \
-  "${REQUIRE_CACHE_FLAG[@]}"
+  "${REQUIRE_CACHE_FLAG[@]}" \
+  "${SKIP_MERGE_FLAG[@]}"

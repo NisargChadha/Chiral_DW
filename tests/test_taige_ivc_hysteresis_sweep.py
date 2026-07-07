@@ -551,6 +551,9 @@ def test_recompute_hysteresis_cg_from_stored_projectors_rebuilds_missing_cache(t
     assert all(Path(row["source_projector_path"]).is_relative_to(source_root) for row in branch_rows)
     assert not list(recompute_root.rglob("projector_final.npz"))
     assert list((recompute_root / "rebuilt_cache").rglob("*.npz"))
+    first_summary = json.loads((recompute_root / "hysteresis_recompute_summary.json").read_text())
+    assert first_summary["n_phase_points"] == 1
+    assert first_summary["n_backend_contexts_loaded"] == 1
 
     rerun = subprocess.run(
         recompute_cmd,
@@ -563,6 +566,7 @@ def test_recompute_hysteresis_cg_from_stored_projectors_rebuilds_missing_cache(t
     summary = json.loads((recompute_root / "hysteresis_recompute_summary.json").read_text())
     assert summary["recomputed_from_stored_projector"] is True
     assert summary["n_skipped_existing"] == 4
+    assert summary["n_backend_contexts_loaded"] == 0
 
 
 def test_hysteresis_finite_size_merge_writes_clean_fit_tables(tmp_path: Path):
@@ -918,11 +922,18 @@ def test_hysteresis_slurm_wrappers_pass_cluster_defaults():
     assert 'N_THETA=${N_THETA:-"81"}' in recompute_text
     assert "--source-output-root \"$source_mesh_root\"" in recompute_text
     assert "--cache-root \"$cache_root\"" in recompute_text
+    assert "--point-task-id \"$POINT_TASK_ID\"" in recompute_text
+    assert "--n-point-tasks \"$POINT_TASKS_PER_MESH\"" in recompute_text
+    assert "--skip-merge" in recompute_text
     assert "export OMP_NUM_THREADS=1" in recompute_text
     assert "jobs/recompute_hysteresis_cg_from_projectors_by_mesh_array.sh" in recompute_submit_text
+    assert "jobs/merge_taige_ivc_hysteresis_sweep.sh" in recompute_submit_text
+    assert "jobs/merge_wse2_ivc_hysteresis_sweep.sh" in recompute_submit_text
     assert "jobs/merge_taige_ivc_hysteresis_finite_size.sh" in recompute_submit_text
     assert "jobs/merge_wse2_ivc_hysteresis_finite_size.sh" in recompute_submit_text
     assert 'NK_MEMORY_GB_MAP=${NK_MEMORY_GB_MAP:-"18:12,19:14,20:16,21:18,22:20,23:22,24:24"}' in recompute_submit_text
+    assert 'POINT_TASKS_PER_MESH=${POINT_TASKS_PER_MESH:-"1"}' in recompute_submit_text
+    assert 'MAX_CONCURRENT_RECOMPUTE=${MAX_CONCURRENT_RECOMPUTE:-""}' in recompute_submit_text
     assert 'TRIAL_INTERPOLATION=${TRIAL_INTERPOLATION:-"linear_interaction"}' in recompute_submit_text
     assert "CACHE_BASE_ROOT" in recompute_submit_text
 
@@ -960,14 +971,20 @@ def test_hysteresis_slurm_wrappers_pass_cluster_defaults():
             "OUTPUT_ROOT": str(ROOT / "results/source_linear_interaction_recomputed"),
             "N_K_LIST": "18,20",
             "CACHE_BASE_ROOT": str(ROOT / "results/recompute_cache"),
+            "POINT_TASKS_PER_MESH": "4",
+            "MAX_CONCURRENT_RECOMPUTE": "2",
         },
     ).stdout
-    assert "Dry run task counts: recompute=2 final_merge=1" in recompute_dry
+    assert "Dry run task counts: recompute_meshes=2 point_tasks_per_mesh=4 total_recompute_tasks=8 final_merge=1" in recompute_dry
     assert "MATERIAL=mote2" in recompute_dry
     assert "--mem=12G" in recompute_dry
     assert "--mem=16G" in recompute_dry
+    assert "--array=0-3%2" in recompute_dry
+    assert "POINT_TASKS_PER_MESH=4" in recompute_dry
+    assert "SKIP_MERGE=1" in recompute_dry
     assert "TRIAL_INTERPOLATION=linear_interaction" in recompute_dry
     assert "SOURCE_OUTPUT_ROOT=" in recompute_dry
     assert "jobs/recompute_hysteresis_cg_from_projectors_by_mesh_array.sh" in recompute_dry
+    assert "jobs/merge_taige_ivc_hysteresis_sweep.sh" in recompute_dry
     assert "jobs/merge_taige_ivc_hysteresis_finite_size.sh" in recompute_dry
-    assert "--dependency=afterok:dry_recompute_18:dry_recompute_20" in recompute_dry
+    assert "--dependency=afterok:dry_recompute_merge_18:dry_recompute_merge_20" in recompute_dry

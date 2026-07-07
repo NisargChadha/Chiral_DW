@@ -12,6 +12,8 @@ MATERIAL=${MATERIAL:-"mote2"}
 N_K_LIST=${N_K_LIST:-"18,19,20,21,22,23,24"}
 FINAL_N_K_LIST=${FINAL_N_K_LIST:-"$N_K_LIST"}
 NK_MEMORY_GB_MAP=${NK_MEMORY_GB_MAP:-"18:12,19:14,20:16,21:18,22:20,23:22,24:24"}
+POINT_TASKS_PER_MESH=${POINT_TASKS_PER_MESH:-"1"}
+MAX_CONCURRENT_RECOMPUTE=${MAX_CONCURRENT_RECOMPUTE:-""}
 RUN_SLUG=${RUN_SLUG:-"$(basename "${OUTPUT_ROOT%/}")"}
 CACHE_BASE_ROOT=${CACHE_BASE_ROOT:-${LAB_SCRATCH_ROOT:-${SCRATCH:-"results/recompute_backend_cache_scratch"}}}
 if [[ "$CACHE_BASE_ROOT" != /* ]]; then
@@ -64,6 +66,8 @@ COMPUTE_INVALID_TEXTURE_CG=${COMPUTE_INVALID_TEXTURE_CG:-"0"}
 NAN_TEXTURE_WHEN_IVC_LOWER=${NAN_TEXTURE_WHEN_IVC_LOWER:-"1"}
 
 RECOMPUTE_TIME=${RECOMPUTE_TIME:-"24:00:00"}
+PER_MESH_MERGE_TIME=${PER_MESH_MERGE_TIME:-"02:00:00"}
+PER_MESH_MERGE_MEM_GB=${PER_MESH_MERGE_MEM_GB:-"8"}
 FINAL_MERGE_TIME=${FINAL_MERGE_TIME:-"02:00:00"}
 FINAL_MERGE_MEM_GB=${FINAL_MERGE_MEM_GB:-"8"}
 SUBMIT_FINAL_MERGE=${SUBMIT_FINAL_MERGE:-"1"}
@@ -120,12 +124,17 @@ for raw_nk in "${nks[@]}"; do
   mem_gb="$(memory_gb_for_nk "$nk")"
   nk_dir="$(printf "nk_%03d" "$nk")"
   cache_root="${CACHE_BASE_ROOT}/${RUN_SLUG}/${nk_dir}/backend_cache"
+  recompute_array="0-$((POINT_TASKS_PER_MESH - 1))"
+  if [[ -n "$MAX_CONCURRENT_RECOMPUTE" ]]; then
+    recompute_array="${recompute_array}%${MAX_CONCURRENT_RECOMPUTE}"
+  fi
   mesh_env=(
     env
     "SOURCE_OUTPUT_ROOT=${SOURCE_OUTPUT_ROOT}"
     "OUTPUT_ROOT=${OUTPUT_ROOT}"
     "MATERIAL=${MATERIAL}"
     "N_K_LIST=${nk}"
+    "POINT_TASKS_PER_MESH=${POINT_TASKS_PER_MESH}"
     "CACHE_ROOT=${cache_root}"
     "CACHE_BASE_ROOT=${CACHE_BASE_ROOT}"
     "RUN_SLUG=${RUN_SLUG}"
@@ -168,12 +177,13 @@ for raw_nk in "${nks[@]}"; do
     "NAN_TEXTURE_WHEN_IVC_LOWER=${NAN_TEXTURE_WHEN_IVC_LOWER}"
     "RERUN_EXISTING=${RERUN_EXISTING}"
     "REQUIRE_CACHE=${REQUIRE_CACHE}"
+    "SKIP_MERGE=1"
   )
 
   recompute_cmd=(
     "${mesh_env[@]}"
     sbatch --parsable
-    "--array=0-0"
+    "--array=${recompute_array}"
     "--mem=${mem_gb}G"
     "--time=${RECOMPUTE_TIME}"
     "--cpus-per-task=${CPUS_PER_TASK}"
@@ -200,9 +210,34 @@ for raw_nk in "${nks[@]}"; do
     recompute_job="$(submit_or_echo "${recompute_cmd[@]}")"
   fi
   previous_job="$recompute_job"
-  barrier_job_ids+=("$recompute_job")
+  if [[ "$MATERIAL" == "wse2" ]]; then
+    per_mesh_merge_job_script="jobs/merge_wse2_ivc_hysteresis_sweep.sh"
+  else
+    per_mesh_merge_job_script="jobs/merge_taige_ivc_hysteresis_sweep.sh"
+  fi
+  merge_cmd=(
+    env
+    "OUTPUT_ROOT=${OUTPUT_ROOT}/${nk_dir}"
+    "CACHE_ROOT=${cache_root}"
+    "N_OCC_PER_K=${N_OCC_PER_K}"
+    sbatch --parsable
+    "--mem=${PER_MESH_MERGE_MEM_GB}G"
+    "--time=${PER_MESH_MERGE_TIME}"
+    "--cpus-per-task=1"
+    --dependency=afterok:"$recompute_job"
+    "--export=ALL"
+    "$per_mesh_merge_job_script"
+  )
+  if [[ "$DRY_RUN" == "1" ]]; then
+    submit_or_echo "${merge_cmd[@]}"
+    per_mesh_merge_job="dry_recompute_merge_${nk}"
+  else
+    per_mesh_merge_job="$(submit_or_echo "${merge_cmd[@]}")"
+  fi
+  previous_job="$per_mesh_merge_job"
+  barrier_job_ids+=("$per_mesh_merge_job")
   if [[ "$DRY_RUN" != "1" ]]; then
-    echo "n_k=${nk} recompute=${recompute_job} cache_root=${cache_root}"
+    echo "n_k=${nk} recompute=${recompute_job} recompute_merge=${per_mesh_merge_job} cache_root=${cache_root}"
   fi
 done
 
@@ -253,5 +288,5 @@ if [[ "$DRY_RUN" != "1" ]]; then
   echo "finite_size_merge=${final_job}"
 else
   echo "Scratch cache base: ${CACHE_BASE_ROOT}"
-  echo "Dry run task counts: recompute=${mesh_count} final_merge=${SUBMIT_FINAL_MERGE}"
+  echo "Dry run task counts: recompute_meshes=${mesh_count} point_tasks_per_mesh=${POINT_TASKS_PER_MESH} total_recompute_tasks=$((mesh_count * POINT_TASKS_PER_MESH)) final_merge=${SUBMIT_FINAL_MERGE}"
 fi
