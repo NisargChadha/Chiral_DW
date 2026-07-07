@@ -11,7 +11,9 @@ OUTPUT_ROOT=${OUTPUT_ROOT:-"${SOURCE_OUTPUT_ROOT%/}_linear_interaction_recompute
 MATERIAL=${MATERIAL:-"mote2"}
 N_K_LIST=${N_K_LIST:-"18,19,20,21,22,23,24"}
 FINAL_N_K_LIST=${FINAL_N_K_LIST:-"$N_K_LIST"}
-NK_MEMORY_GB_MAP=${NK_MEMORY_GB_MAP:-"18:12,19:14,20:16,21:18,22:20,23:22,24:24"}
+# Calibrated from the stored-projector theta=3.5,u_D=0,n_k=24
+# linear-interaction path: 1.35 GB max RSS, 4.24 GB peak footprint.
+NK_MEMORY_GB_MAP=${NK_MEMORY_GB_MAP:-"18:3,19:3,20:3,21:4,22:4,23:5,24:5"}
 POINT_TASKS_PER_MESH=${POINT_TASKS_PER_MESH:-"1"}
 MAX_CONCURRENT_RECOMPUTE=${MAX_CONCURRENT_RECOMPUTE:-""}
 RUN_SLUG=${RUN_SLUG:-"$(basename "${OUTPUT_ROOT%/}")"}

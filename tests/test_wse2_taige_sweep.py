@@ -435,8 +435,8 @@ def test_wse2_recompute_submitter_dry_run_uses_material_defaults(tmp_path):
 
     assert "MATERIAL=wse2" in out
     assert "SMEAR_LENGTH_NM=0.332" in out
-    assert "--mem=12G" in out
-    assert "--mem=20G" in out
+    assert "--mem=3G" in out
+    assert "--mem=4G" in out
     assert "--array=0-2%2" in out
     assert "POINT_TASKS_PER_MESH=3" in out
     assert "SKIP_MERGE=1" in out

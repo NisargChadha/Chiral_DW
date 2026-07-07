@@ -931,7 +931,7 @@ def test_hysteresis_slurm_wrappers_pass_cluster_defaults():
     assert "jobs/merge_wse2_ivc_hysteresis_sweep.sh" in recompute_submit_text
     assert "jobs/merge_taige_ivc_hysteresis_finite_size.sh" in recompute_submit_text
     assert "jobs/merge_wse2_ivc_hysteresis_finite_size.sh" in recompute_submit_text
-    assert 'NK_MEMORY_GB_MAP=${NK_MEMORY_GB_MAP:-"18:12,19:14,20:16,21:18,22:20,23:22,24:24"}' in recompute_submit_text
+    assert 'NK_MEMORY_GB_MAP=${NK_MEMORY_GB_MAP:-"18:3,19:3,20:3,21:4,22:4,23:5,24:5"}' in recompute_submit_text
     assert 'POINT_TASKS_PER_MESH=${POINT_TASKS_PER_MESH:-"1"}' in recompute_submit_text
     assert 'MAX_CONCURRENT_RECOMPUTE=${MAX_CONCURRENT_RECOMPUTE:-""}' in recompute_submit_text
     assert 'TRIAL_INTERPOLATION=${TRIAL_INTERPOLATION:-"linear_interaction"}' in recompute_submit_text
@@ -977,8 +977,7 @@ def test_hysteresis_slurm_wrappers_pass_cluster_defaults():
     ).stdout
     assert "Dry run task counts: recompute_meshes=2 point_tasks_per_mesh=4 total_recompute_tasks=8 final_merge=1" in recompute_dry
     assert "MATERIAL=mote2" in recompute_dry
-    assert "--mem=12G" in recompute_dry
-    assert "--mem=16G" in recompute_dry
+    assert "--mem=3G" in recompute_dry
     assert "--array=0-3%2" in recompute_dry
     assert "POINT_TASKS_PER_MESH=4" in recompute_dry
     assert "SKIP_MERGE=1" in recompute_dry
