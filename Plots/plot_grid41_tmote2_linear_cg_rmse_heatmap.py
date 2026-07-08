@@ -379,14 +379,47 @@ def _draw_phase_boundaries(
     )
 
 
-def _draw_representative_markers(ax: plt.Axes, params: CGRMSEHeatmapParams) -> None:
+def _marker_facecolor(
+    marker: HeatmapMarker,
+    plot_data: pd.DataFrame,
+    cmap: LinearSegmentedColormap,
+    norm: LogNorm | Normalize,
+) -> str | tuple[float, float, float, float]:
+    if marker.color != "rmse":
+        return marker.color
+
+    rows = plot_data.loc[
+        np.isclose(plot_data["theta_deg"], marker.theta_deg, atol=1.0e-9)
+        & np.isclose(plot_data["u_D_meV"], marker.u_D_meV, atol=1.0e-9)
+    ]
+    if rows.empty:
+        raise ValueError(
+            f"Cannot color marker by RMSE; missing point "
+            f"({marker.theta_deg}, {marker.u_D_meV})."
+        )
+    rmse = float(rows.iloc[0]["rmse_cG_fit"])
+    if not np.isfinite(rmse):
+        raise ValueError(
+            f"Cannot color marker by RMSE; non-finite value at "
+            f"({marker.theta_deg}, {marker.u_D_meV})."
+        )
+    return cmap(norm(rmse))
+
+
+def _draw_representative_markers(
+    ax: plt.Axes,
+    params: CGRMSEHeatmapParams,
+    plot_data: pd.DataFrame,
+    cmap: LinearSegmentedColormap,
+    norm: LogNorm | Normalize,
+) -> None:
     for marker in params.representative_markers:
         ax.scatter(
             [marker.theta_deg],
             [marker.u_D_meV],
             marker=marker.marker,
             s=marker.size,
-            facecolors=marker.color,
+            facecolors=_marker_facecolor(marker, plot_data, cmap, norm),
             edgecolors=marker.edge_color,
             linewidths=marker.edge_width,
             zorder=19,
@@ -448,11 +481,12 @@ def render_rmse_heatmap(params: CGRMSEHeatmapParams = CGRMSEHeatmapParams()) -> 
 
     fig, ax = plt.subplots(figsize=FIGURE["size"], constrained_layout=False)
     fig.subplots_adjust(**FIGURE["subplots_adjust"])
+    rmse_cmap = _rmse_cmap()
     mesh = ax.pcolormesh(
         theta_edges,
         u_edges,
         masked_rmse,
-        cmap=_rmse_cmap(),
+        cmap=rmse_cmap,
         norm=norm,
         shading="auto",
     )
@@ -468,7 +502,7 @@ def render_rmse_heatmap(params: CGRMSEHeatmapParams = CGRMSEHeatmapParams()) -> 
     if params.show_boundaries:
         _draw_phase_boundaries(ax, params, theta_vals, u_vals)
     if params.representative_markers:
-        _draw_representative_markers(ax, params)
+        _draw_representative_markers(ax, params, plot_data, rmse_cmap, norm)
     if params.show_chern_instability_crosses:
         _draw_chern_instability_crosses(ax, params)
 

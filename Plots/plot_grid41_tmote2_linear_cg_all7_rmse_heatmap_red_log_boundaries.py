@@ -33,7 +33,7 @@ if __name__ == "__main__":
                 HeatmapMarker(
                     theta_deg=3.05,
                     u_D_meV=6.0,
-                    color="#B5152B",
+                    color="rmse",
                     marker="o",
                     size=16.0,
                     edge_width=0.65,
