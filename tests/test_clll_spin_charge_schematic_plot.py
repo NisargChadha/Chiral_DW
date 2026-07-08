@@ -85,21 +85,29 @@ def test_default_output_goes_to_plots_figures():
 def test_charge_colorbar_label_uses_horizontal_delta_rho_convention():
     module = _load_plot_module()
 
-    assert module.CHARGE_COLORBAR_LABEL == r"$\delta\rho(r)(a_M^2/e)$"
+    assert module.CHARGE_COLORBAR_LABEL == r"$\delta\rho(r)\;[10^{-3}a_M^2/e]$"
     assert module.NISARG_FONTS["annotation"] >= 22
-    assert module.NISARG_FONTS["schematic_cbar_label"] >= 18
+    assert module.NISARG_FONTS["schematic_cbar_label"] >= 20
+    assert module.NISARG_FONTS["schematic_cbar_tick"] >= 15
 
 
-def test_charge_colorbar_geometry_is_left_shifted_and_taller():
+def test_charge_colorbar_geometry_is_horizontal_below_charge_panel():
     module = _load_plot_module()
     x0, y0, width, height = module.CHARGE_COLORBAR_BOUNDS
 
-    assert x0 < 0.84
-    assert height > 0.31
-    assert width >= 0.03
-    assert y0 + height > 0.47
-    assert module.CHARGE_COLORBAR_LABEL_POSITION == (1.02, 1.025)
-    assert module.CHARGE_COLORBAR_LABEL_HALIGN == "left"
+    assert 0.25 < x0 < 0.4
+    assert y0 < 0.06
+    assert width > 10.0 * height
+    assert module.CHARGE_COLORBAR_ORIENTATION == "horizontal"
+    assert module.CHARGE_COLORBAR_TICK_COUNT == 5
+
+
+def test_charge_colorbar_tick_formatter_uses_milli_units():
+    module = _load_plot_module()
+
+    assert module.format_milli_charge_tick(0.0015) == "1.5"
+    assert module.format_milli_charge_tick(-0.001) == "-1"
+    assert module.format_milli_charge_tick(0.0) == "0"
 
 
 def test_charge_display_grid_is_upsampled_from_numerical_density():

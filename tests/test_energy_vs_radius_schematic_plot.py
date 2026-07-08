@@ -93,9 +93,9 @@ def test_nisarg_plot_style_uses_pt_serif_and_cm_mathtext():
         ]
         assert module.plt.rcParams["mathtext.fontset"] == "cm"
         assert module.plt.rcParams["legend.fontsize"] == module.NISARG_FONTS["legend"]
-        assert module.NISARG_FONTS["axis_label"] == 30
-        assert module.NISARG_FONTS["tick_label"] == 22
-        assert module.NISARG_FONTS["legend"] == 14
+        assert module.NISARG_FONTS["axis_label"] == 34
+        assert module.NISARG_FONTS["tick_label"] == 26
+        assert module.NISARG_FONTS["legend"] == 17
 
 
 def test_boxed_axis_keeps_all_spines_visible():

@@ -53,6 +53,8 @@ def test_nisarg_plot_style_uses_pt_serif_and_cm_mathtext():
             "DejaVu Serif",
         ]
         assert module.plt.rcParams["mathtext.fontset"] == "cm"
+        assert module.NISARG_FONTS["x_axis_label"] == 30
+        assert module.NISARG_FONTS["x_tick_label"] == 25
 
 
 def test_clll_kappa_response_is_antisymmetric():

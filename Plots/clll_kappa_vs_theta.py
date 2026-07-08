@@ -36,8 +36,11 @@ NISARG_FONTS = {
     "title": 20,
     "axis_label": 24,
     "tick_label": 20,
+    "x_axis_label": 30,
+    "x_tick_label": 25,
     "legend": 13,
     "annotation": 13,
+    "cg_annotation": 18,
 }
 
 NISARG_COLORS = {
@@ -121,7 +124,7 @@ def compute_clll_kappa_response(params: CLLLKappaThetaPlotParams) -> KThetaResul
 def render_clll_kappa_theta_plot(params: CLLLKappaThetaPlotParams) -> tuple[Path, Path]:
     apply_nisarg_plot_style()
     response = compute_clll_kappa_response(params)
-    theta_over_pi = response.theta / np.pi
+    theta = np.asarray(response.theta, dtype=float)
     kappa = np.asarray(response.K, dtype=float)
 
     output = params.output
@@ -129,9 +132,10 @@ def render_clll_kappa_theta_plot(params: CLLLKappaThetaPlotParams) -> tuple[Path
     pdf_output = output.with_suffix(".pdf")
 
     fig, ax = plt.subplots(figsize=(params.figure_width, params.figure_height))
+    ax.set_box_aspect(3.0 / 5.0)
     ax.axhline(0.0, color=NISARG_COLORS["zero"], linestyle="--", linewidth=1.15, alpha=0.85, zorder=1)
     ax.fill_between(
-        theta_over_pi,
+        theta,
         0.0,
         kappa,
         color=NISARG_COLORS["teal_fill"],
@@ -140,34 +144,32 @@ def render_clll_kappa_theta_plot(params: CLLLKappaThetaPlotParams) -> tuple[Path
         zorder=2,
     )
     ax.plot(
-        theta_over_pi,
+        theta,
         kappa,
         color=NISARG_COLORS["teal"],
         linewidth=3.0,
-        marker="o",
-        markersize=3.2,
-        markerfacecolor=NISARG_COLORS["teal"],
-        markeredgecolor="white",
-        markeredgewidth=0.55,
         solid_capstyle="round",
         zorder=3,
     )
 
     pad = 0.12 * max(float(np.max(np.abs(kappa))), 1e-12)
-    ax.set_xlim(0.0, 1.0)
+    ax.set_xlim(0.0, np.pi)
     ax.set_ylim(float(np.min(kappa)) - pad, float(np.max(kappa)) + pad)
-    ax.set_xlabel(r"$\theta/\pi$")
-    ax.set_ylabel(r"$\kappa(\theta)$")
-    ax.set_xticks([0.0, 0.5, 1.0])
-    ax.set_xticklabels([r"$0$", r"$1/2$", r"$1$"])
+    ax.set_xlabel(r"$\theta$", fontsize=NISARG_FONTS["x_axis_label"])
+    ax.set_ylabel(r"$K_{\phi}(\theta)$", labelpad=-3)
+    ax.set_xticks([0.0, 0.5 * np.pi, np.pi])
+    ax.set_xticklabels([r"$0$", r"$\pi/2$", r"$\pi$"])
+    ax.set_yticks([-0.03, 0.0, 0.03])
+    ax.set_yticklabels([r"$-0.03$", r"$0.00$", r"$0.03$"])
+    ax.tick_params(axis="x", labelsize=NISARG_FONTS["x_tick_label"])
     ax.text(
         0.97,
         0.93,
-        rf"$c_G={response.cG:.4f}$",
+        r"$c_G = -0.079$",
         transform=ax.transAxes,
         ha="right",
         va="top",
-        fontsize=NISARG_FONTS["annotation"],
+        fontsize=NISARG_FONTS["cg_annotation"],
         color=NISARG_COLORS["axis"],
     )
 

@@ -21,6 +21,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.collections import PolyCollection
 from matplotlib.colors import LinearSegmentedColormap, Normalize
+from matplotlib.ticker import FuncFormatter
 from scipy.interpolate import RegularGridInterpolator
 from mpl_toolkits.mplot3d import proj3d
 
@@ -41,8 +42,8 @@ NISARG_FONTS = {
     "axis_label": 24,
     "tick_label": 20,
     "annotation": 22,
-    "schematic_cbar_label": 18,
-    "schematic_cbar_tick": 11,
+    "schematic_cbar_label": 20,
+    "schematic_cbar_tick": 15,
 }
 
 NISARG_COLORS = {
@@ -53,10 +54,11 @@ NISARG_COLORS = {
     "grid": "0.70",
 }
 
-CHARGE_COLORBAR_LABEL = r"$\delta\rho(r)(a_M^2/e)$"
-CHARGE_COLORBAR_BOUNDS = (0.815, 0.135, 0.03, 0.36)
-CHARGE_COLORBAR_LABEL_POSITION = (1.02, 1.025)
-CHARGE_COLORBAR_LABEL_HALIGN = "left"
+CHARGE_COLORBAR_LABEL = r"$\delta\rho(r)\;[10^{-3}a_M^2/e]$"
+CHARGE_COLORBAR_BOUNDS = (0.32, 0.045, 0.34, 0.028)
+CHARGE_COLORBAR_ORIENTATION = "horizontal"
+CHARGE_COLORBAR_TICK_SCALE = 1.0e3
+CHARGE_COLORBAR_TICK_COUNT = 5
 
 
 class CLLLSchematicPlotParams(BaseModel):
@@ -289,6 +291,13 @@ def charge_density_colormap() -> LinearSegmentedColormap:
         ],
         N=256,
     )
+
+
+def format_milli_charge_tick(value: float, _position: int | None = None) -> str:
+    scaled = float(value) * CHARGE_COLORBAR_TICK_SCALE
+    if abs(scaled) < 5e-4:
+        return "0"
+    return f"{scaled:.1f}".rstrip("0").rstrip(".")
 
 
 def apply_nisarg_plot_style() -> None:
@@ -822,18 +831,23 @@ def render_clll_spin_charge_schematic(
     draw_spin_arrows_projected(spin_ax, projection_ax, faces, colors)
     draw_projected_guides(spin_ax, projection_ax, radii)
     style_projected_panel(spin_ax, xlim, ylim)
-    colorbar = fig.colorbar(mesh, cax=cbar_ax)
-    colorbar.ax.text(
-        CHARGE_COLORBAR_LABEL_POSITION[0],
-        CHARGE_COLORBAR_LABEL_POSITION[1],
+    colorbar = fig.colorbar(mesh, cax=cbar_ax, orientation=CHARGE_COLORBAR_ORIENTATION)
+    colorbar.set_label(
         CHARGE_COLORBAR_LABEL,
-        transform=colorbar.ax.transAxes,
-        ha=CHARGE_COLORBAR_LABEL_HALIGN,
-        va="bottom",
         fontsize=NISARG_FONTS["schematic_cbar_label"],
-        color=NISARG_COLORS["axis"],
+        labelpad=4,
     )
-    colorbar.ax.tick_params(labelsize=NISARG_FONTS["schematic_cbar_tick"])
+    colorbar.ax.xaxis.set_label_position("top")
+    colorbar.ax.xaxis.set_ticks_position("bottom")
+    colorbar.set_ticks(
+        np.linspace(
+            -float(mesh.norm.vmax),
+            float(mesh.norm.vmax),
+            CHARGE_COLORBAR_TICK_COUNT,
+        )
+    )
+    colorbar.ax.xaxis.set_major_formatter(FuncFormatter(format_milli_charge_tick))
+    colorbar.ax.tick_params(labelsize=NISARG_FONTS["schematic_cbar_tick"], length=3.0, pad=2.0)
 
     fig.savefig(output, dpi=params.dpi)
     fig.savefig(pdf_output, dpi=params.dpi)

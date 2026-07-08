@@ -15,9 +15,9 @@ import matplotlib.pyplot as plt
 
 NISARG_FONTS = {
     "base": 12,
-    "axis_label": 30,
-    "tick_label": 22,
-    "legend": 14,
+    "axis_label": 34,
+    "tick_label": 26,
+    "legend": 17,
 }
 
 NISARG_COLORS = {
