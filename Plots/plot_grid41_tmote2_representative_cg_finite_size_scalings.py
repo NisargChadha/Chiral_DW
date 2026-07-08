@@ -38,6 +38,7 @@ COLORS = {
 NONLINEAR_INV_N_TICKS = np.array([0.0] + [1.0 / n_k for n_k in range(24, 17, -1)])
 NONLINEAR_X_TICKS = np.arange(len(NONLINEAR_INV_N_TICKS), dtype=float)
 NONLINEAR_X_LABELS = ["0"] + [rf"$1/{n_k}$" for n_k in range(24, 17, -1)]
+FIT_CURVE_MIN_INV_N = 1.0 / 25.0
 
 
 class RepresentativeRequest(BaseModel):
@@ -75,8 +76,8 @@ class RepresentativeScalingParams(BaseModel):
         ),
         RepresentativeRequest(
             role="VP, C=0",
-            theta_deg=3.7,
-            u_D_meV=10.0,
+            theta_deg=3.95,
+            u_D_meV=12.5,
             color="green",
             marker="D",
         ),
@@ -201,10 +202,11 @@ def build_plot(params: RepresentativeScalingParams) -> None:
     source = load_source(params)
     representatives = select_representatives(summary, params)
 
-    fig, ax = plt.subplots(figsize=(8.3, 5.8))
+    fig, ax = plt.subplots(figsize=(7.4, 7.4))
+    ax.set_box_aspect(1)
     plotted_rows: list[dict[str, object]] = []
     y_values: list[float] = []
-    x_fit = np.linspace(0.0, 1.0 / 18.0, 240)
+    x_fit = np.linspace(FIT_CURVE_MIN_INV_N, 1.0 / 18.0, 200)
     x_fit_display = display_x(x_fit)
 
     for representative in representatives:

@@ -366,21 +366,10 @@ def _draw_representative_markers(ax: plt.Axes, params: CGRMSEHeatmapParams) -> N
             [marker.theta_deg],
             [marker.u_D_meV],
             marker=marker.marker,
-            s=marker.size * 1.35,
-            facecolors="none",
-            edgecolors="white",
-            linewidths=2.2,
-            zorder=18,
-            clip_on=False,
-        )
-        ax.scatter(
-            [marker.theta_deg],
-            [marker.u_D_meV],
-            marker=marker.marker,
             s=marker.size,
             facecolors=marker.color,
             edgecolors=COLORS["axis"],
-            linewidths=0.55,
+            linewidths=0.65,
             zorder=19,
             clip_on=False,
         )

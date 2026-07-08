@@ -51,8 +51,8 @@ if __name__ == "__main__":
                     size=86.0,
                 ),
                 HeatmapMarker(
-                    theta_deg=3.7,
-                    u_D_meV=10.0,
+                    theta_deg=3.95,
+                    u_D_meV=12.5,
                     color="#4D9221",
                     marker="D",
                     size=78.0,
