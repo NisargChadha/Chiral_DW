@@ -10,7 +10,6 @@ import numpy as np
 import pandas as pd
 from matplotlib.collections import LineCollection
 from matplotlib.colors import LinearSegmentedColormap, ListedColormap, LogNorm, Normalize
-from matplotlib.ticker import LogFormatterMathtext
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
@@ -219,6 +218,23 @@ def _format_rmse_tick(value: float) -> str:
     return f"{value:.3g}"
 
 
+def _format_log_rmse_tick(value: float) -> str:
+    exponent = int(np.floor(np.log10(value)))
+    mantissa = value / (10.0**exponent)
+    if np.isclose(mantissa, 1.0, rtol=1.0e-6, atol=1.0e-12):
+        return rf"$10^{{{exponent}}}$"
+    return rf"${mantissa:.2g}\times 10^{{{exponent}}}$"
+
+
+def _log_ticks_through_max(vmin: float, vmax: float) -> np.ndarray:
+    decades = np.arange(np.ceil(np.log10(vmin)), np.floor(np.log10(vmax)) + 1)
+    ticks = np.power(10.0, decades)
+    ticks = ticks[(ticks >= vmin) & (ticks <= vmax)]
+    if ticks.size == 0 or not np.isclose(ticks[-1], vmax, rtol=1.0e-6, atol=0.0):
+        ticks = np.r_[ticks, vmax]
+    return ticks
+
+
 def _box_axes(ax: plt.Axes) -> None:
     for spine in ax.spines.values():
         spine.set_visible(True)
@@ -418,11 +434,12 @@ def render_rmse_heatmap(params: CGRMSEHeatmapParams = CGRMSEHeatmapParams()) -> 
     finite_positive_rmse = finite_rmse[finite_rmse > 0.0]
     if params.log_scale and finite_positive_rmse.size == 0:
         raise ValueError("Log-scale RMSE plot requires positive RMSE values")
-    vmax = params.vmax if params.vmax is not None else _nice_upper_limit(float(np.nanmax(finite_rmse)))
     if params.log_scale:
+        vmax = params.vmax if params.vmax is not None else float(np.nanmax(finite_positive_rmse))
         vmin = params.log_vmin if params.log_vmin is not None else _nice_lower_log_limit(float(np.nanmin(finite_positive_rmse)))
         norm = LogNorm(vmin=vmin, vmax=vmax)
     else:
+        vmax = params.vmax if params.vmax is not None else _nice_upper_limit(float(np.nanmax(finite_rmse)))
         vmin = params.vmin
         norm = Normalize(vmin=vmin, vmax=vmax)
 
@@ -468,10 +485,9 @@ def render_rmse_heatmap(params: CGRMSEHeatmapParams = CGRMSEHeatmapParams()) -> 
     cbar_ax = fig.add_axes([bbox.x1 + cbar_pad, bbox.y0, cbar_width, bbox.height])
     cbar = fig.colorbar(mesh, cax=cbar_ax)
     if params.log_scale:
-        decades = np.arange(np.floor(np.log10(vmin)), np.ceil(np.log10(vmax)) + 1)
-        ticks = np.power(10.0, decades)
+        ticks = _log_ticks_through_max(vmin, vmax)
         cbar.set_ticks(ticks)
-        cbar.ax.yaxis.set_major_formatter(LogFormatterMathtext())
+        cbar.set_ticklabels([_format_log_rmse_tick(float(value)) for value in ticks])
     else:
         ticks = np.linspace(params.vmin, vmax, 5)
         cbar.set_ticks(ticks)
