@@ -6,6 +6,7 @@ from __future__ import annotations
 from plot_grid41_tmote2_linear_cg_rmse_heatmap import (
     CGRMSEHeatmapParams,
     COLORS,
+    HeatmapMarker,
     _apply_style,
     render_rmse_heatmap,
 )
@@ -27,6 +28,37 @@ if __name__ == "__main__":
             log_scale=True,
             show_boundaries=True,
             mask_boundary_grey=True,
+            representative_markers=(
+                HeatmapMarker(
+                    theta_deg=3.05,
+                    u_D_meV=6.0,
+                    color="#FD4C55",
+                    marker="o",
+                    size=92.0,
+                ),
+                HeatmapMarker(
+                    theta_deg=3.0,
+                    u_D_meV=0.0,
+                    color="#378d94",
+                    marker="s",
+                    size=78.0,
+                ),
+                HeatmapMarker(
+                    theta_deg=3.5,
+                    u_D_meV=7.0,
+                    color="#6a408d",
+                    marker="^",
+                    size=86.0,
+                ),
+                HeatmapMarker(
+                    theta_deg=3.7,
+                    u_D_meV=10.0,
+                    color="#4D9221",
+                    marker="D",
+                    size=78.0,
+                ),
+            ),
+            show_chern_instability_crosses=True,
         )
     ):
         print(path)

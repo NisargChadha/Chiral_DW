@@ -24,6 +24,9 @@ INPUT_CSV = RESULT_BUNDLE / "analysis_plots" / "grid41_linear_interaction_lowest
 BOUNDARY_CSV = RESULT_BUNDLE / "analysis_plots" / "grid41_linear_interaction_best5_cG_heatmap_with_boundaries.csv"
 FIGURE_DIR = REPO_ROOT / "Plots" / "figures"
 OUTPUT_STEM = "grid41_tmote2_linear_interaction_best5_cG_rmse_heatmap"
+CHERN_INSTABILITY_SUMMARY_CSV = (
+    FIGURE_DIR / "grid41_tmote2_unstable_vpplus_chern_cG_outliers_summary.csv"
+)
 
 
 FIGURE = {
@@ -75,6 +78,18 @@ LINE_STYLES = {
 }
 
 
+class HeatmapMarker(BaseModel):
+    """Marker overlay for selected points on the RMSE heatmap."""
+
+    model_config = ConfigDict(frozen=True)
+
+    theta_deg: float
+    u_D_meV: float
+    color: str
+    marker: str
+    size: float = 78.0
+
+
 class CGRMSEHeatmapParams(BaseModel):
     """User-facing controls for the tMoTe2 cG finite-size RMSE heatmap."""
 
@@ -94,6 +109,9 @@ class CGRMSEHeatmapParams(BaseModel):
     show_boundaries: bool = Field(default=False)
     mask_boundary_grey: bool = Field(default=False)
     boundary_grey_column: str = Field(default="grey_mask_best5")
+    representative_markers: tuple[HeatmapMarker, ...] = Field(default=())
+    show_chern_instability_crosses: bool = Field(default=False)
+    chern_instability_summary_csv: Path = Field(default=CHERN_INSTABILITY_SUMMARY_CSV)
 
     @model_validator(mode="after")
     def _limits_are_valid(self) -> "CGRMSEHeatmapParams":
@@ -342,6 +360,56 @@ def _draw_phase_boundaries(
     )
 
 
+def _draw_representative_markers(ax: plt.Axes, params: CGRMSEHeatmapParams) -> None:
+    for marker in params.representative_markers:
+        ax.scatter(
+            [marker.theta_deg],
+            [marker.u_D_meV],
+            marker=marker.marker,
+            s=marker.size * 1.35,
+            facecolors="none",
+            edgecolors="white",
+            linewidths=2.2,
+            zorder=18,
+            clip_on=False,
+        )
+        ax.scatter(
+            [marker.theta_deg],
+            [marker.u_D_meV],
+            marker=marker.marker,
+            s=marker.size,
+            facecolors=marker.color,
+            edgecolors=COLORS["axis"],
+            linewidths=0.55,
+            zorder=19,
+            clip_on=False,
+        )
+
+
+def _draw_chern_instability_crosses(ax: plt.Axes, params: CGRMSEHeatmapParams) -> None:
+    if not params.chern_instability_summary_csv.exists():
+        raise FileNotFoundError(
+            f"Missing Chern-instability summary CSV: {params.chern_instability_summary_csv}"
+        )
+    outliers = pd.read_csv(params.chern_instability_summary_csv)
+    required = {"theta_deg", "u_D_meV"}
+    missing = sorted(required - set(outliers.columns))
+    if missing:
+        raise ValueError(
+            f"Missing required columns in {params.chern_instability_summary_csv}: {missing}"
+        )
+    ax.scatter(
+        outliers["theta_deg"],
+        outliers["u_D_meV"],
+        marker="x",
+        s=82,
+        c="black",
+        linewidths=1.05,
+        zorder=24,
+        clip_on=False,
+    )
+
+
 def render_rmse_heatmap(params: CGRMSEHeatmapParams = CGRMSEHeatmapParams()) -> list[Path]:
     plot_data = _load_plot_data(params)
     if params.mask_boundary_grey:
@@ -390,6 +458,10 @@ def render_rmse_heatmap(params: CGRMSEHeatmapParams = CGRMSEHeatmapParams()) -> 
     )
     if params.show_boundaries:
         _draw_phase_boundaries(ax, params, theta_vals, u_vals)
+    if params.representative_markers:
+        _draw_representative_markers(ax, params)
+    if params.show_chern_instability_crosses:
+        _draw_chern_instability_crosses(ax, params)
 
     ax.set_xlim(theta_vals.min(), theta_vals.max())
     ax.set_ylim(u_vals.min(), u_vals.max())

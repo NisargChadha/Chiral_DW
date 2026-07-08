@@ -7,7 +7,6 @@ from pathlib import Path
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
 import numpy as np
 import pandas as pd
 from pydantic import BaseModel, ConfigDict
@@ -35,6 +34,10 @@ COLORS = {
     "grid": "#D7D7D7",
     "axis": "#1A1A1A",
 }
+
+NONLINEAR_INV_N_TICKS = np.array([0.0] + [1.0 / n_k for n_k in range(24, 17, -1)])
+NONLINEAR_X_TICKS = np.arange(len(NONLINEAR_INV_N_TICKS), dtype=float)
+NONLINEAR_X_LABELS = ["0"] + [rf"$1/{n_k}$" for n_k in range(24, 17, -1)]
 
 
 class RepresentativeRequest(BaseModel):
@@ -182,10 +185,11 @@ def source_for_point(source: pd.DataFrame, theta_deg: float, u_D_meV: float) -> 
     return rows
 
 
-def legend_label(role: str, row: pd.Series) -> str:
-    return (
-        rf"{role}: $({row['theta_deg']:.2f}^\circ, {row['u_D_meV']:.1f}\,\mathrm{{meV}})$, "
-        rf"RMSE={row['cG_all_rmse']:.2g}"
+def display_x(inv_n_k: np.ndarray | pd.Series | float) -> np.ndarray:
+    return np.interp(
+        np.asarray(inv_n_k, dtype=float),
+        NONLINEAR_INV_N_TICKS,
+        NONLINEAR_X_TICKS,
     )
 
 
@@ -197,11 +201,11 @@ def build_plot(params: RepresentativeScalingParams) -> None:
     source = load_source(params)
     representatives = select_representatives(summary, params)
 
-    fig, ax = plt.subplots(figsize=(9.5, 5.9))
-    legend_handles: list[Line2D] = []
+    fig, ax = plt.subplots(figsize=(8.3, 5.8))
     plotted_rows: list[dict[str, object]] = []
     y_values: list[float] = []
     x_fit = np.linspace(0.0, 1.0 / 18.0, 240)
+    x_fit_display = display_x(x_fit)
 
     for representative in representatives:
         role = str(representative["role"])
@@ -217,13 +221,14 @@ def build_plot(params: RepresentativeScalingParams) -> None:
         intercept = float(row["cG_all_intercept"])
         slope = float(row["cG_all_slope"])
         fit_y = intercept + slope * x_fit
+        point_x = display_x(points["inv_n_k"])
         y_values.extend(points["cG"].astype(float).tolist())
         y_values.extend(fit_y.tolist())
         y_values.append(intercept)
 
-        ax.plot(x_fit, fit_y, color=color, lw=2.0, ls="--", alpha=0.95)
+        ax.plot(x_fit_display, fit_y, color=color, lw=2.0, ls="--", alpha=0.95)
         ax.plot(
-            points["inv_n_k"],
+            point_x,
             points["cG"],
             ls="none",
             marker=marker,
@@ -235,7 +240,7 @@ def build_plot(params: RepresentativeScalingParams) -> None:
             zorder=3,
         )
         ax.plot(
-            [0.0],
+            [display_x(0.0)[()]],
             [intercept],
             ls="none",
             marker=marker,
@@ -246,23 +251,9 @@ def build_plot(params: RepresentativeScalingParams) -> None:
             color=color,
             zorder=4,
         )
-        legend_handles.append(
-            Line2D(
-                [0],
-                [0],
-                color=color,
-                lw=2.0,
-                ls="--",
-                marker=marker,
-                markersize=6.2,
-                markerfacecolor=color,
-                markeredgecolor="white",
-                markeredgewidth=0.8,
-                label=legend_label(role, row),
-            )
-        )
 
         for _, point in points.iterrows():
+            point_display_x = float(display_x(point["inv_n_k"])[()])
             plotted_rows.append(
                 {
                     "role": role,
@@ -270,6 +261,7 @@ def build_plot(params: RepresentativeScalingParams) -> None:
                     "u_D_meV": u_D_meV,
                     "n_k": int(point["n_k"]),
                     "inv_n_k": float(point["inv_n_k"]),
+                    "display_x": point_display_x,
                     "cG": float(point["cG"]),
                     "source_branch": point.get("source_branch", ""),
                     "cG_all_intercept": intercept,
@@ -282,22 +274,14 @@ def build_plot(params: RepresentativeScalingParams) -> None:
     y_min = float(np.nanmin(y_values))
     y_max = float(np.nanmax(y_values))
     y_pad = 0.07 * max(y_max - y_min, 1.0e-3)
-    ax.set_xlim(-0.0015, 1.0 / 18.0 + 0.002)
+    ax.set_xlim(-0.16, NONLINEAR_X_TICKS[-1] + 0.16)
     ax.set_ylim(y_min - y_pad, y_max + y_pad)
     ax.set_xlabel(r"$1/n_k$")
     ax.set_ylabel(r"$c_G$")
-    ax.set_xticks([0.0, 1.0 / 24.0, 1.0 / 22.0, 1.0 / 20.0, 1.0 / 18.0])
-    ax.set_xticklabels(["0", r"$1/24$", r"$1/22$", r"$1/20$", r"$1/18$"])
-    ax.axvline(0.0, color=COLORS["axis"], lw=1.0, alpha=0.45)
+    ax.set_xticks(NONLINEAR_X_TICKS)
+    ax.set_xticklabels(NONLINEAR_X_LABELS)
+    ax.axvline(display_x(0.0)[()], color=COLORS["axis"], lw=1.0, alpha=0.45)
     ax.grid(True, color=COLORS["grid"], lw=0.7, alpha=0.45)
-    ax.legend(
-        handles=legend_handles,
-        loc="center left",
-        bbox_to_anchor=(1.01, 0.5),
-        frameon=False,
-        borderaxespad=0.6,
-        handlelength=2.8,
-    )
 
     png_path = params.output_dir / f"{params.output_stem}.png"
     pdf_path = params.output_dir / f"{params.output_stem}.pdf"
