@@ -72,7 +72,7 @@ class RepresentativeScalingParams(BaseModel):
         ),
         RepresentativeRequest(
             role="VP, C=0",
-            theta_deg=3.5,
+            theta_deg=3.7,
             u_D_meV=10.0,
             color="green",
             marker="D",
