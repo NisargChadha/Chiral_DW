@@ -29,17 +29,18 @@ CHERN_INSTABILITY_SUMMARY_CSV = (
 
 
 FIGURE = {
-    "size": (7.4, 7.4),
-    "dpi": 280,
-    "subplots_adjust": {"left": 0.12, "right": 0.82, "bottom": 0.12, "top": 0.96},
+    "size": (3.42, 3.42),
+    "dpi": 600,
+    "subplots_adjust": {"left": 0.17, "right": 0.78, "bottom": 0.16, "top": 0.93},
 }
 
 FONTS = {
-    "base": 12,
-    "axis_label": 24,
-    "tick_label": 20,
-    "colorbar_label": 24,
-    "colorbar_tick": 20,
+    "base": 9,
+    "axis_label": 11,
+    "tick_label": 10,
+    "colorbar_label": 10,
+    "colorbar_tick": 9,
+    "legend": 8,
 }
 
 COLORS = {
@@ -64,16 +65,16 @@ LABELS = {
 AXES = {
     "xticks": (2.0, 2.5, 3.0, 3.5, 4.0),
     "yticks": (0, 5, 10, 15, 20),
-    "spine_linewidth": 1.15,
+    "spine_linewidth": 0.8,
     "box_aspect": 1.0,
-    "colorbar_width_fraction": 0.05,
-    "colorbar_pad_fraction": 0.05,
+    "colorbar_width_fraction": 0.055,
+    "colorbar_pad_fraction": 0.06,
 }
 
 LINE_STYLES = {
-    "ivc_ivc": {"linestyle": "--", "linewidth": 2.35, "zorder": 8},
-    "vp_chern": {"linestyle": "--", "linewidth": 2.25, "zorder": 9},
-    "vp_ivc": {"linestyle": "-", "linewidth": 2.1, "zorder": 10},
+    "ivc_ivc": {"linestyle": "--", "linewidth": 1.35, "zorder": 8},
+    "vp_chern": {"linestyle": "--", "linewidth": 1.3, "zorder": 9},
+    "vp_ivc": {"linestyle": "-", "linewidth": 1.25, "zorder": 10},
 }
 
 
@@ -87,6 +88,8 @@ class HeatmapMarker(BaseModel):
     color: str
     marker: str
     size: float = 78.0
+    edge_color: str = "0.18"
+    edge_width: float = 0.75
 
 
 class CGRMSEHeatmapParams(BaseModel):
@@ -141,7 +144,7 @@ def _apply_style() -> None:
             "axes.spines.right": True,
             "axes.grid": True,
             "grid.alpha": 0.22,
-            "grid.linewidth": 0.8,
+            "grid.linewidth": 0.45,
             "xtick.direction": "out",
             "ytick.direction": "out",
             "savefig.transparent": False,
@@ -226,12 +229,12 @@ def _format_log_rmse_tick(value: float) -> str:
     return rf"${mantissa:.2g}\times 10^{{{exponent}}}$"
 
 
-def _log_ticks_through_max(vmin: float, vmax: float) -> np.ndarray:
+def _log_decade_ticks(vmin: float, vmax: float) -> np.ndarray:
     decades = np.arange(np.ceil(np.log10(vmin)), np.floor(np.log10(vmax)) + 1)
     ticks = np.power(10.0, decades)
     ticks = ticks[(ticks >= vmin) & (ticks <= vmax)]
-    if ticks.size == 0 or not np.isclose(ticks[-1], vmax, rtol=1.0e-6, atol=0.0):
-        ticks = np.r_[ticks, vmax]
+    if ticks.size == 0:
+        ticks = np.array([vmin, vmax])
     return ticks
 
 
@@ -372,7 +375,7 @@ def _draw_phase_boundaries(
         handlelength=2.0,
         handletextpad=0.55,
         labelspacing=0.35,
-        fontsize=16,
+        fontsize=FONTS["legend"],
     )
 
 
@@ -384,8 +387,8 @@ def _draw_representative_markers(ax: plt.Axes, params: CGRMSEHeatmapParams) -> N
             marker=marker.marker,
             s=marker.size,
             facecolors=marker.color,
-            edgecolors=COLORS["axis"],
-            linewidths=0.65,
+            edgecolors=marker.edge_color,
+            linewidths=marker.edge_width,
             zorder=19,
             clip_on=False,
         )
@@ -407,9 +410,9 @@ def _draw_chern_instability_crosses(ax: plt.Axes, params: CGRMSEHeatmapParams) -
         outliers["theta_deg"],
         outliers["u_D_meV"],
         marker="x",
-        s=82,
+        s=24,
         c="black",
-        linewidths=1.05,
+        linewidths=0.65,
         zorder=24,
         clip_on=False,
     )
@@ -485,14 +488,14 @@ def render_rmse_heatmap(params: CGRMSEHeatmapParams = CGRMSEHeatmapParams()) -> 
     cbar_ax = fig.add_axes([bbox.x1 + cbar_pad, bbox.y0, cbar_width, bbox.height])
     cbar = fig.colorbar(mesh, cax=cbar_ax)
     if params.log_scale:
-        ticks = _log_ticks_through_max(vmin, vmax)
+        ticks = _log_decade_ticks(vmin, vmax)
         cbar.set_ticks(ticks)
         cbar.set_ticklabels([_format_log_rmse_tick(float(value)) for value in ticks])
     else:
         ticks = np.linspace(params.vmin, vmax, 5)
         cbar.set_ticks(ticks)
         cbar.set_ticklabels([_format_rmse_tick(float(value)) for value in ticks])
-    cbar.ax.set_title(LABELS["cbar"], fontsize=FONTS["colorbar_label"], pad=12)
+    cbar.ax.set_title(LABELS["cbar"], fontsize=FONTS["colorbar_label"], pad=4)
     cbar.ax.tick_params(labelsize=FONTS["colorbar_tick"])
 
     params.output_dir.mkdir(parents=True, exist_ok=True)
