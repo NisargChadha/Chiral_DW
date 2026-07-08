@@ -410,9 +410,9 @@ def _draw_chern_instability_crosses(ax: plt.Axes, params: CGRMSEHeatmapParams) -
         outliers["theta_deg"],
         outliers["u_D_meV"],
         marker="x",
-        s=24,
+        s=9,
         c="black",
-        linewidths=0.65,
+        linewidths=0.5,
         zorder=24,
         clip_on=False,
     )
