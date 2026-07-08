@@ -92,6 +92,7 @@ class CGRMSEHeatmapParams(BaseModel):
     log_scale: bool = Field(default=False)
     log_vmin: float | None = Field(default=None)
     show_boundaries: bool = Field(default=False)
+    mask_boundary_grey: bool = Field(default=False)
     boundary_grey_column: str = Field(default="grey_mask_best5")
 
     @model_validator(mode="after")
@@ -155,6 +156,14 @@ def _as_bool_array(values: np.ndarray) -> np.ndarray:
         return values.astype(bool)
     lowered = np.char.lower(values.astype(str))
     return np.isin(lowered, ["true", "1", "yes"])
+
+
+def _as_bool_series(series: pd.Series) -> pd.Series:
+    if series.dtype == bool:
+        return series
+    if np.issubdtype(series.dtype, np.number):
+        return series.fillna(0).astype(bool)
+    return series.astype(str).str.lower().isin({"true", "1", "yes"})
 
 
 def _rmse_cmap() -> LinearSegmentedColormap:
@@ -260,6 +269,18 @@ def _load_plot_data(params: CGRMSEHeatmapParams) -> pd.DataFrame:
     return out
 
 
+def _apply_boundary_grey_mask(params: CGRMSEHeatmapParams, plot_data: pd.DataFrame) -> pd.DataFrame:
+    boundary = _load_boundary_data(params)
+    grey = boundary.loc[:, ["theta_deg", "u_D_meV", params.boundary_grey_column]].copy()
+    grey["phase_grey_mask"] = _as_bool_series(grey[params.boundary_grey_column])
+    grey = grey.drop(columns=[params.boundary_grey_column])
+    out = plot_data.merge(grey, on=["theta_deg", "u_D_meV"], how="left", validate="one_to_one")
+    out["phase_grey_mask"] = out["phase_grey_mask"].fillna(False).astype(bool)
+    out.loc[out["phase_grey_mask"], "valid_fit"] = False
+    out.loc[out["phase_grey_mask"], "rmse_cG_fit"] = np.nan
+    return out
+
+
 def _load_boundary_data(params: CGRMSEHeatmapParams) -> pd.DataFrame:
     if not params.boundary_csv.exists():
         raise FileNotFoundError(f"Missing phase-boundary CSV: {params.boundary_csv}")
@@ -323,6 +344,8 @@ def _draw_phase_boundaries(
 
 def render_rmse_heatmap(params: CGRMSEHeatmapParams = CGRMSEHeatmapParams()) -> list[Path]:
     plot_data = _load_plot_data(params)
+    if params.mask_boundary_grey:
+        plot_data = _apply_boundary_grey_mask(params, plot_data)
     theta_vals = np.array(sorted(plot_data["theta_deg"].unique()), dtype=float)
     u_vals = np.array(sorted(plot_data["u_D_meV"].unique()), dtype=float)
     theta_edges = _edges(theta_vals)

@@ -21,6 +21,7 @@ def main() -> None:
         output_stem=OUTPUT_STEM,
         log_scale=True,
         show_boundaries=True,
+        mask_boundary_grey=True,
     )
     for path in render_rmse_heatmap(params):
         print(path)
