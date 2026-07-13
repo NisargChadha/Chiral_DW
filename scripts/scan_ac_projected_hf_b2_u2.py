@@ -168,6 +168,12 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _canonical_parameter(value: float) -> float:
+    """Remove linspace roundoff before constructing the AC Hamiltonian."""
+
+    return float(np.round(float(value), decimals=14))
+
+
 def _linspace_points(args: argparse.Namespace) -> list[ACSweepPoint]:
     if (args.b2 is None) ^ (args.u2 is None):
         raise ValueError("--b2 and --u2 must be supplied together for an explicit single point")
@@ -176,22 +182,28 @@ def _linspace_points(args: argparse.Namespace) -> list[ACSweepPoint]:
             ACSweepPoint(
                 b_index=0,
                 u_index=0,
-                b1=float(args.b1),
-                u1=float(args.u1),
-                b2=float(args.b2),
-                u2=float(args.u2),
+                b1=_canonical_parameter(args.b1),
+                u1=_canonical_parameter(args.u1),
+                b2=_canonical_parameter(args.b2),
+                u2=_canonical_parameter(args.u2),
             )
         ]
     if args.n_b2 < 1 or args.n_u2 < 1:
         raise ValueError("n-b2 and n-u2 must both be positive")
-    b_values = np.linspace(float(args.b2_min), float(args.b2_max), int(args.n_b2))
-    u_values = np.linspace(float(args.u2_min), float(args.u2_max), int(args.n_u2))
+    b_values = [
+        _canonical_parameter(value)
+        for value in np.linspace(float(args.b2_min), float(args.b2_max), int(args.n_b2))
+    ]
+    u_values = [
+        _canonical_parameter(value)
+        for value in np.linspace(float(args.u2_min), float(args.u2_max), int(args.n_u2))
+    ]
     return [
         ACSweepPoint(
             b_index=ib,
             u_index=iu,
-            b1=float(args.b1),
-            u1=float(args.u1),
+            b1=_canonical_parameter(args.b1),
+            u1=_canonical_parameter(args.u1),
             b2=float(b),
             u2=float(u),
         )
@@ -376,10 +388,18 @@ def _load_point_summary(path: Path) -> dict[str, Any]:
     return dict(data["row"])
 
 
+def _canonicalize_row_coordinates(row: dict[str, Any]) -> dict[str, Any]:
+    out = dict(row)
+    for key in ("b1", "u1", "b2", "u2"):
+        if key in out and out[key] not in (None, ""):
+            out[key] = _canonical_parameter(float(out[key]))
+    return out
+
+
 def _stack_point_table(output_root: Path, filename: str, output_name: str) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for path in sorted((output_root / "points").glob(f"*/{filename}")):
-        rows.extend(_read_csv(path))
+        rows.extend(_canonicalize_row_coordinates(row) for row in _read_csv(path))
     _write_csv(output_root / output_name, rows)
     return rows
 
@@ -431,7 +451,7 @@ def _write_sweep_arrays(output_root: Path, rows: list[dict[str, Any]]) -> None:
 
 def merge_point_summaries(output_root: Path) -> list[dict[str, Any]]:
     rows = [
-        _load_point_summary(path)
+        _canonicalize_row_coordinates(_load_point_summary(path))
         for path in sorted((output_root / "points").glob("*/point_summary.json"))
     ]
     rows.sort(key=lambda row: (int(row["b_index"]), int(row["u_index"])))
