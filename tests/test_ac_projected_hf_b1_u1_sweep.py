@@ -50,6 +50,58 @@ def test_ac_b1_u1_sweep_dry_run_writes_selected_plan(tmp_path):
     assert "points/b_001_u_001" in point["point_dir"]
 
 
+def test_ac_b1_u1_sweep_canonicalizes_linspace_roundoff(tmp_path):
+    output_root = tmp_path / "sweep"
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--output-root",
+            str(output_root),
+            "--b1-min",
+            "-0.1",
+            "--b1-max",
+            "0.1",
+            "--n-b1",
+            "11",
+            "--u1-min",
+            "-0.1",
+            "--u1-max",
+            "0.1",
+            "--n-u1",
+            "11",
+            "--dry-run",
+        ],
+        check=True,
+    )
+
+    plan = json.loads((output_root / "sweep_plan.json").read_text())
+    point = next(
+        row for row in plan["points"] if row["b_index"] == 3 and row["u_index"] == 3
+    )
+    assert point["b1"] == -0.04
+    assert point["u1"] == -0.04
+
+    explicit_root = tmp_path / "explicit"
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--output-root",
+            str(explicit_root),
+            "--b1",
+            "-0.04000000000000001",
+            "--u1",
+            "0.01999999999999999",
+            "--dry-run",
+        ],
+        check=True,
+    )
+    explicit = json.loads((explicit_root / "sweep_plan.json").read_text())["points"][0]
+    assert explicit["b1"] == -0.04
+    assert explicit["u1"] == 0.02
+
+
 def test_ac_b1_u1_sweep_merge_only_collects_point_summaries(tmp_path):
     output_root = tmp_path / "sweep"
     point_dir = output_root / "points" / "b_000_u_000"
@@ -177,3 +229,26 @@ def test_ac_b1_u1_sweep_job_uses_121_point_array_and_lowest_band_default():
     assert 'N_U1=${N_U1:-"11"}' in text
     assert 'N_LL=${N_LL:-"8"}' in text
     assert 'ACTIVE_BAND=${ACTIVE_BAND:-"0"}' in text
+
+
+def test_ac_b1_u1_sweep_no_write_plan_leaves_shared_plan_untouched(tmp_path):
+    output_root = tmp_path / "sweep"
+    output_root.mkdir()
+    plan_path = output_root / "sweep_plan.json"
+    plan_path.write_text('{"sentinel": true}')
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--output-root",
+            str(output_root),
+            "--b1",
+            "0.0",
+            "--u1",
+            "0.0",
+            "--dry-run",
+            "--no-write-plan",
+        ],
+        check=True,
+    )
+    assert json.loads(plan_path.read_text()) == {"sentinel": True}
