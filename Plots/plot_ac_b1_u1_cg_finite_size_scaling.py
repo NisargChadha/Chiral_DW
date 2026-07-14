@@ -18,6 +18,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap, Normalize
 from matplotlib.ticker import FormatStrFormatter
+from scipy.stats import t as student_t
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -35,8 +36,8 @@ COLORS = {
 MODEL_POWERS: dict[str, tuple[int, ...]] = {
     "inverse_n": (1,),
     "inverse_n2": (2,),
-    "even_n2_n4": (2, 4),
 }
+HIGH_ORDER_DIAGNOSTIC_POWERS = (2, 4)
 
 
 class ACB1U1CGFiniteSizeParams(BaseModel):
@@ -58,7 +59,7 @@ class ACB1U1CGFiniteSizeParams(BaseModel):
     @model_validator(mode="after")
     def _validate_sizes(self) -> "ACB1U1CGFiniteSizeParams":
         if len(self.n_k_values) < 5:
-            raise ValueError("at least five n_k values are required for the three fit diagnostics")
+            raise ValueError("at least five n_k values are required for the fit diagnostics")
         if len(set(self.n_k_values)) != len(self.n_k_values):
             raise ValueError("n_k values must be unique")
         if tuple(sorted(self.n_k_values)) != self.n_k_values:
@@ -240,6 +241,45 @@ def fit_model(n_k: np.ndarray, cG: np.ndarray, powers: tuple[int, ...]) -> FitRe
     )
 
 
+def fit_scalar_series(
+    n_k: np.ndarray,
+    values: np.ndarray,
+    powers: tuple[int, ...],
+) -> dict[str, Any]:
+    """Fit one finite-size series and report an intercept confidence interval."""
+
+    y = np.asarray(values, dtype=float)
+    design = _design_matrix(n_k, powers)
+    if y.shape != (len(n_k),):
+        raise ValueError("scalar finite-size values must match n_k")
+    coefficients = np.linalg.lstsq(design, y, rcond=None)[0]
+    predictions = design @ coefficients
+    residuals = predictions - y
+    degrees_of_freedom = len(y) - design.shape[1]
+    if degrees_of_freedom <= 0:
+        raise ValueError("scalar fit requires positive residual degrees of freedom")
+    residual_variance = float(np.sum(residuals**2) / degrees_of_freedom)
+    covariance = residual_variance * np.linalg.inv(design.T @ design)
+    intercept_standard_error = float(np.sqrt(covariance[0, 0]))
+    confidence_half_width = float(
+        student_t.ppf(0.975, degrees_of_freedom) * intercept_standard_error
+    )
+    return {
+        "powers": list(powers),
+        "coefficients": coefficients,
+        "predictions": predictions,
+        "residuals": residuals,
+        "intercept": float(coefficients[0]),
+        "intercept_standard_error": intercept_standard_error,
+        "intercept_95_percent_ci": [
+            float(coefficients[0] - confidence_half_width),
+            float(coefficients[0] + confidence_half_width),
+        ],
+        "rmse": float(np.sqrt(np.mean(residuals**2))),
+        "condition_number": float(np.linalg.cond(design)),
+    }
+
+
 def load_finite_size_data(params: ACB1U1CGFiniteSizeParams) -> FiniteSizeData:
     coords_ref: np.ndarray | None = None
     values: list[np.ndarray] = []
@@ -309,29 +349,55 @@ def _grid_from_flat(data: FiniteSizeData, values: np.ndarray) -> tuple[np.ndarra
     return b_values, u_values, grid
 
 
+def _pointwise_shape_diagnostics(
+    data: FiniteSizeData,
+    values: np.ndarray,
+) -> dict[str, Any]:
+    """Compare an extrapolated map's edge directions with all computed maps."""
+
+    computed_grids = np.stack([_grid_from_flat(data, row)[2] for row in data.cG])
+    candidate = _grid_from_flat(data, values)[2]
+    computed_du = np.diff(computed_grids, axis=1)
+    computed_db = np.diff(computed_grids, axis=2)
+    expected_du = np.sign(np.median(computed_du, axis=0))
+    expected_db = np.sign(np.median(computed_db, axis=0))
+    candidate_du = np.diff(candidate, axis=0)
+    candidate_db = np.diff(candidate, axis=1)
+    tolerance = 1e-14
+    reversed_du = (candidate_du * expected_du) < -tolerance
+    reversed_db = (candidate_db * expected_db) < -tolerance
+    turns_u = np.sign(candidate_du[1:]) * np.sign(candidate_du[:-1]) < 0.0
+    turns_b = np.sign(candidate_db[:, 1:]) * np.sign(candidate_db[:, :-1]) < 0.0
+    return {
+        "reversed_u1_neighbor_slopes": int(np.count_nonzero(reversed_du)),
+        "reversed_b1_neighbor_slopes": int(np.count_nonzero(reversed_db)),
+        "total_reversed_neighbor_slopes": int(
+            np.count_nonzero(reversed_du) + np.count_nonzero(reversed_db)
+        ),
+        "u1_turning_points": int(np.count_nonzero(turns_u)),
+        "b1_turning_points": int(np.count_nonzero(turns_b)),
+        "minimum_u1_neighbor_difference": float(np.min(candidate_du)),
+        "maximum_u1_neighbor_difference": float(np.max(candidate_du)),
+        "minimum_b1_neighbor_difference": float(np.min(candidate_db)),
+        "maximum_b1_neighbor_difference": float(np.max(candidate_db)),
+    }
+
+
 def _write_analysis_csv(output: Path, data: FiniteSizeData) -> Path:
     path = output.with_suffix(".csv")
     fieldnames = ["b1", "u1"] + [f"cG_nk{n_k}" for n_k in data.n_k]
-    for model in MODEL_POWERS:
-        fieldnames.extend(
-            [f"cG_infinity_{model}", f"rmse_{model}", f"loo_rmse_{model}"]
-        )
-    fieldnames.append("cG_infinity_model_spread")
+    fieldnames.extend(["cG_nk_last_minus_first", "cG_span_across_computed_n_k"])
     with path.open("w", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, lineterminator="\n")
         writer.writeheader()
-        intercepts = np.stack([fit.intercept for fit in data.fits.values()])
         for index, (b1, u1) in enumerate(zip(data.b1, data.u1, strict=True)):
             row: dict[str, Any] = {"b1": f"{b1:.16g}", "u1": f"{u1:.16g}"}
             for size_index, n_k in enumerate(data.n_k):
                 row[f"cG_nk{n_k}"] = f"{data.cG[size_index, index]:.16g}"
-            for model, fit in data.fits.items():
-                row[f"cG_infinity_{model}"] = f"{fit.intercept[index]:.16g}"
-                row[f"rmse_{model}"] = f"{np.sqrt(np.mean(fit.residuals[:, index] ** 2)):.16g}"
-                row[f"loo_rmse_{model}"] = (
-                    f"{np.sqrt(np.mean(fit.loo_residuals[:, index] ** 2)):.16g}"
-                )
-            row["cG_infinity_model_spread"] = f"{np.ptp(intercepts[:, index]):.16g}"
+            row["cG_nk_last_minus_first"] = (
+                f"{data.cG[-1, index] - data.cG[0, index]:.16g}"
+            )
+            row["cG_span_across_computed_n_k"] = f"{np.ptp(data.cG[:, index]):.16g}"
             writer.writerow(row)
     return path
 
@@ -341,7 +407,6 @@ def _summary(data: FiniteSizeData, output: Path) -> dict[str, Any]:
     if center_candidates.size != 1:
         raise ValueError("expected exactly one b1=u1=0 point")
     center = int(center_candidates[0])
-    intercepts = np.stack([fit.intercept for fit in data.fits.values()])
     successive = np.diff(data.cG, axis=0)
     even_mask = data.n_k % 2 == 0
     odd_mask = ~even_mask
@@ -352,18 +417,66 @@ def _summary(data: FiniteSizeData, output: Path) -> dict[str, Any]:
         _design_matrix(data.n_k[odd_mask], (2,)), data.cG[odd_mask], rcond=None
     )[0][0]
     odd_even_difference = odd_intercept - even_intercept
-    model_summaries: dict[str, Any] = {}
-    for name, fit in data.fits.items():
-        model_summaries[name] = {
+
+    spatial_mean = np.mean(data.cG, axis=1)
+    spatial_range = np.ptp(data.cG, axis=1)
+    mean_fits = {
+        name: fit_scalar_series(data.n_k, spatial_mean, powers)
+        for name, powers in MODEL_POWERS.items()
+    }
+    range_fit = fit_scalar_series(data.n_k, spatial_range, (2,))
+
+    def scalar_summary(result: dict[str, Any]) -> dict[str, Any]:
+        return {
+            key: value
+            for key, value in result.items()
+            if key not in {"coefficients", "predictions", "residuals"}
+        }
+
+    pointwise_fits = dict(data.fits)
+    pointwise_fits["even_n2_n4"] = fit_model(
+        data.n_k, data.cG, HIGH_ORDER_DIAGNOSTIC_POWERS
+    )
+    pointwise_diagnostics: dict[str, Any] = {}
+    for name, fit in pointwise_fits.items():
+        leave_one_out_intercepts: list[np.ndarray] = []
+        for held_out in range(len(data.n_k)):
+            keep = np.arange(len(data.n_k)) != held_out
+            coefficients = np.linalg.lstsq(
+                _design_matrix(data.n_k[keep], fit.powers), data.cG[keep], rcond=None
+            )[0]
+            leave_one_out_intercepts.append(coefficients[0])
+        intercept_stack = np.stack(leave_one_out_intercepts)
+        pointwise_diagnostics[name] = {
             "powers": list(fit.powers),
+            "design_matrix_condition_number": float(
+                np.linalg.cond(_design_matrix(data.n_k, fit.powers))
+            ),
             "center_cG_infinity": float(fit.intercept[center]),
             "cG_infinity_min": float(np.min(fit.intercept)),
             "cG_infinity_max": float(np.max(fit.intercept)),
             "overall_rmse": float(np.sqrt(np.mean(fit.residuals**2))),
-            "overall_leave_one_out_rmse": float(np.sqrt(np.mean(fit.loo_residuals**2))),
-            "maximum_abs_residual": float(np.max(np.abs(fit.residuals))),
-            "maximum_abs_leave_one_out_residual": float(np.max(np.abs(fit.loo_residuals))),
+            "overall_leave_one_out_prediction_rmse": float(
+                np.sqrt(np.mean(fit.loo_residuals**2))
+            ),
+            "median_leave_one_out_intercept_range": float(
+                np.median(np.ptp(intercept_stack, axis=0))
+            ),
+            "maximum_leave_one_out_intercept_range": float(
+                np.max(np.ptp(intercept_stack, axis=0))
+            ),
+            "shape": _pointwise_shape_diagnostics(data, fit.intercept),
+            "spatial_map_status": "rejected",
+            "spatial_map_rejection_reason": (
+                "Pointwise extrapolation is not shape-preserving over the observed "
+                "parameter grid; scalar finite-size trends are reported instead."
+            ),
         }
+
+    observed_shape = {
+        str(n_k): _pointwise_shape_diagnostics(data, data.cG[index])
+        for index, n_k in enumerate(data.n_k)
+    }
     return {
         "output_png": str(output),
         "output_pdf": str(output.with_suffix(".pdf")),
@@ -383,13 +496,20 @@ def _summary(data: FiniteSizeData, output: Path) -> dict[str, Any]:
             }
             for index, (left, right) in enumerate(zip(data.n_k[:-1], data.n_k[1:], strict=True))
         },
-        "fits": model_summaries,
-        "center_model_spread": float(np.ptp(intercepts[:, center])),
-        "maximum_pointwise_model_spread": float(np.max(np.ptp(intercepts, axis=0))),
-        "finite_nk_max_parameter_span": float(np.ptp(data.cG[-1])),
-        "even_power_infinity_parameter_span": float(
-            np.ptp(data.fits["even_n2_n4"].intercept)
-        ),
+        "spatial_mean_by_n_k": {
+            str(n_k): float(spatial_mean[index]) for index, n_k in enumerate(data.n_k)
+        },
+        "spatial_range_by_n_k": {
+            str(n_k): float(spatial_range[index]) for index, n_k in enumerate(data.n_k)
+        },
+        "scalar_fits": {
+            "spatial_mean": {
+                name: scalar_summary(result) for name, result in mean_fits.items()
+            },
+            "spatial_range_inverse_n2": scalar_summary(range_fit),
+        },
+        "observed_mesh_shape_diagnostics": observed_shape,
+        "rejected_pointwise_extrapolation_diagnostics": pointwise_diagnostics,
         "odd_even_inverse_square_diagnostic": {
             "even_n_k_values": data.n_k[even_mask].tolist(),
             "odd_n_k_values": data.n_k[odd_mask].tolist(),
@@ -401,10 +521,11 @@ def _summary(data: FiniteSizeData, output: Path) -> dict[str, Any]:
             ),
         },
         "interpretation": (
-            "The finite-size trend is smooth and has no significant odd-even anomaly. "
-            "The even 1/n_k^2+1/n_k^4 expansion gives the smallest interpolation and "
-            "leave-one-size-out errors, but the infinity intercept remains ansatz-dependent "
-            "over the narrow n_k=18..22 window; compare all reported intercepts."
+            "Every computed mesh is monotonic in b1 and u1, but all tested pointwise "
+            "infinity maps reverse slopes or introduce turning points. No extrapolated "
+            "two-dimensional map is therefore reported. The spatial range is consistent "
+            "with vanishing under a 1/n_k^2 fit, while the scalar spatial-mean intercept "
+            "remains ansatz-dependent over n_k=18..22."
         ),
     }
 
@@ -452,57 +573,80 @@ def render_finite_size_analysis(
     summary = _summary(data, output)
     summary_output.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
 
-    center = int(np.where(np.isclose(data.b1, 0.0) & np.isclose(data.u1, 0.0))[0][0])
-    x_data = 1.0 / data.n_k.astype(float)
-    x_fit = np.linspace(0.0, float(np.max(x_data)) * 1.04, 400)
-    curves: dict[str, np.ndarray] = {}
-    for name, fit in data.fits.items():
-        curve = np.full_like(x_fit, fit.coefficients[0, center])
-        for coefficient, power in zip(fit.coefficients[1:, center], fit.powers, strict=True):
-            curve += coefficient * x_fit**power
-        curves[name] = curve
+    spatial_mean = np.mean(data.cG, axis=1)
+    spatial_range = np.ptp(data.cG, axis=1)
+    mean_fits = {
+        name: fit_scalar_series(data.n_k, spatial_mean, powers)
+        for name, powers in MODEL_POWERS.items()
+    }
+    range_fit = fit_scalar_series(data.n_k, spatial_range, (2,))
 
-    b_values, u_values, finite_grid = _grid_from_flat(data, data.cG[-1])
-    _, _, extrapolated_grid = _grid_from_flat(data, data.fits["even_n2_n4"].intercept)
-    finite_norm = Normalize(vmin=float(np.min(finite_grid)), vmax=float(np.max(finite_grid)))
-    extrapolated_norm = Normalize(
-        vmin=float(np.min(extrapolated_grid)), vmax=float(np.max(extrapolated_grid))
-    )
+    inverse_n = 1.0 / data.n_k.astype(float)
+    inverse_n2 = inverse_n**2
+    x_mean_fit = np.linspace(0.0, float(np.max(inverse_n)) * 1.04, 400)
+    mean_curves: dict[str, np.ndarray] = {}
+    for name, result in mean_fits.items():
+        coefficients = result["coefficients"]
+        powers = tuple(result["powers"])
+        curve = np.full_like(x_mean_fit, coefficients[0])
+        for coefficient, power in zip(coefficients[1:], powers, strict=True):
+            curve += coefficient * x_mean_fit**power
+        mean_curves[name] = curve
+    x_range_fit = np.linspace(0.0, float(np.max(inverse_n2)) * 1.04, 400)
+    range_curve = range_fit["coefficients"][0] + range_fit["coefficients"][1] * x_range_fit
+
+    b_values, u_values, coarse_grid = _grid_from_flat(data, data.cG[0])
+    _, _, fine_grid = _grid_from_flat(data, data.cG[-1])
+    finite_values = np.r_[coarse_grid.ravel(), fine_grid.ravel()]
+    finite_norm = Normalize(vmin=float(np.min(finite_values)), vmax=float(np.max(finite_values)))
     cmap = LinearSegmentedColormap.from_list(
         "nisarg_teal_neutral_red", [COLORS["teal"], COLORS["center"], COLORS["red"]]
     )
 
-    fig = plt.figure(figsize=(12.2, 10.4))
+    fig = plt.figure(figsize=(12.6, 10.6))
     grid_spec = fig.add_gridspec(
         2,
         2,
-        height_ratios=(0.90, 1.05),
-        left=0.09,
-        right=0.92,
+        height_ratios=(0.88, 1.05),
+        left=0.08,
+        right=0.93,
         bottom=0.09,
         top=0.90,
-        hspace=0.38,
-        wspace=0.44,
+        hspace=0.36,
+        wspace=0.27,
     )
-    ax_scale = fig.add_subplot(grid_spec[0, :])
+    ax_mean = fig.add_subplot(grid_spec[0, 0])
+    ax_range = fig.add_subplot(grid_spec[0, 1])
     ax_left = fig.add_subplot(grid_spec[1, 0])
     ax_right = fig.add_subplot(grid_spec[1, 1])
 
-    ax_scale.plot(x_fit, curves["inverse_n"], color=COLORS["red"], linewidth=2.3, label=r"$c_\infty+a/n_k$")
-    ax_scale.plot(x_fit, curves["inverse_n2"], color=COLORS["teal"], linewidth=2.3, linestyle="--", label=r"$c_\infty+a/n_k^2$")
-    ax_scale.plot(x_fit, curves["even_n2_n4"], color=COLORS["purple"], linewidth=2.4, linestyle="-.", label=r"$c_\infty+a/n_k^2+b/n_k^4$")
-    ax_scale.scatter(
-        x_data,
-        data.cG[:, center],
-        s=70,
+    ax_mean.plot(
+        x_mean_fit,
+        mean_curves["inverse_n"],
+        color=COLORS["red"],
+        linewidth=2.3,
+        label=r"$\overline{c}_\infty+a/n_k$",
+    )
+    ax_mean.plot(
+        x_mean_fit,
+        mean_curves["inverse_n2"],
+        color=COLORS["teal"],
+        linewidth=2.3,
+        linestyle="--",
+        label=r"$\overline{c}_\infty+a/n_k^2$",
+    )
+    ax_mean.scatter(
+        inverse_n,
+        spatial_mean,
+        s=66,
         color=COLORS["grey"],
         edgecolor="white",
         linewidth=0.8,
         zorder=5,
         label="computed meshes",
     )
-    for x, y, n_k in zip(x_data, data.cG[:, center], data.n_k, strict=True):
-        ax_scale.annotate(
+    for x, y, n_k in zip(inverse_n, spatial_mean, data.n_k, strict=True):
+        ax_mean.annotate(
             str(n_k),
             (x, y),
             xytext=(0, 8),
@@ -512,32 +656,30 @@ def render_finite_size_analysis(
             fontsize=10,
             color=COLORS["axis"],
         )
-    ax_scale.set_title(r"Finite-size scaling at $b_1=u_1=0$")
-    ax_scale.set_xlabel(r"$1/n_k$")
-    ax_scale.set_ylabel(r"$c_G$")
-    ax_scale.set_xlim(-0.002, float(np.max(x_data)) * 1.04)
-    all_y = np.r_[data.cG[:, center], *curves.values()]
-    padding = 0.06 * float(np.ptp(all_y))
-    ax_scale.set_ylim(float(np.min(all_y) - padding), float(np.max(all_y) + padding))
-    ax_scale.yaxis.set_major_formatter(FormatStrFormatter("%.6f"))
-    ax_scale.grid(alpha=0.20, linewidth=0.8)
-    ax_scale.legend(
+    ax_mean.set_title(r"Spatial mean of $c_G$")
+    ax_mean.set_xlabel(r"$1/n_k$")
+    ax_mean.set_ylabel(r"$\overline{c_G}$")
+    ax_mean.set_xlim(-0.002, float(np.max(inverse_n)) * 1.04)
+    mean_y = np.r_[spatial_mean, *mean_curves.values()]
+    mean_padding = 0.07 * float(np.ptp(mean_y))
+    ax_mean.set_ylim(float(np.min(mean_y) - mean_padding), float(np.max(mean_y) + mean_padding))
+    ax_mean.yaxis.set_major_formatter(FormatStrFormatter("%.6f"))
+    ax_mean.grid(alpha=0.20, linewidth=0.8)
+    ax_mean.legend(
         loc="upper left",
-        bbox_to_anchor=(0.012, 0.98),
-        ncol=2,
+        bbox_to_anchor=(0.02, 0.98),
+        ncol=1,
         frameon=True,
         framealpha=0.94,
-        handlelength=2.5,
-        columnspacing=1.4,
+        handlelength=2.4,
     )
-    ax_scale.text(
-        0.985,
-        0.04,
-        "Extrapolated center values\n"
-        + rf"$1/n_k$: {data.fits['inverse_n'].intercept[center]:.7f}; "
-        + rf"$1/n_k^2$: {data.fits['inverse_n2'].intercept[center]:.7f}; "
-        + rf"even: {data.fits['even_n2_n4'].intercept[center]:.7f}",
-        transform=ax_scale.transAxes,
+    ax_mean.text(
+        0.98,
+        0.05,
+        rf"$1/n_k$: {mean_fits['inverse_n']['intercept']:.7f}"
+        + "\n"
+        + rf"$1/n_k^2$: {mean_fits['inverse_n2']['intercept']:.7f}",
+        transform=ax_mean.transAxes,
         ha="right",
         va="bottom",
         fontsize=11,
@@ -545,50 +687,89 @@ def render_finite_size_analysis(
         bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.88, "pad": 2.0},
     )
 
-    finite_mesh = _draw_heatmap(
+    ax_range.axhline(0.0, color=COLORS["grey"], linewidth=1.2, linestyle=":", zorder=1)
+    ax_range.plot(
+        1.0e3 * x_range_fit,
+        range_curve,
+        color=COLORS["purple"],
+        linewidth=2.4,
+        label=r"$\Delta c_\infty+a/n_k^2$",
+    )
+    ax_range.scatter(
+        1.0e3 * inverse_n2,
+        spatial_range,
+        s=66,
+        color=COLORS["purple"],
+        edgecolor="white",
+        linewidth=0.8,
+        zorder=5,
+        label="computed range",
+    )
+    for x, y, n_k in zip(1.0e3 * inverse_n2, spatial_range, data.n_k, strict=True):
+        ax_range.annotate(
+            str(n_k),
+            (x, y),
+            xytext=(0, 8),
+            textcoords="offset points",
+            ha="center",
+            va="bottom",
+            fontsize=10,
+            color=COLORS["axis"],
+        )
+    ax_range.set_title(r"Spatial range of $c_G$")
+    ax_range.set_xlabel(r"$10^3/n_k^2$")
+    ax_range.set_ylabel(r"$\Delta c_G$")
+    ax_range.set_xlim(-0.08, float(np.max(1.0e3 * inverse_n2)) * 1.04)
+    range_y = np.r_[spatial_range, range_curve, 0.0]
+    range_padding = 0.07 * float(np.ptp(range_y))
+    ax_range.set_ylim(float(np.min(range_y) - range_padding), float(np.max(range_y) + range_padding))
+    ax_range.yaxis.set_major_formatter(FormatStrFormatter("%.5f"))
+    ax_range.grid(alpha=0.20, linewidth=0.8)
+    ax_range.legend(loc="upper left", frameon=True, framealpha=0.94)
+    range_ci = range_fit["intercept_95_percent_ci"]
+    ax_range.text(
+        0.98,
+        0.25,
+        rf"$\Delta c_G^\infty={range_fit['intercept']:.2e}$"
+        + "\n"
+        + rf"95\% CI: $[{range_ci[0]:.2e},{range_ci[1]:.2e}]$",
+        transform=ax_range.transAxes,
+        ha="right",
+        va="bottom",
+        fontsize=11,
+        color=COLORS["axis"],
+        bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.88, "pad": 2.0},
+    )
+
+    _draw_heatmap(
         fig,
         ax_left,
         b_values,
         u_values,
-        finite_grid,
-        title=rf"Finite mesh: $n_k={int(data.n_k[-1])}$",
+        coarse_grid,
+        title=rf"Computed mesh: $n_k={int(data.n_k[0])}$",
         cmap=cmap,
         norm=finite_norm,
     )
-    mesh = _draw_heatmap(
+    finite_mesh = _draw_heatmap(
         fig,
         ax_right,
         b_values,
         u_values,
-        extrapolated_grid,
-        title=r"Even-power fit: $n_k\to\infty$",
+        fine_grid,
+        title=rf"Computed mesh: $n_k={int(data.n_k[-1])}$",
         cmap=cmap,
-        norm=extrapolated_norm,
-    )
-    left_bbox = ax_left.get_position()
-    left_cax = fig.add_axes([left_bbox.x1 + 0.012, left_bbox.y0, 0.015, left_bbox.height])
-    left_colorbar = fig.colorbar(finite_mesh, cax=left_cax)
-    left_colorbar.ax.tick_params(labelsize=11)
-    left_colorbar.ax.yaxis.set_major_formatter(FormatStrFormatter("%.5f"))
-    left_colorbar.ax.text(
-        1.0,
-        1.02,
-        r"$c_G$",
-        transform=left_colorbar.ax.transAxes,
-        ha="right",
-        va="bottom",
-        fontsize=16,
-        color=COLORS["axis"],
+        norm=finite_norm,
     )
     right_bbox = ax_right.get_position()
-    right_cax = fig.add_axes([right_bbox.x1 + 0.012, right_bbox.y0, 0.015, right_bbox.height])
-    right_colorbar = fig.colorbar(mesh, cax=right_cax)
+    right_cax = fig.add_axes([right_bbox.x1 + 0.014, right_bbox.y0, 0.017, right_bbox.height])
+    right_colorbar = fig.colorbar(finite_mesh, cax=right_cax)
     right_colorbar.ax.tick_params(labelsize=11)
-    right_colorbar.ax.yaxis.set_major_formatter(FormatStrFormatter("%.6f"))
+    right_colorbar.ax.yaxis.set_major_formatter(FormatStrFormatter("%.5f"))
     right_colorbar.ax.text(
         1.0,
         1.02,
-        r"$c_G^\infty$",
+        r"$c_G$",
         transform=right_colorbar.ax.transAxes,
         ha="right",
         va="bottom",
@@ -597,7 +778,7 @@ def render_finite_size_analysis(
     )
 
     fig.suptitle(
-        r"Conjugate AC projected HF: $N_{\rm LL}=6$, $V_0/\omega_c=0.1$",
+        r"Conjugate AC projected HF finite-size analysis: $N_{\rm LL}=6$, $V_0/\omega_c=0.1$",
         fontsize=20,
         y=0.985,
     )

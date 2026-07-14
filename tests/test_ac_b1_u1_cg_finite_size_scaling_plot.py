@@ -97,7 +97,13 @@ def test_complete_synthetic_sweeps_render_all_artifacts(tmp_path: Path):
 
     assert summary["all_meshes_passed_independent_audit"] is True
     assert summary["n_parameter_points"] == 9
-    assert summary["fits"]["inverse_n2"]["overall_rmse"] < 1e-14
+    assert summary["scalar_fits"]["spatial_mean"]["inverse_n2"]["rmse"] < 1e-14
+    assert all(
+        item["spatial_map_status"] == "rejected"
+        for item in summary["rejected_pointwise_extrapolation_diagnostics"].values()
+    )
+    exported_fields = next(csv.reader(table.open()))
+    assert not any("infinity" in field for field in exported_fields)
     for path in (png, pdf, table, summary_path):
         assert path.exists()
         assert path.stat().st_size > 0

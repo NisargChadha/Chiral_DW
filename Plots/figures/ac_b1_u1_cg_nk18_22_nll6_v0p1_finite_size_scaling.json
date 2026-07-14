@@ -79,50 +79,7 @@
     "b1": 0.0,
     "u1": 0.0
   },
-  "center_model_spread": 0.00016339568191928167,
-  "even_power_infinity_parameter_span": 1.4374250060081306e-05,
-  "finite_nk_max_parameter_span": 0.0001952108754632309,
-  "fits": {
-    "even_n2_n4": {
-      "cG_infinity_max": -0.07269273123037433,
-      "cG_infinity_min": -0.07270710548043441,
-      "center_cG_infinity": -0.07270265218383101,
-      "maximum_abs_leave_one_out_residual": 8.851285479560822e-08,
-      "maximum_abs_residual": 1.598034088390321e-08,
-      "overall_leave_one_out_rmse": 2.188173584045643e-08,
-      "overall_rmse": 4.945987064260426e-09,
-      "powers": [
-        2,
-        4
-      ]
-    },
-    "inverse_n": {
-      "cG_infinity_max": -0.07262413171098102,
-      "cG_infinity_min": -0.0728671730276276,
-      "center_cG_infinity": -0.07281658707003622,
-      "maximum_abs_leave_one_out_residual": 3.36792826020893e-06,
-      "maximum_abs_residual": 1.2096326934968316e-06,
-      "overall_leave_one_out_rmse": 7.81412797554344e-07,
-      "overall_rmse": 3.7259854169573004e-07,
-      "powers": [
-        1
-      ]
-    },
-    "inverse_n2": {
-      "cG_infinity_max": -0.07264610446260558,
-      "cG_infinity_min": -0.07265370202948361,
-      "center_cG_infinity": -0.07265319138811693,
-      "maximum_abs_leave_one_out_residual": 3.2074314792185366e-06,
-      "maximum_abs_residual": 1.128667973679387e-06,
-      "overall_leave_one_out_rmse": 1.7739684316494666e-06,
-      "overall_rmse": 8.376971858682962e-07,
-      "powers": [
-        2
-      ]
-    }
-  },
-  "interpretation": "The finite-size trend is smooth and has no significant odd-even anomaly. The even 1/n_k^2+1/n_k^4 expansion gives the smallest interpolation and leave-one-size-out errors, but the infinity intercept remains ansatz-dependent over the narrow n_k=18..22 window; compare all reported intercepts.",
-  "maximum_pointwise_model_spread": 0.00021951701758451958,
+  "interpretation": "Every computed mesh is monotonic in b1 and u1, but all tested pointwise infinity maps reverse slopes or introduce turning points. No extrapolated two-dimensional map is therefore reported. The spatial range is consistent with vanishing under a 1/n_k^2 fit, while the scalar spatial-mean intercept remains ansatz-dependent over n_k=18..22.",
   "n_k_values": [
     18,
     19,
@@ -131,6 +88,63 @@
     22
   ],
   "n_parameter_points": 121,
+  "observed_mesh_shape_diagnostics": {
+    "18": {
+      "b1_turning_points": 0,
+      "maximum_b1_neighbor_difference": 1.5099260153514371e-05,
+      "maximum_u1_neighbor_difference": 7.013078910123038e-05,
+      "minimum_b1_neighbor_difference": 1.2878012072004008e-06,
+      "minimum_u1_neighbor_difference": 1.0646397392413687e-05,
+      "reversed_b1_neighbor_slopes": 0,
+      "reversed_u1_neighbor_slopes": 0,
+      "total_reversed_neighbor_slopes": 0,
+      "u1_turning_points": 0
+    },
+    "19": {
+      "b1_turning_points": 0,
+      "maximum_b1_neighbor_difference": 1.3510144229345045e-05,
+      "maximum_u1_neighbor_difference": 6.276709753005871e-05,
+      "minimum_b1_neighbor_difference": 1.1797919749201302e-06,
+      "minimum_u1_neighbor_difference": 9.662847085867288e-06,
+      "reversed_b1_neighbor_slopes": 0,
+      "reversed_u1_neighbor_slopes": 0,
+      "total_reversed_neighbor_slopes": 0,
+      "u1_turning_points": 0
+    },
+    "20": {
+      "b1_turning_points": 0,
+      "maximum_b1_neighbor_difference": 1.2135861467144071e-05,
+      "maximum_u1_neighbor_difference": 5.643001703581341e-05,
+      "minimum_b1_neighbor_difference": 1.0881844552113051e-06,
+      "minimum_u1_neighbor_difference": 8.835977154120211e-06,
+      "reversed_b1_neighbor_slopes": 0,
+      "reversed_u1_neighbor_slopes": 0,
+      "total_reversed_neighbor_slopes": 0,
+      "u1_turning_points": 0
+    },
+    "21": {
+      "b1_turning_points": 0,
+      "maximum_b1_neighbor_difference": 1.0944159254872021e-05,
+      "maximum_u1_neighbor_difference": 5.095763953689991e-05,
+      "minimum_b1_neighbor_difference": 1.0099694713328056e-06,
+      "minimum_u1_neighbor_difference": 8.134735060200127e-06,
+      "reversed_b1_neighbor_slopes": 0,
+      "reversed_u1_neighbor_slopes": 0,
+      "total_reversed_neighbor_slopes": 0,
+      "u1_turning_points": 0
+    },
+    "22": {
+      "b1_turning_points": 0,
+      "maximum_b1_neighbor_difference": 9.907613642945456e-06,
+      "maximum_u1_neighbor_difference": 4.621447775285392e-05,
+      "minimum_b1_neighbor_difference": 9.427592866928514e-07,
+      "minimum_u1_neighbor_difference": 7.535151294035813e-06,
+      "reversed_b1_neighbor_slopes": 0,
+      "reversed_u1_neighbor_slopes": 0,
+      "total_reversed_neighbor_slopes": 0,
+      "u1_turning_points": 0
+    }
+  },
   "odd_even_inverse_square_diagnostic": {
     "center_even_cG_infinity": -0.07265310611031892,
     "center_odd_cG_infinity": -0.07265503327848244,
@@ -148,6 +162,144 @@
   },
   "output_pdf": "/Users/nisargchadha/Documents/Chiral_DW/Plots/figures/ac_b1_u1_cg_nk18_22_nll6_v0p1_finite_size_scaling.pdf",
   "output_png": "/Users/nisargchadha/Documents/Chiral_DW/Plots/figures/ac_b1_u1_cg_nk18_22_nll6_v0p1_finite_size_scaling.png",
+  "rejected_pointwise_extrapolation_diagnostics": {
+    "even_n2_n4": {
+      "cG_infinity_max": -0.07269273123037433,
+      "cG_infinity_min": -0.07270710548043441,
+      "center_cG_infinity": -0.07270265218383101,
+      "design_matrix_condition_number": 9199987.7717537,
+      "maximum_leave_one_out_intercept_range": 1.9014429555597179e-06,
+      "median_leave_one_out_intercept_range": 8.789203078812813e-07,
+      "overall_leave_one_out_prediction_rmse": 2.188173584045643e-08,
+      "overall_rmse": 4.945987064260426e-09,
+      "powers": [
+        2,
+        4
+      ],
+      "shape": {
+        "b1_turning_points": 2,
+        "maximum_b1_neighbor_difference": 2.9008800606078466e-07,
+        "maximum_u1_neighbor_difference": 1.7870385804891198e-06,
+        "minimum_b1_neighbor_difference": -1.14316409904891e-06,
+        "minimum_u1_neighbor_difference": -3.4577872373153795e-06,
+        "reversed_b1_neighbor_slopes": 26,
+        "reversed_u1_neighbor_slopes": 14,
+        "total_reversed_neighbor_slopes": 40,
+        "u1_turning_points": 9
+      },
+      "spatial_map_rejection_reason": "Pointwise extrapolation is not shape-preserving over the observed parameter grid; scalar finite-size trends are reported instead.",
+      "spatial_map_status": "rejected"
+    },
+    "inverse_n": {
+      "cG_infinity_max": -0.07262413171098102,
+      "cG_infinity_min": -0.0728671730276276,
+      "center_cG_infinity": -0.07281658707003622,
+      "design_matrix_condition_number": 280.6496660967951,
+      "maximum_leave_one_out_intercept_range": 2.4127488523456586e-05,
+      "median_leave_one_out_intercept_range": 3.840635293836381e-06,
+      "overall_leave_one_out_prediction_rmse": 7.81412797554344e-07,
+      "overall_rmse": 3.7259854169573004e-07,
+      "powers": [
+        1
+      ],
+      "shape": {
+        "b1_turning_points": 0,
+        "maximum_b1_neighbor_difference": -6.155421164999453e-07,
+        "maximum_u1_neighbor_difference": -6.51878872595657e-06,
+        "minimum_b1_neighbor_difference": -1.352611761924749e-05,
+        "minimum_u1_neighbor_difference": -6.17574396667292e-05,
+        "reversed_b1_neighbor_slopes": 110,
+        "reversed_u1_neighbor_slopes": 110,
+        "total_reversed_neighbor_slopes": 220,
+        "u1_turning_points": 0
+      },
+      "spatial_map_rejection_reason": "Pointwise extrapolation is not shape-preserving over the observed parameter grid; scalar finite-size trends are reported instead.",
+      "spatial_map_status": "rejected"
+    },
+    "inverse_n2": {
+      "cG_infinity_max": -0.07264610446260558,
+      "cG_infinity_min": -0.07265370202948361,
+      "center_cG_infinity": -0.07265319138811693,
+      "design_matrix_condition_number": 2769.525172316118,
+      "maximum_leave_one_out_intercept_range": 1.1223642254823418e-05,
+      "median_leave_one_out_intercept_range": 9.867191862050761e-06,
+      "overall_leave_one_out_prediction_rmse": 1.7739684316494666e-06,
+      "overall_rmse": 8.376971858682962e-07,
+      "powers": [
+        2
+      ],
+      "shape": {
+        "b1_turning_points": 2,
+        "maximum_b1_neighbor_difference": 2.4599362064003927e-07,
+        "maximum_u1_neighbor_difference": 1.2220033140802888e-06,
+        "minimum_b1_neighbor_difference": -6.418683404924019e-07,
+        "minimum_u1_neighbor_difference": -2.2518507029195556e-06,
+        "reversed_b1_neighbor_slopes": 51,
+        "reversed_u1_neighbor_slopes": 43,
+        "total_reversed_neighbor_slopes": 94,
+        "u1_turning_points": 11
+      },
+      "spatial_map_rejection_reason": "Pointwise extrapolation is not shape-preserving over the observed parameter grid; scalar finite-size trends are reported instead.",
+      "spatial_map_status": "rejected"
+    }
+  },
+  "scalar_fits": {
+    "spatial_mean": {
+      "inverse_n": {
+        "condition_number": 280.6496660967951,
+        "intercept": -0.07279946104212728,
+        "intercept_95_percent_ci": [
+          -0.07280512242221936,
+          -0.07279379966203521
+        ],
+        "intercept_standard_error": 1.7789397051783887e-06,
+        "powers": [
+          1
+        ],
+        "rmse": 2.1847591817501212e-07
+      },
+      "inverse_n2": {
+        "condition_number": 2769.525172316118,
+        "intercept": -0.07265147599648318,
+        "intercept_95_percent_ci": [
+          -0.07266237573192602,
+          -0.07264057626104034
+        ],
+        "intercept_standard_error": 3.4249550180132844e-06,
+        "powers": [
+          2
+        ],
+        "rmse": 8.355332319753799e-07
+      }
+    },
+    "spatial_range_inverse_n2": {
+      "condition_number": 2769.525172316118,
+      "intercept": -1.5515474374656533e-06,
+      "intercept_95_percent_ci": [
+        -3.719880079176943e-06,
+        6.167852042456365e-07
+      ],
+      "intercept_standard_error": 6.813414693315964e-07,
+      "powers": [
+        2
+      ],
+      "rmse": 1.662163260408913e-07
+    }
+  },
+  "spatial_mean_by_n_k": {
+    "18": -0.07247299545717788,
+    "19": -0.07248968084423599,
+    "20": -0.07250515226814475,
+    "21": -0.07251936579480164,
+    "22": -0.07253234571378663
+  },
+  "spatial_range_by_n_k": {
+    "18": 0.0002922417889424378,
+    "19": 0.00026184675191767703,
+    "20": 0.00023607490217150695,
+    "21": 0.00021408604248207563,
+    "22": 0.0001952108754632309
+  },
   "successive_mesh_change": {
     "nk18_to_nk19": {
       "maximum_abs": 2.576379617658109e-05,
