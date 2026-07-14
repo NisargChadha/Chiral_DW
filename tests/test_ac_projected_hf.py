@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -13,6 +14,7 @@ from chiral_dw.ac.projected import (
 from chiral_dw.ac.response import (
     ACBandOverlapProvider,
     ac_projector_chern,
+    ac_reference_cherns_are_valid,
     k_theta_from_ac_projectors,
 )
 from chiral_dw.config import (
@@ -180,10 +182,54 @@ def test_ac_overlap_provider_has_opposite_cherns_and_tprime_overlaps():
     assert abs(boundary) > 1e-12
 
 
+def test_active_frame_overlap_provider_removes_only_eigensolver_phase(monkeypatch):
+    params = _small_params()
+    model = NonIdealACLLModel(params.ac)
+    grid = MomentumGrid(params.grid.n_k)
+    active, _bands = build_ac_active_space(
+        model,
+        grid,
+        active_band=params.active_band,
+        diagnostics_n_k=params.band_diagnostics_n_k,
+    )
+    b1 = model.fields.G_shell[0]
+    wrapped = b1 / grid.n_k
+    shifted = wrapped + b1
+    baseline = ACBandOverlapProvider(model, active=active).up_overlap(wrapped, shifted)
+    original_solve = model.solve
+
+    def phase_flipped_solve(k, active_band=0):
+        solution = original_solve(k, active_band=active_band)
+        if not np.allclose(k, shifted, atol=1e-12, rtol=0.0):
+            return solution
+        eigenvectors = solution.eigenvectors.copy()
+        eigenvectors[:, int(active_band)] *= -1j
+        return replace(solution, eigenvectors=eigenvectors)
+
+    monkeypatch.setattr(model, "solve", phase_flipped_solve)
+    anchored = ACBandOverlapProvider(model, active=active)
+    unanchored = ACBandOverlapProvider(model)
+
+    expected_wrapped = active.band_vectors[grid.index_of((1, 0)), 0, :, 0]
+    assert np.allclose(anchored.up_coefficients(wrapped), expected_wrapped)
+    assert np.allclose(anchored.up_overlap(wrapped, shifted), baseline, atol=1e-12)
+    assert np.allclose(unanchored.up_overlap(wrapped, shifted), -1j * baseline, atol=1e-12)
+
+
+def test_reference_chern_validation_requires_symmetry_values():
+    assert ac_reference_cherns_are_valid(
+        {"vp_plus": 1.0, "vp_minus": -1.0, "ivc": 0.0}
+    )
+    assert not ac_reference_cherns_are_valid(
+        {"vp_plus": 1.0, "vp_minus": -1.0, "ivc": 0.5}
+    )
+    assert not ac_reference_cherns_are_valid({"vp_plus": 1.0, "vp_minus": -1.0})
+
+
 def test_ideal_lll_hf_reference_cherns_use_ac_overlaps():
     params = _ideal_lll_params(n_k=5, n_theta=12)
     bundle = build_ac_projected_bundle(params)
-    provider = ACBandOverlapProvider(bundle.form_factors)
+    provider = ACBandOverlapProvider(bundle.form_factors, active=bundle.active)
     refs = build_symmetric_hf_references(bundle, params.hf)
 
     assert refs.vp_plus.converged
@@ -197,7 +243,7 @@ def test_ideal_lll_hf_reference_cherns_use_ac_overlaps():
 def test_ideal_lll_ac_response_is_nonzero_and_coefficient_response_is_zero():
     params = _ideal_lll_params(n_k=5, n_theta=20)
     bundle = build_ac_projected_bundle(params)
-    provider = ACBandOverlapProvider(bundle.form_factors)
+    provider = ACBandOverlapProvider(bundle.form_factors, active=bundle.active)
     theta_edges = np.linspace(0.0, np.pi, params.response.n_theta + 1)
     phi_nodes = np.arange(2, dtype=float) * params.response.phi_step
     projectors = _uniform_vp_ivc_path(theta_edges, params.grid.n_k)
@@ -243,7 +289,7 @@ def test_ac_projected_bundle_runs_overlap_response_smoke():
     params = _ideal_lll_params(n_k=3, n_theta=8)
     bundle = build_ac_projected_bundle(params)
     refs = build_symmetric_hf_references(bundle, params.hf)
-    provider = ACBandOverlapProvider(bundle.form_factors)
+    provider = ACBandOverlapProvider(bundle.form_factors, active=bundle.active)
     theta_edges = np.linspace(0.0, np.pi, params.response.n_theta + 1)
     projectors, _diag = symmetric_convex_path(refs, theta_edges)
     projector_grid = projectors.reshape(

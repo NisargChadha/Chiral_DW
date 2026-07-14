@@ -527,7 +527,11 @@ for name, P0 in initial_projectors.items():
 with (output_dir / "hf_initial_summary.json").open("w") as f:
     json.dump(initial_hf_rows, f, indent=2)
 
-overlap_provider = ACBandOverlapProvider(model, active_band=params.active_band)
+overlap_provider = ACBandOverlapProvider(
+    model,
+    active_band=params.active_band,
+    active=active,
+)
 hf_start = time.perf_counter()
 refs = build_symmetric_hf_references(bundle, params.hf)
 hf_elapsed_s = time.perf_counter() - hf_start

@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from chiral_dw.ac.nonideal import NonIdealACLLModel
-from chiral_dw.continuum.models import MomentumGrid, hermitize
+from chiral_dw.continuum.models import ContinuumActiveSpace, MomentumGrid, hermitize
 from chiral_dw.response import KThetaResult, compute_cG, rotate_projector_phi
 
 
@@ -20,10 +20,17 @@ def _safe_unit(value: complex, eps: float = 1e-14) -> complex:
 
 @dataclass
 class ACBandOverlapProvider:
-    """Cached orbital overlaps for one AC active band and its T' partner."""
+    """Cached orbital overlaps for one AC active band and its T' partner.
+
+    When ``active`` is supplied, mesh and reciprocal-shifted eigenvectors are
+    phase-anchored to the exact band frame used to build the HF active space.
+    This keeps the orbital overlaps and coefficient-space HF projectors in the
+    same gauge on the Brillouin-zone torus.
+    """
 
     model: NonIdealACLLModel
     active_band: int = 0
+    active: ContinuumActiveSpace | None = None
     key_decimals: int = 12
     _coeff_cache: dict[tuple[float, float], np.ndarray] = field(
         default_factory=dict,
@@ -45,13 +52,68 @@ class ACBandOverlapProvider:
         b1, b2 = self.model.fields.G_shell[0], self.model.fields.G_shell[1]
         return f[0] * b1 + f[1] * b2
 
+    def _active_mesh_reference(self, k: np.ndarray) -> tuple[np.ndarray, np.ndarray] | None:
+        """Return the wrapped HF-frame momentum and up-valley vector for ``k``."""
+
+        if self.active is None:
+            return None
+        if self.active.n_active != 1:
+            raise ValueError("AC overlap provider requires one active band per valley")
+        if self.active.bands is None:
+            raise ValueError("AC active space is missing band metadata")
+        if self.active.band_vectors.shape[2] != self.model.n_ll:
+            raise ValueError("AC active-space and overlap-model Landau-level dimensions differ")
+
+        b1, b2 = self.model.fields.G_shell[0], self.model.fields.G_shell[1]
+        fractional = np.linalg.solve(
+            np.column_stack([b1, b2]),
+            np.asarray(k, dtype=float),
+        )
+        mesh_coord = fractional * float(self.active.grid.n_k)
+        integer_coord = np.rint(mesh_coord).astype(int)
+        if not np.allclose(mesh_coord, integer_coord, atol=1e-9, rtol=0.0):
+            return None
+
+        wrapped, _shift = self.active.grid.fold_grid_coord(
+            (int(integer_coord[0]), int(integer_coord[1]))
+        )
+        index = self.active.grid.index_of(wrapped)
+        wrapped_fractional = np.asarray(wrapped, dtype=float) / float(self.active.grid.n_k)
+        wrapped_k = self.k_from_fractional(wrapped_fractional)
+        wrapped_coefficients = np.asarray(
+            self.active.band_vectors[index, 0, :, 0],
+            dtype=complex,
+        )
+        return wrapped_k, wrapped_coefficients
+
     def up_coefficients(self, k: np.ndarray) -> np.ndarray:
         key = self._key(k)
         cached = self._coeff_cache.get(key)
         if cached is not None:
             return cached
-        sol = self.model.solve(k, active_band=int(self.active_band))
-        coeffs = sol.eigenvectors[:, int(self.active_band)]
+
+        momentum = np.asarray(k, dtype=float)
+        reference = self._active_mesh_reference(momentum)
+        if reference is None:
+            sol = self.model.solve(momentum, active_band=int(self.active_band))
+            coeffs = sol.eigenvectors[:, int(self.active_band)]
+        else:
+            wrapped_k, wrapped_coefficients = reference
+            if np.allclose(momentum, wrapped_k, atol=1e-12, rtol=0.0):
+                coeffs = wrapped_coefficients.copy()
+            else:
+                sol = self.model.solve(momentum, active_band=int(self.active_band))
+                raw = sol.eigenvectors[:, int(self.active_band)]
+                # H(k + G) and H(k) have the same finite-LL coefficient
+                # representation.  Stabilize only the eigensolver phase here;
+                # the magnetic-Bloch state overlap below must retain its
+                # physical reciprocal-boundary phase.
+                sewing_overlap = complex(np.vdot(wrapped_coefficients, raw))
+                if abs(sewing_overlap) < 1e-14:
+                    raise ValueError(
+                        "AC reciprocal-boundary sewing overlap is too small to fix the band gauge"
+                    )
+                coeffs = raw * np.conj(_safe_unit(sewing_overlap))
         self._coeff_cache[key] = coeffs
         return coeffs
 
@@ -165,6 +227,23 @@ def ac_projector_chern(
             )
             total += float(np.angle(product))
     return float(total / (2.0 * np.pi))
+
+
+def ac_reference_cherns_are_valid(
+    cherns: dict[str, float],
+    *,
+    atol: float = 5e-3,
+) -> bool:
+    """Return whether VP+/VP-/IVC have their symmetry-required Chern values."""
+
+    expected = {"vp_plus": 1.0, "vp_minus": -1.0, "ivc": 0.0}
+    if set(expected) - set(cherns):
+        return False
+    return all(
+        np.isfinite(float(cherns[name]))
+        and np.isclose(float(cherns[name]), target, atol=float(atol), rtol=0.0)
+        for name, target in expected.items()
+    )
 
 
 def _validate_projector_grid(P_theta: np.ndarray, theta: np.ndarray) -> np.ndarray:
@@ -316,5 +395,6 @@ def k_theta_from_ac_projectors(
 __all__ = [
     "ACBandOverlapProvider",
     "ac_projector_chern",
+    "ac_reference_cherns_are_valid",
     "k_theta_from_ac_projectors",
 ]

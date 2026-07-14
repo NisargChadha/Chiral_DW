@@ -24,6 +24,7 @@ from chiral_dw.ac.projected import build_ac_projected_bundle  # noqa: E402
 from chiral_dw.ac.response import (  # noqa: E402
     ACBandOverlapProvider,
     ac_projector_chern,
+    ac_reference_cherns_are_valid,
     k_theta_from_ac_projectors,
 )
 from chiral_dw.config import (  # noqa: E402
@@ -533,7 +534,11 @@ def run_point(args: argparse.Namespace, output_root: Path, point: ACSweepPoint) 
 
     bundle = build_ac_projected_bundle(params)
     refs = build_symmetric_hf_references(bundle, params.hf)
-    provider = ACBandOverlapProvider(bundle.form_factors, active_band=params.active_band)
+    provider = ACBandOverlapProvider(
+        bundle.form_factors,
+        active_band=params.active_band,
+        active=bundle.active,
+    )
     cherns = {
         "vp_plus": ac_projector_chern(provider, bundle.grid, refs.vp_plus.P),
         "vp_minus": ac_projector_chern(provider, bundle.grid, refs.vp_minus.P),
@@ -555,10 +560,11 @@ def run_point(args: argparse.Namespace, output_root: Path, point: ACSweepPoint) 
     )
 
     all_converged = bool(refs.vp_plus.converged and refs.vp_minus.converged and refs.ivc.converged)
+    reference_chern_valid = ac_reference_cherns_are_valid(cherns)
     response_status = "ok"
     projectors = None
     path_diagnostics = None
-    if all_converged or args.allow_nonconverged_response:
+    if reference_chern_valid and (all_converged or args.allow_nonconverged_response):
         theta_edges = np.linspace(params.response.theta_min, params.response.theta_max, params.response.n_theta + 1)
         phi_nodes = np.arange(params.response.n_phi, dtype=float) * params.response.phi_step
         projectors, path_diagnostics = symmetric_convex_path(refs, theta_edges)
@@ -571,6 +577,11 @@ def run_point(args: argparse.Namespace, output_root: Path, point: ACSweepPoint) 
         )
         response = k_theta_from_ac_projectors(provider, projector_grid, theta_edges, phi_nodes)
         path_rows = _path_rows(point, bundle, projectors, path_diagnostics)
+        response_rows = _response_rows(point, response)
+    elif not reference_chern_valid:
+        response_status = "skipped_invalid_reference_chern"
+        response = _nan_response(params)
+        path_rows = []
         response_rows = _response_rows(point, response)
     else:
         response_status = "skipped_nonconverged_hf"
@@ -608,8 +619,13 @@ def run_point(args: argparse.Namespace, output_root: Path, point: ACSweepPoint) 
     elapsed = time.perf_counter() - start
     row = {
         **point.as_row(),
-        "status": "ok" if all_converged else "nonconverged_hf",
+        "status": (
+            "invalid_reference_chern"
+            if not reference_chern_valid
+            else ("ok" if all_converged else "nonconverged_hf")
+        ),
         "response_status": response_status,
+        "reference_chern_valid": reference_chern_valid,
         "elapsed_seconds": float(elapsed),
         "n_k": int(params.grid.n_k),
         "n_ll": int(params.ac.n_ll),

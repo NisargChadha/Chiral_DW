@@ -206,6 +206,8 @@ def test_ac_b1_u1_sweep_tiny_point_runs_overlap_response(tmp_path):
     assert row["active_band"] == 0
     assert row["n_ll"] == 1
     assert row["hf_all_converged"] is True
+    assert row["reference_chern_valid"] is True
+    assert row["response_status"] == "ok"
     assert abs(row["cG"]) > 1e-3
     assert abs(row["chern_vp_plus"] - 1.0) < 5e-3
     assert abs(row["chern_vp_minus"] + 1.0) < 5e-3

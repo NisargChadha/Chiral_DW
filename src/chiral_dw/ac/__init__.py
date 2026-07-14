@@ -19,6 +19,7 @@ from chiral_dw.ac.projected import (
 from chiral_dw.ac.response import (
     ACBandOverlapProvider,
     ac_projector_chern,
+    ac_reference_cherns_are_valid,
     k_theta_from_ac_projectors,
 )
 from chiral_dw.ac.energy import EnergyBreakdown, ProjectedPhysicalEnergy
@@ -55,6 +56,7 @@ __all__ = [
     "build_ac_density_vertices",
     "build_ac_projected_bundle",
     "ac_projector_chern",
+    "ac_reference_cherns_are_valid",
     "first_shell_magnetic_coefficients",
     "first_shell_potential_coefficients",
     "fourier_params_from_first_shell",
