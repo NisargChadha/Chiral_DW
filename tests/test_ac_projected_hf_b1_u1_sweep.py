@@ -41,6 +41,7 @@ def test_ac_b1_u1_sweep_dry_run_writes_selected_plan(tmp_path):
 
     plan = json.loads((output_root / "sweep_plan.json").read_text())
     assert plan["n_points"] == 1
+    assert plan["args"]["coulomb_kind"] == "dimensionless_dual_gate"
     assert plan["active_space_convention"].startswith("one active AC band per valley")
     point = plan["points"][0]
     assert point["b_index"] == 1
@@ -223,14 +224,17 @@ def test_ac_b1_u1_sweep_job_uses_121_point_array_and_lowest_band_default():
     assert "#SBATCH --mem=24G" in text
     assert "SLURM_ARRAY_TASK_ID" in text
     assert "scripts/scan_ac_projected_hf_b1_u1.py" in text
-    assert 'B1_MIN=${B1_MIN:-"-0.3"}' in text
-    assert 'B1_MAX=${B1_MAX:-"0.3"}' in text
+    assert 'B1_MIN=${B1_MIN:-"-0.1"}' in text
+    assert 'B1_MAX=${B1_MAX:-"0.1"}' in text
     assert 'N_B1=${N_B1:-"11"}' in text
-    assert 'U1_MIN=${U1_MIN:-"-0.3"}' in text
-    assert 'U1_MAX=${U1_MAX:-"0.3"}' in text
+    assert 'U1_MIN=${U1_MIN:-"-0.1"}' in text
+    assert 'U1_MAX=${U1_MAX:-"0.1"}' in text
     assert 'N_U1=${N_U1:-"11"}' in text
-    assert 'N_LL=${N_LL:-"8"}' in text
+    assert 'N_LL=${N_LL:-"6"}' in text
     assert 'ACTIVE_BAND=${ACTIVE_BAND:-"0"}' in text
+    assert 'N_K=${N_K:-"18"}' in text
+    assert 'COULOMB_KIND=${COULOMB_KIND:-"dimensionless_dual_gate"}' in text
+    assert 'V0=${V0:-"0.1"}' in text
 
 
 def test_ac_b1_u1_sweep_no_write_plan_leaves_shared_plan_untouched(tmp_path):

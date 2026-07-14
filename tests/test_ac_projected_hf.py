@@ -42,7 +42,7 @@ def _small_params() -> ACProjectedHFParams:
         grid=ContinuumGridParams(n_k=3),
         ac=FirstShellACParams(b1=0.12, u1=0.04, n_ll=3),
         interaction=ContinuumInteractionParams(
-            coulomb_kind="dimensionless_screened",
+            coulomb_kind="dimensionless_dual_gate",
             v0=0.03,
             q_shell=1,
             local_field_cutoff=1,
@@ -58,7 +58,7 @@ def _ideal_lll_params(n_k: int = 5, n_theta: int = 20) -> ACProjectedHFParams:
         grid=ContinuumGridParams(n_k=n_k),
         ac=FirstShellACParams(b1=0.0, u1=0.0, n_ll=1),
         interaction=ContinuumInteractionParams(
-            coulomb_kind="dimensionless_screened",
+            coulomb_kind="dimensionless_dual_gate",
             v0=0.2,
             q_shell=1,
             local_field_cutoff=1,
@@ -166,6 +166,35 @@ def test_explicit_active_space_and_vertex_path_matches_bundle_builder():
     assert np.allclose(active.h0, bundle.active.h0)
     assert np.allclose(vertices.lambda_blocks, bundle.vertices.lambda_blocks)
     assert np.allclose(backend.h0, bundle.backend.h0)
+
+
+def test_dimensionless_dual_gate_weights_include_correct_q0_limit():
+    params = _small_params()
+    bundle = build_ac_projected_bundle(params)
+    vertices = bundle.vertices
+    q0 = vertices.q_shifts.index((0, 0))
+    g0 = vertices.g_channels.index((0, 0))
+    q1 = vertices.q_shifts.index((1, 0))
+
+    v0 = params.interaction.v0
+    d = params.interaction.gate_distance
+    assert vertices.v_q is not None
+    assert np.isclose(vertices.v_q[q0, g0], 2.0 * np.pi * v0 * d)
+
+    q_norm = np.linalg.norm(
+        bundle.form_factors.fields.G_shell[0] / params.grid.n_k
+    )
+    expected = 2.0 * np.pi * v0 * np.tanh(q_norm * d) / q_norm
+    assert np.isclose(vertices.v_q[q1, g0], expected)
+
+    without_q0 = params.model_copy(
+        update={
+            "interaction": params.interaction.model_copy(update={"include_q0": False})
+        }
+    )
+    no_q0_vertices = build_ac_projected_bundle(without_q0).vertices
+    assert no_q0_vertices.v_q is not None
+    assert no_q0_vertices.v_q[q0, g0] == 0.0
 
 
 def test_ac_overlap_provider_has_opposite_cherns_and_tprime_overlaps():

@@ -20,22 +20,22 @@ mkdir -p logs
 
 # Override any value with:
 # sbatch --export=ALL,NAME=value jobs/scan_ac_projected_hf_b1_u1_array.sh
-OUTPUT_ROOT=${OUTPUT_ROOT:-"results/ac_projected_hf_b1_u1_n11_nk12_nll8"}
+OUTPUT_ROOT=${OUTPUT_ROOT:-"results/ac_b1_u1_cg_dual_gate_nk18_nll6_v0p1_grid11"}
 
-B1_MIN=${B1_MIN:-"-0.3"}
-B1_MAX=${B1_MAX:-"0.3"}
+B1_MIN=${B1_MIN:-"-0.1"}
+B1_MAX=${B1_MAX:-"0.1"}
 N_B1=${N_B1:-"11"}
-U1_MIN=${U1_MIN:-"-0.3"}
-U1_MAX=${U1_MAX:-"0.3"}
+U1_MIN=${U1_MIN:-"-0.1"}
+U1_MAX=${U1_MAX:-"0.1"}
 N_U1=${N_U1:-"11"}
 
-N_LL=${N_LL:-"8"}
+N_LL=${N_LL:-"6"}
 ACTIVE_BAND=${ACTIVE_BAND:-"0"}
-N_K=${N_K:-"12"}
-BAND_DIAGNOSTICS_N_K=${BAND_DIAGNOSTICS_N_K:-"9"}
+N_K=${N_K:-"18"}
+BAND_DIAGNOSTICS_N_K=${BAND_DIAGNOSTICS_N_K:-"18"}
 
-COULOMB_KIND=${COULOMB_KIND:-"dimensionless_screened"}
-V0=${V0:-"0.2"}
+COULOMB_KIND=${COULOMB_KIND:-"dimensionless_dual_gate"}
+V0=${V0:-"0.1"}
 GATE_DISTANCE=${GATE_DISTANCE:-"2.0"}
 Q_SHELL=${Q_SHELL:-"1"}
 LOCAL_FIELD_CUTOFF=${LOCAL_FIELD_CUTOFF:-"1"}

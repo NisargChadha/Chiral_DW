@@ -44,6 +44,7 @@ def test_ac_b2_u2_sweep_dry_run_writes_fixed_first_harmonics(tmp_path):
 
     plan = json.loads((output_root / "sweep_plan.json").read_text())
     assert plan["n_points"] == 1
+    assert plan["args"]["coulomb_kind"] == "dimensionless_dual_gate"
     assert "b2/u2" in plan["sweep_convention"]
     point = plan["points"][0]
     assert point["b_index"] == 1
@@ -257,3 +258,4 @@ def test_ac_b2_u2_sweep_job_uses_121_point_array_and_fixed_first_harmonics():
     assert 'U2_MAX=${U2_MAX:-"0.3"}' in text
     assert 'N_U2=${N_U2:-"11"}' in text
     assert 'ACTIVE_BAND=${ACTIVE_BAND:-"0"}' in text
+    assert 'COULOMB_KIND=${COULOMB_KIND:-"dimensionless_dual_gate"}' in text

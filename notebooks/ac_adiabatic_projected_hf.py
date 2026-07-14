@@ -103,10 +103,10 @@ from chiral_dw.continuum import (
 # holding `b1,u1` fixed.
 #
 # Energies in this low-harmonic AC model are measured in units of the average
-# cyclotron energy `omega_c`. The default interaction below is therefore the
-# dimensionless screened interaction used by the HF backend. To use physical
-# dual-gate Coulomb matrix elements, switch `coulomb_kind` to `"dual_gate"` and
-# set `moire_length_nm` and `energy_unit_mev` consistently.
+# cyclotron energy `omega_c`. The default interaction is the dimensionless
+# dual-gate kernel `2*pi*v0*tanh(q*d)/q`, with `d` measured in moire lattice
+# spacings. The `"dual_gate"` option instead uses physical units and requires
+# consistent `moire_length_nm` and `energy_unit_mev` values.
 #
 # HF uses ODA mixing by default here because the IVC reference is a constrained
 # self-consistency problem and simple linear mixing can stall even when the final
@@ -131,7 +131,7 @@ local_field_cutoff = 1
 interaction_strength_scale = 0.2
 dimensionless_gate_distance = 2.0
 
-coulomb_kind = "dimensionless_screened"
+coulomb_kind = "dimensionless_dual_gate"
 epsilon = 16.7
 gate_distance_nm = 30.0
 smear_length_nm = 0.347
@@ -145,7 +145,7 @@ allow_nonconverged_references = False
 n_theta = 81
 n_phi = 5
 phi_step = 0.2
-output_dir = ROOT / "results" / "ac_projected_hf"
+output_dir = ROOT / "results" / "ac_projected_hf_dual_gate"
 output_dir.mkdir(parents=True, exist_ok=True)
 
 params = ACProjectedHFParams(
@@ -194,7 +194,7 @@ b2_u2_sweep_command = (
 print(b2_u2_sweep_command)
 print(
     "merge with: python scripts/scan_ac_projected_hf_b2_u2.py "
-    "--output-root results/ac_projected_hf_b2_u2_n11_nk12_nll8 --merge-only"
+    "--output-root results/ac_b2_u2_cg_dual_gate_n11_nk12_nll8 --merge-only"
 )
 
 # %% [markdown]

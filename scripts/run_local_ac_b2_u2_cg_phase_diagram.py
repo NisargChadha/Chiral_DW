@@ -24,8 +24,8 @@ class LocalACB2U2SweepParams(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    output_root: Path = Path("results/ac_b2_u2_cg_local_nk12_nll5_v0p1_grid11")
-    plot_output: Path = Path("Plots/figures/ac_b2_u2_cg_local_nk12_nll5_v0p1_grid11.png")
+    output_root: Path = Path("results/ac_b2_u2_cg_dual_gate_local_nk12_nll5_v0p1_grid11")
+    plot_output: Path = Path("Plots/figures/ac_b2_u2_cg_dual_gate_local_nk12_nll5_v0p1_grid11.png")
     b1: float = 0.0
     u1: float = 0.0
     b2_min: float = -0.1
@@ -99,6 +99,8 @@ class LocalACB2U2SweepParams(BaseModel):
             str(self.n_ll),
             "--active-band",
             str(self.active_band),
+            "--coulomb-kind",
+            "dimensionless_dual_gate",
             "--v0",
             str(self.v0_over_omega_c),
             "--gate-distance",
@@ -178,6 +180,7 @@ def _write_run_config(params: LocalACB2U2SweepParams, *, dry_run: bool) -> Path:
                     "projection": "lowest AC band per valley",
                     "hf_references": "symmetry-constrained VP+, VP-, and T-prime IVC",
                     "variational_path": "convex interpolation of full HF Hamiltonians",
+                    "interaction": "dimensionless dual-gate Coulomb",
                     "interaction_strength_convention": "V0/omega_c",
                 },
                 "scan_command": params.scan_command(dry_run=dry_run),

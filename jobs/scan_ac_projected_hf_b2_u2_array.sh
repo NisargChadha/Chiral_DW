@@ -20,7 +20,7 @@ mkdir -p logs
 
 # Override any value with:
 # sbatch --export=ALL,NAME=value jobs/scan_ac_projected_hf_b2_u2_array.sh
-OUTPUT_ROOT=${OUTPUT_ROOT:-"results/ac_projected_hf_b2_u2_n11_nk12_nll8"}
+OUTPUT_ROOT=${OUTPUT_ROOT:-"results/ac_b2_u2_cg_dual_gate_n11_nk12_nll8"}
 
 B1_FIXED=${B1_FIXED:-"0.0"}
 U1_FIXED=${U1_FIXED:-"0.0"}
@@ -36,7 +36,7 @@ ACTIVE_BAND=${ACTIVE_BAND:-"0"}
 N_K=${N_K:-"12"}
 BAND_DIAGNOSTICS_N_K=${BAND_DIAGNOSTICS_N_K:-"9"}
 
-COULOMB_KIND=${COULOMB_KIND:-"dimensionless_screened"}
+COULOMB_KIND=${COULOMB_KIND:-"dimensionless_dual_gate"}
 V0=${V0:-"0.2"}
 GATE_DISTANCE=${GATE_DISTANCE:-"2.0"}
 Q_SHELL=${Q_SHELL:-"1"}

@@ -37,6 +37,7 @@ def test_local_ac_runner_defaults_match_requested_physics():
     assert params.active_band == 0
     assert params.v0_over_omega_c == 0.1
     assert params.workers == 2
+    assert command[command.index("--coulomb-kind") + 1] == "dimensionless_dual_gate"
     assert command[command.index("--mixing-method") + 1] == "oda"
     assert "--skip-existing" in command
     worker_command = params.scan_command(dry_run=False, task_id=7, no_write_plan=True)
@@ -61,12 +62,14 @@ def test_local_ac_runner_dry_run_writes_121_point_plan(tmp_path: Path):
     config = json.loads((output_root / "local_run_config.json").read_text())
     plan = json.loads((output_root / "sweep_plan.json").read_text())
     assert config["params"]["v0_over_omega_c"] == 0.1
+    assert config["physics"]["interaction"] == "dimensionless dual-gate Coulomb"
     assert config["physics"]["projection"] == "lowest AC band per valley"
     assert plan["n_points"] == 121
     assert plan["args"]["n_k"] == 12
     assert plan["args"]["n_ll"] == 5
     assert plan["args"]["active_band"] == 0
     assert plan["args"]["v0"] == 0.1
+    assert plan["args"]["coulomb_kind"] == "dimensionless_dual_gate"
 
 
 def test_ac_cg_plotter_writes_png_pdf_csv_and_summary(tmp_path: Path):

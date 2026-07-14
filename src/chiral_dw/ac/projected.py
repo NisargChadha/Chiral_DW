@@ -189,6 +189,37 @@ def _dimensionless_interaction_arrays(
     return q_vectors, q_norm, v_q, v_q.copy()
 
 
+def _dimensionless_dual_gate_interaction_arrays(
+    model: NonIdealACLLModel,
+    grid: MomentumGrid,
+    q_list: tuple[tuple[int, int], ...],
+    g_channels: tuple[tuple[int, int], ...],
+    interaction: ContinuumInteractionParams,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Return ``2*pi*v0*tanh(|Q|d)/|Q|`` in AC dimensionless units."""
+
+    q_vectors = np.zeros((len(q_list), len(g_channels), 2), dtype=float)
+    q_norm = np.zeros((len(q_list), len(g_channels)), dtype=float)
+    v_q = np.zeros_like(q_norm)
+    v0 = float(interaction.v0)
+    gate_distance = float(interaction.gate_distance)
+    q0_limit = 2.0 * np.pi * v0 * gate_distance
+    for iq, q in enumerate(q_list):
+        q_cart = _cart_from_coord(model, (q[0] / grid.n1, q[1] / grid.n2))
+        for ig, g in enumerate(g_channels):
+            g_cart = _cart_from_coord(model, g)
+            Q = q_cart + g_cart
+            norm = float(np.linalg.norm(Q))
+            q_vectors[iq, ig] = Q
+            q_norm[iq, ig] = norm
+            if norm < 1e-12:
+                if interaction.include_q0:
+                    v_q[iq, ig] = q0_limit
+            else:
+                v_q[iq, ig] = 2.0 * np.pi * v0 * np.tanh(norm * gate_distance) / norm
+    return q_vectors, q_norm, v_q, v_q.copy()
+
+
 def _dual_gate_interaction_arrays(
     model: NonIdealACLLModel,
     grid: MomentumGrid,
@@ -260,6 +291,14 @@ def _interaction_arrays(
             interaction,
             moire_length_nm=moire_length_nm,
             energy_unit_mev=energy_unit_mev,
+        )
+    if interaction.coulomb_kind == "dimensionless_dual_gate":
+        return _dimensionless_dual_gate_interaction_arrays(
+            model,
+            grid,
+            q_list,
+            g_channels,
+            interaction,
         )
     return _dimensionless_interaction_arrays(model, grid, q_list, g_channels, interaction)
 

@@ -259,7 +259,11 @@ class ContinuumInteractionParams(BaseModel):
     q_shell: int = Field(default=1, ge=0)
     q_mesh: Literal["shell", "full"] = "shell"
     local_field_cutoff: int = Field(default=0, ge=0)
-    coulomb_kind: Literal["dimensionless_screened", "dual_gate"] = "dimensionless_screened"
+    coulomb_kind: Literal[
+        "dimensionless_dual_gate",
+        "dimensionless_screened",
+        "dual_gate",
+    ] = "dimensionless_screened"
     epsilon: float = Field(default=16.7, gt=0.0)
     gate_distance_nm: float = Field(default=30.0, gt=0.0)
     include_q0: bool = True
@@ -332,7 +336,7 @@ class ACProjectedHFParams(BaseModel):
     )
     interaction: ContinuumInteractionParams = Field(
         default_factory=lambda: ContinuumInteractionParams(
-            coulomb_kind="dimensionless_screened",
+            coulomb_kind="dimensionless_dual_gate",
             v0=0.2,
             q_shell=1,
             local_field_cutoff=1,

@@ -128,7 +128,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--n-k", type=int, default=12)
     parser.add_argument("--band-diagnostics-n-k", type=int, default=9)
 
-    parser.add_argument("--coulomb-kind", choices=["dimensionless_screened", "dual_gate"], default="dimensionless_screened")
+    parser.add_argument(
+        "--coulomb-kind",
+        choices=["dimensionless_dual_gate", "dimensionless_screened", "dual_gate"],
+        default="dimensionless_dual_gate",
+    )
     parser.add_argument("--interaction-strength-scale", "--v0", dest="v0", type=float, default=0.2)
     parser.add_argument("--dimensionless-gate-distance", "--gate-distance", dest="gate_distance", type=float, default=2.0)
     parser.add_argument("--q-shell", type=int, default=1)
