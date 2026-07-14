@@ -1,0 +1,169 @@
+{
+  "all_meshes_passed_independent_audit": true,
+  "analysis_csv": "/Users/nisargchadha/Documents/Chiral_DW/Plots/figures/ac_b1_u1_cg_nk18_22_nll6_v0p1_finite_size_scaling.csv",
+  "audits": [
+    {
+      "cG_max": -0.07238209223848374,
+      "cG_min": -0.07267433402742618,
+      "input_csv": "/Users/nisargchadha/Documents/Chiral_DW/results/ac_b1_u1_cg_nk18_nll6_v0p1_grid11_gaugefixed_v2/sweep.csv",
+      "maximum_neighbor_cG_jump": 7.013078910123038e-05,
+      "median_neighbor_cG_jump": 1.105396638916012e-05,
+      "minimum_ac_band_gap": 0.5529400222606192,
+      "minimum_variational_path_gap": 0.17958336540812203,
+      "n_bad_points": 0,
+      "n_k": 18,
+      "n_rows": 121,
+      "n_unique_coordinates": 121
+    },
+    {
+      "cG_max": -0.07240785603466032,
+      "cG_min": -0.072669702786578,
+      "input_csv": "/Users/nisargchadha/Documents/Chiral_DW/results/ac_b1_u1_cg_nk19_nll6_v0p1_grid11_gaugefixed_v2/sweep.csv",
+      "maximum_neighbor_cG_jump": 6.276709753005871e-05,
+      "median_neighbor_cG_jump": 1.0020104548660869e-05,
+      "minimum_ac_band_gap": 0.5523677870734041,
+      "minimum_variational_path_gap": 0.1849821967837449,
+      "n_bad_points": 0,
+      "n_k": 19,
+      "n_rows": 121,
+      "n_unique_coordinates": 121
+    },
+    {
+      "cG_max": -0.07243097010311181,
+      "cG_min": -0.07266704500528332,
+      "input_csv": "/Users/nisargchadha/Documents/Chiral_DW/results/ac_b1_u1_cg_nk20_nll6_v0p1_grid11_gaugefixed_v2/sweep.csv",
+      "maximum_neighbor_cG_jump": 5.643001703581341e-05,
+      "median_neighbor_cG_jump": 9.135654148860473e-06,
+      "minimum_ac_band_gap": 0.5518786864020963,
+      "minimum_variational_path_gap": 0.19006016173715037,
+      "n_bad_points": 0,
+      "n_k": 20,
+      "n_rows": 121,
+      "n_unique_coordinates": 121
+    },
+    {
+      "cG_max": -0.07245166806167691,
+      "cG_min": -0.07266575410415899,
+      "input_csv": "/Users/nisargchadha/Documents/Chiral_DW/results/ac_b1_u1_cg_nk21_nll6_v0p1_grid11_gaugefixed_v2/sweep.csv",
+      "maximum_neighbor_cG_jump": 5.095763953689991e-05,
+      "median_neighbor_cG_jump": 8.334375436000463e-06,
+      "minimum_ac_band_gap": 0.5514573835206965,
+      "minimum_variational_path_gap": 0.19483128276823086,
+      "n_bad_points": 0,
+      "n_k": 21,
+      "n_rows": 121,
+      "n_unique_coordinates": 121
+    },
+    {
+      "cG_max": -0.07247019062857202,
+      "cG_min": -0.07266540150403525,
+      "input_csv": "/Users/nisargchadha/Documents/Chiral_DW/results/ac_b1_u1_cg_nk22_nll6_v0p1_grid11_gaugefixed_v2/sweep.csv",
+      "maximum_neighbor_cG_jump": 4.621447775285392e-05,
+      "median_neighbor_cG_jump": 7.713894195508775e-06,
+      "minimum_ac_band_gap": 0.5510919178009265,
+      "minimum_variational_path_gap": 0.1993109261785892,
+      "n_bad_points": 0,
+      "n_k": 22,
+      "n_rows": 121,
+      "n_unique_coordinates": 121
+    }
+  ],
+  "center_cG_by_n_k": {
+    "18": -0.07245596297652587,
+    "19": -0.07247458681981972,
+    "20": -0.07249170358950457,
+    "21": -0.07250732087127781,
+    "22": -0.07252150462953835
+  },
+  "center_coordinate": {
+    "b1": 0.0,
+    "u1": 0.0
+  },
+  "center_model_spread": 0.00016339568191928167,
+  "even_power_infinity_parameter_span": 1.4374250060081306e-05,
+  "finite_nk_max_parameter_span": 0.0001952108754632309,
+  "fits": {
+    "even_n2_n4": {
+      "cG_infinity_max": -0.07269273123037433,
+      "cG_infinity_min": -0.07270710548043441,
+      "center_cG_infinity": -0.07270265218383101,
+      "maximum_abs_leave_one_out_residual": 8.851285479560822e-08,
+      "maximum_abs_residual": 1.598034088390321e-08,
+      "overall_leave_one_out_rmse": 2.188173584045643e-08,
+      "overall_rmse": 4.945987064260426e-09,
+      "powers": [
+        2,
+        4
+      ]
+    },
+    "inverse_n": {
+      "cG_infinity_max": -0.07262413171098102,
+      "cG_infinity_min": -0.0728671730276276,
+      "center_cG_infinity": -0.07281658707003622,
+      "maximum_abs_leave_one_out_residual": 3.36792826020893e-06,
+      "maximum_abs_residual": 1.2096326934968316e-06,
+      "overall_leave_one_out_rmse": 7.81412797554344e-07,
+      "overall_rmse": 3.7259854169573004e-07,
+      "powers": [
+        1
+      ]
+    },
+    "inverse_n2": {
+      "cG_infinity_max": -0.07264610446260558,
+      "cG_infinity_min": -0.07265370202948361,
+      "center_cG_infinity": -0.07265319138811693,
+      "maximum_abs_leave_one_out_residual": 3.2074314792185366e-06,
+      "maximum_abs_residual": 1.128667973679387e-06,
+      "overall_leave_one_out_rmse": 1.7739684316494666e-06,
+      "overall_rmse": 8.376971858682962e-07,
+      "powers": [
+        2
+      ]
+    }
+  },
+  "interpretation": "The finite-size trend is smooth and has no significant odd-even anomaly. The even 1/n_k^2+1/n_k^4 expansion gives the smallest interpolation and leave-one-size-out errors, but the infinity intercept remains ansatz-dependent over the narrow n_k=18..22 window; compare all reported intercepts.",
+  "maximum_pointwise_model_spread": 0.00021951701758451958,
+  "n_k_values": [
+    18,
+    19,
+    20,
+    21,
+    22
+  ],
+  "n_parameter_points": 121,
+  "odd_even_inverse_square_diagnostic": {
+    "center_even_cG_infinity": -0.07265310611031892,
+    "center_odd_cG_infinity": -0.07265503327848244,
+    "center_odd_minus_even": -1.9271681635235627e-06,
+    "even_n_k_values": [
+      18,
+      20,
+      22
+    ],
+    "maximum_abs_odd_minus_even_across_grid": 2.0444783519757426e-06,
+    "odd_n_k_values": [
+      19,
+      21
+    ]
+  },
+  "output_pdf": "/Users/nisargchadha/Documents/Chiral_DW/Plots/figures/ac_b1_u1_cg_nk18_22_nll6_v0p1_finite_size_scaling.pdf",
+  "output_png": "/Users/nisargchadha/Documents/Chiral_DW/Plots/figures/ac_b1_u1_cg_nk18_22_nll6_v0p1_finite_size_scaling.png",
+  "successive_mesh_change": {
+    "nk18_to_nk19": {
+      "maximum_abs": 2.576379617658109e-05,
+      "median_abs": 1.862384329384681e-05
+    },
+    "nk19_to_nk20": {
+      "maximum_abs": 2.3114068451485226e-05,
+      "median_abs": 1.7116769684855093e-05
+    },
+    "nk20_to_nk21": {
+      "maximum_abs": 2.069795856510237e-05,
+      "median_abs": 1.5617281773239178e-05
+    },
+    "nk21_to_nk22": {
+      "maximum_abs": 1.852256689510723e-05,
+      "median_abs": 1.4183758260538637e-05
+    }
+  }
+}
