@@ -93,6 +93,29 @@ def test_ac_b2_u2_sweep_canonicalizes_linecut_coordinates(tmp_path):
     assert {point["u2"] for point in points} == {0.0}
 
 
+def test_ac_b2_u2_sweep_no_write_plan_leaves_shared_plan_untouched(tmp_path):
+    output_root = tmp_path / "sweep"
+    output_root.mkdir()
+    plan_path = output_root / "sweep_plan.json"
+    plan_path.write_text('{"sentinel": true}')
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--output-root",
+            str(output_root),
+            "--b2",
+            "0.0",
+            "--u2",
+            "0.0",
+            "--dry-run",
+            "--no-write-plan",
+        ],
+        check=True,
+    )
+    assert json.loads(plan_path.read_text()) == {"sentinel": True}
+
+
 def test_ac_b2_cg_plotter_writes_linecut_artifacts(tmp_path):
     input_csv = tmp_path / "sweep.csv"
     output = tmp_path / "linecut.png"

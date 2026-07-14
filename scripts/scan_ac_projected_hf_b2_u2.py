@@ -164,6 +164,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--skip-existing", action="store_true")
     parser.add_argument("--dry-run", action="store_true", help="Write the selected scan plan without running HF.")
+    parser.add_argument(
+        "--no-write-plan",
+        action="store_true",
+        help="Do not rewrite the shared sweep plan (useful for parallel local task workers).",
+    )
     parser.add_argument("--merge-only", action="store_true", help="Merge existing point summaries into sweep tables.")
     return parser
 
@@ -687,7 +692,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     points = _selected_points(args)
-    _write_plan(output_root, points, args)
+    if not args.no_write_plan:
+        _write_plan(output_root, points, args)
     if args.dry_run:
         print(f"Wrote dry-run plan with {len(points)} selected point(s) to {output_root}")
         return 0
