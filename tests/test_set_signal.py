@@ -12,6 +12,8 @@ from chiral_dw.continuum import (
     gaussian_dos,
     hf_band_validity_summary,
     inverse_compressibility_rows,
+    run_taige_set_hysteresis_branch_point,
+    select_set_hysteresis_envelope,
     set_gap_summary,
     solve_global_hf,
     run_taige_set_point,
@@ -107,6 +109,36 @@ def test_set_finite_differences_and_electron_sign_convention():
     assert kappa[0].dmu_dn_raw_mev_nm2 == pytest.approx(40.0)
 
 
+def test_set_hysteresis_envelope_selects_each_particle_number_independently():
+    up = [_energy_row(1, 1.0), _energy_row(2, 4.0), _energy_row(3, 9.0)]
+    down = [_energy_row(1, 0.0), _energy_row(2, 5.0), _energy_row(3, 8.0)]
+
+    envelope = select_set_hysteresis_envelope(
+        up,
+        down,
+        n_particles_filling_one=2,
+    )
+
+    assert envelope.selected_direction_by_particles == {1: "down", 2: "up", 3: "down"}
+    assert envelope.down_minus_up_intrinsic_energy_mev == pytest.approx(
+        {1: -1.0, 2: 1.0, 3: -1.0}
+    )
+    assert [row.energy_total_mev for row in envelope.selected_energy_rows] == pytest.approx(
+        [0.0, 4.0, 8.0]
+    )
+    assert envelope.set_gap.charge_gap_raw_mev == pytest.approx(0.0)
+
+
+def test_set_hysteresis_envelope_rejects_two_unconverged_candidates():
+    up = [_energy_row(1, 0.0), _energy_row(2, 1.0), _energy_row(3, 3.0)]
+    down = [_energy_row(1, 0.0), _energy_row(2, 0.5), _energy_row(3, 3.0)]
+    up[1] = up[1].model_copy(update={"converged": False})
+    down[1] = down[1].model_copy(update={"converged": False})
+
+    with pytest.raises(ValueError, match="both hysteresis branches are unconverged"):
+        select_set_hysteresis_envelope(up, down, n_particles_filling_one=2)
+
+
 def test_negative_indirect_gap_invalidates_fixed_per_k_insulator():
     H = np.asarray([np.diag([0.0, 5.0]), np.diag([6.0, 7.0])], dtype=complex)
 
@@ -187,3 +219,13 @@ def test_small_taige_set_point_runs_fixed_and_global_paths():
     assert len(result.inverse_compressibility_rows) == 1
     assert len(result.dos_rows) == 101
     assert all(row.converged for row in result.filling_energy_rows)
+
+    branch = run_taige_set_hysteresis_branch_point(
+        params,
+        {n_particles: hf_result.P for n_particles, hf_result in result.filling_results.items()},
+        direction="up",
+    )
+    assert branch.summary.direction == "up"
+    assert branch.summary.all_fillings_converged
+    assert sorted(branch.filling_results) == [3, 4, 5]
+    assert branch.summary.neutral_topology.one_state_per_k_max_error >= 0.0
