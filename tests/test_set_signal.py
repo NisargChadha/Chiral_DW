@@ -130,9 +130,14 @@ def test_uniform_hartree_energy_reconstructs_omitted_capacitive_channel():
         v_over_a=np.asarray([[0.2]], dtype=float),
         g_channels=((0, 0),),
     )
-    backend = ContinuumHFBackend(h0, vertices, ContinuumInteractionParams())
+    backend = ContinuumHFBackend(
+        h0,
+        vertices,
+        ContinuumInteractionParams(density_vertex_retention="hartree_only"),
+    )
     P = np.eye(2, dtype=complex)[None, :, :]
 
+    assert backend.n_q == 0
     assert backend.energy(P).hartree == pytest.approx(0.0)
     assert backend.uniform_hartree_energy(P) == pytest.approx(0.4)
 

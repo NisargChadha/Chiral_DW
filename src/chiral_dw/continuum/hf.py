@@ -315,6 +315,7 @@ class ContinuumHFBackend:
             (int(iq), int(ig)): (int(iq), int(ig), float(v))
             for iq, ig, v in self.hartree_channels
         }
+        self._uniform_hartree_records = self._capture_uniform_hartree_records()
         self.tVE: np.ndarray | None = None
         self.valley_sector_exchange: ValleySectorExchange | None = None
         if self.exchange_representation == "valley_sector":
@@ -368,6 +369,26 @@ class ContinuumHFBackend:
                 if v != 0.0:
                     channels.append((iq, ig, v))
         return channels
+
+    def _capture_uniform_hartree_records(self) -> tuple[tuple[float, np.ndarray], ...]:
+        """Copy uniform density vertices before optional Hartree-only retention."""
+
+        records: list[tuple[float, np.ndarray]] = []
+        scale = float(self.interaction.hartree_scale)
+        for iq in range(self.n_q):
+            for ig in range(self.n_g):
+                if not self._is_uniform_channel(iq, ig):
+                    continue
+                v = scale * float(self.v_over_a[iq, ig])
+                if v == 0.0:
+                    continue
+                lam = (
+                    self.lambda_compact[iq, ig]
+                    if self.vertex_layout == "valley_compact"
+                    else self.lambda_blocks[iq, ig]
+                )
+                records.append((v, np.asarray(lam, dtype=complex).copy()))
+        return tuple(records)
 
     def _is_uniform_channel(self, iq: int, ig: int) -> bool:
         if self.vertices.q_norm_nm_inv is not None:
@@ -855,21 +876,12 @@ class ContinuumHFBackend:
 
         density = self.as_block_density(Q)
         energy = 0.0
-        scale = float(self.interaction.hartree_scale)
-        for iq in range(self.n_q):
-            for ig in range(self.n_g):
-                if not self._is_uniform_channel(iq, ig):
-                    continue
-                v = scale * float(self.v_over_a[iq, ig])
-                if v == 0.0:
-                    continue
-                if self.vertex_layout == "valley_compact":
-                    lam = self.lambda_compact[iq, ig]
-                    rho = self._compact_channel_density_trace(lam, density)
-                else:
-                    lam = self.lambda_blocks[iq, ig]
-                    rho = np.einsum("kab,kba->", lam, density, optimize=True)
-                energy += 0.5 * v * float(np.real(rho * np.conj(rho)))
+        for v, lam in self._uniform_hartree_records:
+            if self.vertex_layout == "valley_compact":
+                rho = self._compact_channel_density_trace(lam, density)
+            else:
+                rho = np.einsum("kab,kba->", lam, density, optimize=True)
+            energy += 0.5 * v * float(np.real(rho * np.conj(rho)))
         return float(energy)
 
     def energy(self, P: np.ndarray) -> EnergyComponents:
