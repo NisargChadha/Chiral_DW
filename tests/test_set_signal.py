@@ -2,16 +2,21 @@ import numpy as np
 import pytest
 
 from chiral_dw.config import ContinuumHFParams, ContinuumInteractionParams
+from chiral_dw.config import ContinuumGridParams
 from chiral_dw.continuum import (
     ContinuumHFBackend,
     DensityVertices,
     SETFillingEnergyRow,
+    TaigeSETWorkflowParams,
     chemical_potential_rows,
     gaussian_dos,
     hf_band_validity_summary,
     inverse_compressibility_rows,
     set_gap_summary,
     solve_global_hf,
+    run_taige_set_point,
+    taige_interaction_params,
+    taige_model_params,
 )
 
 
@@ -139,3 +144,41 @@ def test_gaussian_dos_is_normalized_per_momentum_block():
     dos = gaussian_dos(evals, energy, sigma_mev=0.1)
 
     assert np.trapezoid(dos, energy) == pytest.approx(2.0, abs=2e-4)
+
+
+def test_small_taige_set_point_runs_fixed_and_global_paths():
+    params = TaigeSETWorkflowParams(
+        model=taige_model_params(
+            theta_deg=3.0,
+            u_D=5.75,
+            plane_wave_shell=1,
+            n_bands=1,
+            n_active_bands_per_valley=1,
+        ),
+        grid=ContinuumGridParams(n_k=2),
+        interaction=taige_interaction_params(
+            q_mesh="shell",
+            q_shell=0,
+            local_field_cutoff=0,
+            interaction_strength_scale=0.0,
+        ),
+        hf=ContinuumHFParams(
+            max_iter=3,
+            min_iter=1,
+            mixing_method="oda",
+            seed_ordered_weight=1.0,
+            seed_random_weight=0.0,
+        ),
+        particle_offsets=(-1, 0, 1),
+        dos_energy_points=101,
+    )
+
+    result = run_taige_set_point(params)
+
+    assert result.summary.n_cells == 4
+    assert result.summary.n_fillings == 3
+    assert sorted(result.filling_results) == [3, 4, 5]
+    assert len(result.chemical_potential_rows) == 2
+    assert len(result.inverse_compressibility_rows) == 1
+    assert len(result.dos_rows) == 101
+    assert all(row.converged for row in result.filling_energy_rows)

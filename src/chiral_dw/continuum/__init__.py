@@ -39,6 +39,13 @@ from chiral_dw.continuum.set_signal import (
     inverse_compressibility_rows,
     set_gap_summary,
 )
+from chiral_dw.continuum.set_sweep import (
+    FixedVPReferenceSummary,
+    TaigeSETPointResult,
+    TaigeSETPointSummary,
+    TaigeSETWorkflowParams,
+    run_taige_set_point,
+)
 from chiral_dw.continuum.hysteresis import (
     HysteresisDirection,
     HysteresisSweepAxis,
@@ -223,6 +230,10 @@ __all__ = [
     "SETFillingEnergyRow",
     "SETGapSummary",
     "SETInverseCompressibilityRow",
+    "FixedVPReferenceSummary",
+    "TaigeSETPointResult",
+    "TaigeSETPointSummary",
+    "TaigeSETWorkflowParams",
     "SymmetricHFReferences",
     "TaigeIvcDiagnosticPoint",
     "TaigeIvcSeedSpec",
@@ -290,6 +301,7 @@ __all__ = [
     "reference_diagnostics",
     "reference_energy_rows",
     "run_finite_q_ivc_diagnostic",
+    "run_taige_set_point",
     "reference_hamiltonian_diagnostics",
     "retarget_global_density",
     "rotate_valley_u1",
