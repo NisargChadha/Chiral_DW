@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plot the intrinsic scanning-SET charge gap versus displacement field."""
+"""Plot the capacitance-added scanning-SET gap versus displacement field."""
 
 from __future__ import annotations
 
@@ -26,6 +26,12 @@ REFINED_SUMMARY_PATH = (
     / "uD_005p7500"
     / "point_summary.json"
 )
+FINE_SUMMARY_PATH = (
+    REPO_ROOT
+    / "results"
+    / "taige_set_nk18_theta3_u5p09_5p91_refined_raw"
+    / "set_sweep_summary.csv"
+)
 FIGURE_DIR = REPO_ROOT / "Plots" / "figures"
 OUTPUT_STEM = "taige_set_nk18_theta3_set_gap_vs_displacement"
 
@@ -37,6 +43,7 @@ FONTS = {
     "tick_label": 20,
     "annotation": 13,
     "phase_label": 18,
+    "legend": 14,
 }
 COLORS = {
     "red": "#FD4C55",
@@ -46,8 +53,6 @@ COLORS = {
     "axis": "0.18",
 }
 AXES = {
-    "transition_min_meV": 5.75,
-    "transition_max_meV": 6.0,
     "spine_linewidth": 1.15,
 }
 
@@ -64,6 +69,7 @@ def _apply_style() -> None:
             "axes.labelsize": FONTS["axis_label"],
             "xtick.labelsize": FONTS["tick_label"],
             "ytick.labelsize": FONTS["tick_label"],
+            "legend.fontsize": FONTS["legend"],
             "axes.edgecolor": COLORS["axis"],
             "axes.linewidth": AXES["spine_linewidth"],
             "axes.spines.top": True,
@@ -92,32 +98,45 @@ def _load_gap_rows() -> pd.DataFrame:
         raise FileNotFoundError(f"Missing merged sweep summary: {SUMMARY_PATH}")
     if not REFINED_SUMMARY_PATH.exists():
         raise FileNotFoundError(f"Missing refined transition point: {REFINED_SUMMARY_PATH}")
+    if not FINE_SUMMARY_PATH.exists():
+        raise FileNotFoundError(f"Missing fine SET sweep: {FINE_SUMMARY_PATH}")
 
     summary = pd.read_csv(SUMMARY_PATH).sort_values("u_D_meV")
-    if not bool(summary["all_global_fillings_converged"].all()):
-        raise ValueError("SET gap curve requires every global filling to converge")
+    fine = pd.read_csv(FINE_SUMMARY_PATH).sort_values("u_D_meV")
+    for label, frame in (("coarse", summary), ("fine", fine)):
+        if not bool(frame["all_global_fillings_converged"].all()):
+            raise ValueError(f"{label} SET gap curve contains an unconverged filling")
+        if not bool(frame["fixed_per_k_valid_insulator"].all()):
+            raise ValueError(f"{label} SET gap curve contains an invalid HF insulator")
 
     refined_payload = json.loads(REFINED_SUMMARY_PATH.read_text())
     refined = refined_payload["row"]
-    rows = summary[["u_D_meV", "charge_gap_intrinsic_meV"]].assign(
-        sampling="coarse"
+    columns = [
+        "u_D_meV",
+        "hf_band_chern",
+        "fixed_indirect_gap_meV",
+        "fixed_per_k_valid_insulator",
+        "all_global_fillings_converged",
+        "charge_gap_intrinsic_meV",
+        "charge_gap_raw_meV",
+    ]
+    rows = summary[columns].assign(sampling="coarse")
+    fine_rows = fine[columns].assign(sampling="new refinement")
+    refined_row = pd.DataFrame(
+        [
+            {
+                key: refined[key]
+                for key in columns
+            }
+            | {"sampling": "existing refined point"}
+        ]
     )
     rows = pd.concat(
-        [
-            rows,
-            pd.DataFrame(
-                [
-                    {
-                        "u_D_meV": float(refined["u_D_meV"]),
-                        "charge_gap_intrinsic_meV": float(
-                            refined["charge_gap_intrinsic_meV"]
-                        ),
-                        "sampling": "refined",
-                    }
-                ]
-            ),
-        ],
+        [rows, fine_rows, refined_row],
         ignore_index=True,
+    )
+    rows["uniform_capacitance_contribution_meV"] = (
+        rows["charge_gap_raw_meV"] - rows["charge_gap_intrinsic_meV"]
     )
     return rows.sort_values("u_D_meV").reset_index(drop=True)
 
@@ -125,7 +144,10 @@ def _load_gap_rows() -> pd.DataFrame:
 def plot() -> list[Path]:
     rows = _load_gap_rows()
     coarse = rows[rows["sampling"] == "coarse"]
-    refined = rows[rows["sampling"] == "refined"].iloc[0]
+    refined = rows[rows["sampling"] != "coarse"]
+    minimum = rows.loc[rows["charge_gap_raw_meV"].idxmin()]
+    c1_max = float(rows.loc[rows["hf_band_chern"].abs() > 0.5, "u_D_meV"].max())
+    c0_min = float(rows.loc[rows["hf_band_chern"].abs() < 0.5, "u_D_meV"].min())
 
     FIGURE_DIR.mkdir(parents=True, exist_ok=True)
     csv_path = FIGURE_DIR / f"{OUTPUT_STEM}.csv"
@@ -135,12 +157,10 @@ def plot() -> list[Path]:
     fig, ax = plt.subplots(figsize=FIGURE["size"])
     fig.subplots_adjust(left=0.18, right=0.96, bottom=0.16, top=0.90)
 
-    transition_mid = 0.5 * (
-        AXES["transition_min_meV"] + AXES["transition_max_meV"]
-    )
+    transition_mid = 0.5 * (c1_max + c0_min)
     ax.axvspan(
-        AXES["transition_min_meV"],
-        AXES["transition_max_meV"],
+        c1_max,
+        c0_min,
         color=COLORS["grey_span"],
         alpha=0.72,
         zorder=0,
@@ -156,33 +176,35 @@ def plot() -> list[Path]:
 
     ax.plot(
         rows["u_D_meV"],
-        rows["charge_gap_intrinsic_meV"],
+        rows["charge_gap_raw_meV"],
         color=COLORS["red"],
         linewidth=2.6,
         zorder=3,
     )
     ax.scatter(
         coarse["u_D_meV"],
-        coarse["charge_gap_intrinsic_meV"],
+        coarse["charge_gap_raw_meV"],
         color=COLORS["red"],
         marker="o",
         s=58,
         zorder=4,
+        label="coarse sweep",
     )
     ax.scatter(
         refined["u_D_meV"],
-        refined["charge_gap_intrinsic_meV"],
+        refined["charge_gap_raw_meV"],
         facecolor="white",
         edgecolor=COLORS["red"],
         linewidth=2.0,
         marker="o",
-        s=88,
+        s=72,
         zorder=5,
+        label=r"refined $5<u_D<6$ meV",
     )
     ax.annotate(
-        r"refined point",
-        xy=(refined["u_D_meV"], refined["charge_gap_intrinsic_meV"]),
-        xytext=(4.0, 2.4),
+        rf"minimum ${minimum['charge_gap_raw_meV']:.3f}$ meV",
+        xy=(minimum["u_D_meV"], minimum["charge_gap_raw_meV"]),
+        xytext=(4.0, 3.1),
         arrowprops={"arrowstyle": "->", "color": COLORS["grey"], "lw": 1.2},
         fontsize=FONTS["annotation"],
         color=COLORS["grey"],
@@ -190,7 +212,7 @@ def plot() -> list[Path]:
     )
     ax.text(
         2.1,
-        21.4,
+        23.0,
         r"$C=1$",
         color=COLORS["vp_chern"],
         fontsize=FONTS["phase_label"],
@@ -198,7 +220,7 @@ def plot() -> list[Path]:
     )
     ax.text(
         8.0,
-        21.4,
+        23.0,
         r"$C=0$",
         color=COLORS["grey"],
         fontsize=FONTS["phase_label"],
@@ -206,13 +228,21 @@ def plot() -> list[Path]:
     )
 
     ax.set_xlim(0.0, 10.0)
-    ax.set_ylim(-2.5, 23.0)
+    ax.set_ylim(-1.0, 24.5)
     ax.set_xticks(np.arange(0, 11, 2))
     ax.set_xlabel(r"displacement field $u_D$ (meV)")
-    ax.set_ylabel(r"intrinsic SET gap $\Delta_{\rm SET}$ (meV)")
-    ax.set_title(r"Scanning-SET charge gap at $\nu_h=1$")
+    ax.set_ylabel(r"raw SET gap $\Delta_{\rm SET}$ (meV)")
+    ax.set_title(r"Raw scanning-SET charge gap at $\nu_h=1$")
     ax.set_box_aspect(1.0)
     _box_axes(ax)
+    ax.legend(
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.16),
+        ncol=2,
+        frameon=False,
+        handletextpad=0.5,
+        columnspacing=1.3,
+    )
 
     png_path = FIGURE_DIR / f"{OUTPUT_STEM}.png"
     pdf_path = FIGURE_DIR / f"{OUTPUT_STEM}.pdf"
