@@ -39,6 +39,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--n-u-d", type=int, default=20)
     parser.add_argument("--max-iter", type=int, default=None)
     parser.add_argument(
+        "--filling-workers",
+        type=int,
+        default=None,
+        help="Concurrent N-1, N, N+1 solves sharing one continuum backend.",
+    )
+    parser.add_argument(
         "--max-points",
         type=int,
         default=None,
@@ -92,7 +98,11 @@ def _point_dir(root: Path, direction: str, u_d: float) -> Path:
     return root / "branches" / direction / _label(u_d)
 
 
-def _load_template(seed_point_dir: Path, max_iter: int | None) -> TaigeSETWorkflowParams:
+def _load_template(
+    seed_point_dir: Path,
+    max_iter: int | None,
+    filling_workers: int | None,
+) -> TaigeSETWorkflowParams:
     params_path = seed_point_dir / "point_params.json"
     if not params_path.exists():
         raise FileNotFoundError(f"Missing seed parameters: {params_path}")
@@ -102,7 +112,20 @@ def _load_template(seed_point_dir: Path, max_iter: int | None) -> TaigeSETWorkfl
         if max_iter is None
         else params.hf.model_copy(update={"max_iter": int(max_iter)})
     )
-    return params.model_copy(update={"hf": hf, "particle_offsets": (-1, 0, 1)})
+    workers = (
+        int(params.filling_workers)
+        if filling_workers is None
+        else int(filling_workers)
+    )
+    if workers < 1:
+        raise ValueError("--filling-workers must be at least one")
+    return params.model_copy(
+        update={
+            "hf": hf,
+            "particle_offsets": (-1, 0, 1),
+            "filling_workers": workers,
+        }
+    )
 
 
 def _params_at(template: TaigeSETWorkflowParams, u_d: float) -> TaigeSETWorkflowParams:
@@ -164,7 +187,7 @@ def run_branch(args: argparse.Namespace, root: Path) -> int:
     if args.seed_point_dir is None:
         raise ValueError("--seed-point-dir is required for up/down continuations")
     seed_dir = _root(args.seed_point_dir)
-    template = _load_template(seed_dir, args.max_iter)
+    template = _load_template(seed_dir, args.max_iter, args.filling_workers)
     values = _grid(args)
     if args.direction == "down":
         values = values[::-1]

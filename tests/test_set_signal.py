@@ -207,6 +207,7 @@ def test_small_taige_set_point_runs_fixed_and_global_paths():
             seed_random_weight=0.0,
         ),
         particle_offsets=(-1, 0, 1),
+        filling_workers=3,
         dos_energy_points=101,
     )
 
@@ -214,6 +215,7 @@ def test_small_taige_set_point_runs_fixed_and_global_paths():
 
     assert result.summary.n_cells == 4
     assert result.summary.n_fillings == 3
+    assert result.params.filling_workers == 3
     assert sorted(result.filling_results) == [3, 4, 5]
     assert len(result.chemical_potential_rows) == 2
     assert len(result.inverse_compressibility_rows) == 1

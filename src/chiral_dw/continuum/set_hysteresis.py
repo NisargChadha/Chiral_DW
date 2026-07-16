@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Literal
 
@@ -130,8 +131,7 @@ def run_taige_set_hysteresis_branch_point(
             "initial_projectors keys must exactly match the requested particle numbers"
         )
 
-    results: dict[int, ContinuumHFResult] = {}
-    for target in targets:
+    def solve_target(target: int) -> tuple[int, ContinuumHFResult]:
         seed = bundle.backend.as_block_density(initial_projectors[target])
         trace = float(np.real(np.trace(seed, axis1=-2, axis2=-1).sum()))
         if abs(trace - float(target)) > params.hf.tolerance:
@@ -141,7 +141,7 @@ def run_taige_set_hysteresis_branch_point(
                 target,
                 constraint=constraint,
             )
-        results[target] = solve_global_hf(
+        result = solve_global_hf(
             bundle.backend,
             seed,
             target,
@@ -149,6 +149,16 @@ def run_taige_set_hysteresis_branch_point(
             constraint=constraint,
             seed=f"set_hysteresis_{direction}_N{target}",
         )
+        return target, result
+
+    if int(params.filling_workers) <= 1:
+        solved = [solve_target(target) for target in targets]
+    else:
+        with ThreadPoolExecutor(
+            max_workers=min(int(params.filling_workers), len(targets))
+        ) as executor:
+            solved = list(executor.map(solve_target, targets))
+    results = dict(solved)
 
     rows = tuple(
         set_filling_energy_row(bundle, target, results[target]) for target in targets

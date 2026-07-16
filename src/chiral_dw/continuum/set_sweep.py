@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
@@ -46,6 +47,7 @@ class TaigeSETWorkflowParams(BaseModel):
     interaction: ContinuumInteractionParams
     hf: ContinuumHFParams
     particle_offsets: tuple[int, ...] = tuple(range(-12, 13))
+    filling_workers: int = Field(default=1, ge=1)
     temperature_kbt_mev: float = Field(default=0.0, ge=0.0)
     gaussian_broadening_mev: float = Field(default=0.1, gt=0.0)
     dos_energy_points: int = Field(default=801, ge=101)
@@ -219,41 +221,42 @@ def _solve_global_filling_sequence(
     )
     results: dict[int, ContinuumHFResult] = {n0: center}
 
-    previous = center
-    for target in range(n0 + 1, target_numbers[-1] + 1):
-        seed = retarget_global_density(
-            bundle.backend,
-            previous.P,
-            target,
-            constraint=constraint,
-        )
-        previous = solve_global_hf(
-            bundle.backend,
-            seed,
-            target,
-            params.hf,
-            constraint=constraint,
-            seed=f"warm_up_N{target}",
-        )
-        results[target] = previous
+    def solve_direction(targets: range, label: str) -> dict[int, ContinuumHFResult]:
+        branch: dict[int, ContinuumHFResult] = {}
+        previous = center
+        for target in targets:
+            seed = retarget_global_density(
+                bundle.backend,
+                previous.P,
+                target,
+                constraint=constraint,
+            )
+            previous = solve_global_hf(
+                bundle.backend,
+                seed,
+                target,
+                params.hf,
+                constraint=constraint,
+                seed=f"warm_{label}_N{target}",
+            )
+            branch[target] = previous
+        return branch
 
-    previous = center
-    for target in range(n0 - 1, target_numbers[0] - 1, -1):
-        seed = retarget_global_density(
-            bundle.backend,
-            previous.P,
-            target,
-            constraint=constraint,
-        )
-        previous = solve_global_hf(
-            bundle.backend,
-            seed,
-            target,
-            params.hf,
-            constraint=constraint,
-            seed=f"warm_down_N{target}",
-        )
-        results[target] = previous
+    directions = (
+        (range(n0 + 1, target_numbers[-1] + 1), "up"),
+        (range(n0 - 1, target_numbers[0] - 1, -1), "down"),
+    )
+    active_directions = tuple(item for item in directions if item[0])
+    if int(params.filling_workers) <= 1 or len(active_directions) <= 1:
+        branch_results = [solve_direction(*item) for item in active_directions]
+    else:
+        with ThreadPoolExecutor(
+            max_workers=min(int(params.filling_workers), len(active_directions))
+        ) as executor:
+            futures = [executor.submit(solve_direction, *item) for item in active_directions]
+            branch_results = [future.result() for future in futures]
+    for branch in branch_results:
+        results.update(branch)
     return dict(sorted(results.items()))
 
 

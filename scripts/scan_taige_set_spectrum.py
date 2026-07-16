@@ -38,6 +38,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--theta-deg", type=float, default=3.0)
     parser.add_argument("--n-k", type=int, default=18)
     parser.add_argument("--particle-offset-max", type=int, default=12)
+    parser.add_argument(
+        "--filling-workers",
+        type=int,
+        default=1,
+        help="Concurrent positive/negative filling continuations sharing one backend.",
+    )
 
     parser.add_argument("--plane-wave-shell", type=int, default=5)
     parser.add_argument("--n-bands", type=int, default=2)
@@ -200,6 +206,7 @@ def _params(args: argparse.Namespace, u_d: float) -> TaigeSETWorkflowParams:
         interaction=interaction,
         hf=hf,
         particle_offsets=tuple(range(-offset_max, offset_max + 1)),
+        filling_workers=int(args.filling_workers),
         gaussian_broadening_mev=float(args.gaussian_broadening_mev),
         dos_energy_points=int(args.dos_energy_points),
         direct_gap_tolerance_mev=float(args.direct_gap_tolerance_mev),
