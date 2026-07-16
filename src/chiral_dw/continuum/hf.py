@@ -845,6 +845,33 @@ class ContinuumHFBackend:
         hartree, fock = self.interaction_components(Q)
         return float(hartree + fock)
 
+    def uniform_hartree_energy(self, Q: np.ndarray) -> float:
+        """Reconstruct the omitted uniform q=0 Hartree charging contribution.
+
+        Native HF uses ``q0_hartree='omit_uniform'``.  This helper evaluates
+        that excluded device-capacitance term with the same vertices and
+        ``V(q->0)/A`` normalization for explicit SET postprocessing.
+        """
+
+        density = self.as_block_density(Q)
+        energy = 0.0
+        scale = float(self.interaction.hartree_scale)
+        for iq in range(self.n_q):
+            for ig in range(self.n_g):
+                if not self._is_uniform_channel(iq, ig):
+                    continue
+                v = scale * float(self.v_over_a[iq, ig])
+                if v == 0.0:
+                    continue
+                if self.vertex_layout == "valley_compact":
+                    lam = self.lambda_compact[iq, ig]
+                    rho = self._compact_channel_density_trace(lam, density)
+                else:
+                    lam = self.lambda_blocks[iq, ig]
+                    rho = np.einsum("kab,kba->", lam, density, optimize=True)
+                energy += 0.5 * v * float(np.real(rho * np.conj(rho)))
+        return float(energy)
+
     def energy(self, P: np.ndarray) -> EnergyComponents:
         density = self.as_block_density(P)
         one_body = block_trace_product(self.h0, density)
@@ -969,6 +996,80 @@ def compute_hf_diagnostics(
     )
 
 
+def compute_global_hf_diagnostics(
+    backend: ContinuumHFBackend,
+    P: np.ndarray,
+    n_particles: float,
+    params: ContinuumHFParams,
+    *,
+    constraint=None,
+    P_prev: np.ndarray | None = None,
+    energy_prev: float | None = None,
+    iteration: int = 0,
+    density_kind: Literal["mixed", "final_idempotent"] = "mixed",
+    lambda_value: float | None = None,
+    fallback_reason: str | None = None,
+) -> ContinuumHFDiagnostics:
+    """Compute diagnostics for a globally filled zero-temperature density."""
+
+    density = backend.as_block_density(P)
+    H = backend.hf_hamiltonian(density)
+    H_projected = constraint.project_operator(H) if constraint is not None else H
+    P_aufbau, _evals, direct, indirect = backend.update_density(
+        H_projected,
+        n_particles,
+        constraint,
+    )
+    energy = backend.energy(density).total
+    idem_fro, idem_max = projector_idempotency_errors(density)
+    trace = np.trace(density, axis1=-2, axis2=-1)
+    residual = float(np.linalg.norm(density - P_aufbau))
+    constraint_error = (
+        float(constraint.symmetry_error(density)) if constraint is not None else 0.0
+    )
+    return ContinuumHFDiagnostics(
+        energy=float(energy),
+        delta_energy=float("nan") if energy_prev is None else float(energy - energy_prev),
+        delta_P=float("nan")
+        if P_prev is None
+        else float(np.linalg.norm(density - backend.as_block_density(P_prev))),
+        idempotency_error_fro=idem_fro,
+        idempotency_error_max=idem_max,
+        constraint_error=constraint_error,
+        aufbau_residual_norm=residual,
+        commutator_norm=_commutator_norm(H_projected, density),
+        trace_error=float(abs(np.real(np.sum(trace)) - float(n_particles))),
+        direct_gap_min=float(direct),
+        indirect_gap=float(indirect),
+        iteration=int(iteration),
+        constraint_name=getattr(constraint, "name", None) if constraint is not None else None,
+        lambda_value=lambda_value,
+        fallback_reason=fallback_reason,
+        occupation_mode="global",
+        density_kind=density_kind,
+        self_consistency_warning=bool(residual > params.final_residual_tolerance),
+    )
+
+
+def retarget_global_density(
+    backend: ContinuumHFBackend,
+    P_reference: np.ndarray,
+    n_particles: float,
+    *,
+    constraint=None,
+) -> np.ndarray:
+    """Build a global-Aufbau seed at a new particle number from a reference HF field."""
+
+    H = backend.hf_hamiltonian(backend.as_block_density(P_reference))
+    H_projected = constraint.project_operator(H) if constraint is not None else H
+    P, _evals, _direct, _indirect = backend.update_density(
+        H_projected,
+        n_particles,
+        constraint,
+    )
+    return P
+
+
 def solve_hf(
     backend: ContinuumHFBackend,
     P_init: np.ndarray,
@@ -1076,6 +1177,151 @@ def solve_hf(
     final_diagnostics = compute_hf_diagnostics(
         backend,
         P_final,
+        controls,
+        constraint=constraint,
+        P_prev=P,
+        energy_prev=diagnostics.energy,
+        iteration=n_iter,
+        density_kind="final_idempotent",
+    )
+    if final_diagnostics.self_consistency_warning:
+        converged = False
+    return ContinuumHFResult(
+        P=P_final,
+        H_hf=final_H,
+        energy=backend.energy(P_final).total,
+        converged=converged,
+        n_iter=n_iter,
+        diagnostics=final_diagnostics,
+        history=tuple(history),
+        snapshots=tuple(snapshots),
+        seed=seed,
+        constraint_name=getattr(constraint, "name", None) if constraint is not None else None,
+    )
+
+
+def solve_global_hf(
+    backend: ContinuumHFBackend,
+    P_init: np.ndarray,
+    n_particles: float,
+    params: ContinuumHFParams | None = None,
+    *,
+    constraint=None,
+    seed: str = "",
+    on_iteration: HFIterationCallback | None = None,
+) -> ContinuumHFResult:
+    """Run zero-temperature HF with global filling across momentum blocks."""
+
+    controls = params or ContinuumHFParams()
+    target = float(n_particles)
+    if target < 0.0 or target > backend.n_total:
+        raise ValueError(f"n_particles must be in [0, {backend.n_total}]")
+    energy_tol = controls.energy_tolerance
+    P = backend.as_block_density(P_init)
+    if constraint is not None:
+        P = constraint.project_density(P)
+    trace = float(np.real(np.trace(P, axis1=-2, axis2=-1).sum()))
+    if abs(trace - target) > controls.tolerance:
+        P = retarget_global_density(
+            backend,
+            P,
+            target,
+            constraint=constraint,
+        )
+    history: list[ContinuumHFDiagnostics] = []
+    snapshots: list[ContinuumHFIterationSnapshot] = []
+    converged = False
+    diagnostics = compute_global_hf_diagnostics(
+        backend,
+        P,
+        target,
+        controls,
+        constraint=constraint,
+        iteration=0,
+    )
+    energy = diagnostics.energy
+    n_iter = 0
+    for iteration in range(1, controls.max_iter + 1):
+        n_iter = iteration
+        P_prev = P
+        energy_prev = energy
+        H_prev = backend.hf_hamiltonian(P_prev)
+        H_projected = constraint.project_operator(H_prev) if constraint is not None else H_prev
+        P_aufbau, _evals, _direct, _indirect = backend.update_density(
+            H_projected,
+            target,
+            constraint,
+        )
+        delta = hermitize(P_aufbau - P_prev)
+        fallback_reason = None
+        if controls.mixing_method == "oda":
+            s = block_trace_product(H_projected, delta)
+            c = 2.0 * backend.interaction_energy(delta)
+            mix, fallback_reason = _choose_oda_lambda(s, c, controls.oda_lambda_min)
+        else:
+            mix = float(controls.mixing)
+        P = hermitize(P_prev + mix * delta)
+        if constraint is not None:
+            P = constraint.project_density(P)
+        energy = backend.energy(P).total
+        diagnostics = compute_global_hf_diagnostics(
+            backend,
+            P,
+            target,
+            controls,
+            constraint=constraint,
+            P_prev=P_prev,
+            energy_prev=energy_prev,
+            iteration=iteration,
+            lambda_value=float(mix),
+            fallback_reason=fallback_reason,
+        )
+        history.append(diagnostics)
+        should_snapshot = controls.store_projector_snapshots and (
+            (controls.first_iteration_snapshot and iteration == 1)
+            or (iteration % controls.snapshot_interval == 0)
+        )
+        if should_snapshot:
+            snapshots.append(
+                ContinuumHFIterationSnapshot(
+                    iteration=iteration,
+                    P=P.copy(),
+                    energy=float(diagnostics.energy),
+                    diagnostics=diagnostics,
+                )
+            )
+        if on_iteration is not None:
+            on_iteration(
+                iteration,
+                P.copy(),
+                float(diagnostics.energy),
+                diagnostics,
+                bool(should_snapshot),
+            )
+        if (
+            iteration >= controls.min_iter
+            and diagnostics.commutator_norm < controls.tolerance
+            and diagnostics.aufbau_residual_norm < controls.tolerance
+            and diagnostics.constraint_error < controls.tolerance
+            and diagnostics.trace_error < controls.tolerance
+            and abs(diagnostics.delta_energy) < energy_tol
+        ):
+            converged = True
+            break
+
+    H_mixed = backend.hf_hamiltonian(P)
+    H_projected = constraint.project_operator(H_mixed) if constraint is not None else H_mixed
+    P_final, _evals, _direct, _indirect = backend.update_density(
+        H_projected,
+        target,
+        constraint,
+    )
+    final_H_raw = backend.hf_hamiltonian(P_final)
+    final_H = constraint.project_operator(final_H_raw) if constraint is not None else final_H_raw
+    final_diagnostics = compute_global_hf_diagnostics(
+        backend,
+        P_final,
+        target,
         controls,
         constraint=constraint,
         P_prev=P,

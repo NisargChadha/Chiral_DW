@@ -331,6 +331,7 @@ class ContinuumHFDiagnostics(BaseModel):
     constraint_name: str | None = None
     lambda_value: float | None = None
     fallback_reason: str | None = None
+    occupation_mode: Literal["fixed_per_k", "global"] = "fixed_per_k"
     density_kind: Literal["mixed", "final_idempotent"] = "mixed"
     self_consistency_warning: bool = False
 
