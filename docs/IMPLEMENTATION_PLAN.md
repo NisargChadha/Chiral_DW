@@ -103,6 +103,11 @@ optional physical conversion divides charge density by `a_M^2`.
    - Report both the full dual-gate result and an intrinsic result with the
      uniform q=0 capacitive contribution separated using the native backend
      normalization.
+   - Near self-consistent first-order transitions, support upward and downward
+     displacement-field continuation independently at every particle number.
+     Form SET finite differences only after selecting the lower-energy
+     converged branch separately for each particle number; retain both
+     hysteresis branches and their topology diagnostics in the artifacts.
    - Provide restartable point artifacts, merged displacement/filling tables,
      and a local/cluster CLI whose exact single-point path is smoke-tested
      before any sweep is scaled up.
