@@ -87,6 +87,26 @@ optional physical conversion divides charge density by `a_M^2`.
    - Write JSON summaries, `.npz` projector arrays, CSV response/charge tables,
      and manifests under `results/`.
 
+7. **Scanning-SET Thermodynamics**
+   - Add a zero-temperature global-filling HF workflow for homogeneous
+     scanning-SET chemical-potential and inverse-compressibility calculations.
+     Keep the existing fixed-per-k solver and variational workflow unchanged.
+   - At hole filling one, retain a separate fixed-one-state-per-k VP reference
+     for HF-band Chern and direct/indirect-gap diagnostics. Flag a nonpositive
+     indirect gap as invalidating the insulating fixed-per-k interpretation;
+     treat a vanishing direct gap as making the band Chern unresolved.
+   - Compute relaxed total energies over a particle-number window around
+     filling one, then form addition/removal chemical potentials, the SET
+     charge gap, and finite-difference inverse compressibility. Preserve raw
+     zero-temperature data and apply experimental broadening only in
+     postprocessing.
+   - Report both the full dual-gate result and an intrinsic result with the
+     uniform q=0 capacitive contribution separated using the native backend
+     normalization.
+   - Provide restartable point artifacts, merged displacement/filling tables,
+     and a local/cluster CLI whose exact single-point path is smoke-tested
+     before any sweep is scaled up.
+
 ## Test And Review Protocol
 
 - Before each substantive implementation step: re-read this plan, `AGENTS.md`,
@@ -100,6 +120,10 @@ optional physical conversion divides charge density by `a_M^2`.
 ## Assumptions And Defaults
 
 - Hole filling one uses one occupied active state per momentum block.
+- Scanning-SET thermodynamics is the exception: charged states and fillings
+  away from one use global particle-number filling. The fixed-per-k filling-one
+  state remains a topology diagnostic and is physically insulating only when
+  its indirect HF gap is positive.
 - Primary AC backend: nonideal finite-LL AC.
 - Continuum path: self-contained native HF references plus convex full-HF
   Hamiltonian interpolation.
