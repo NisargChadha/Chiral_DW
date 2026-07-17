@@ -14,12 +14,12 @@ set -euo pipefail
 
 SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 REPO_ROOT=${REPO_ROOT:-"$(cd "$(dirname "$SCRIPT_PATH")/.." && pwd)"}
-OUTPUT_ROOT=${OUTPUT_ROOT:-"results/taige_set_nk24_theta3_u5_6_hysteresis20"}
-SEED_ROOT=${SEED_ROOT:-"results/taige_set_nk24_theta3_u5_6_endpoint_seeds"}
+OUTPUT_ROOT=${OUTPUT_ROOT:-"results/taige_set_nk24_theta3_u0_10_hysteresis_step0p5"}
+SEED_ROOT=${SEED_ROOT:-"results/taige_set_nk24_theta3_u0_10_endpoint_seeds"}
 
-U_D_MIN=${U_D_MIN:-"5.0"}
-U_D_MAX=${U_D_MAX:-"6.0"}
-N_U_D=${N_U_D:-"20"}
+U_D_MIN=${U_D_MIN:-"0.0"}
+U_D_MAX=${U_D_MAX:-"10.0"}
+N_U_D=${N_U_D:-"21"}
 THETA_DEG=${THETA_DEG:-"3.0"}
 N_K=${N_K:-"24"}
 
@@ -109,6 +109,7 @@ submit_pipeline() {
   echo "  one-point smoke test:                     ${smoke_job_id}"
   echo "  up/down continuation array:               ${branch_job_id}"
   echo "  lower-envelope SET merge:                 ${merge_job_id}"
+  echo "  state storage:                             projectors only"
   echo "  output:                                    ${OUTPUT_ROOT}"
 }
 
@@ -177,6 +178,7 @@ run_seed() {
     --tolerance "$TOLERANCE" \
     --energy-tolerance "$ENERGY_TOLERANCE" \
     --dos-energy-points 101 \
+    --projectors-only \
     --skip-existing
 }
 
@@ -193,13 +195,14 @@ run_branch() {
     --n-u-d "$N_U_D" \
     --max-iter "$MAX_ITER" \
     --filling-workers "$FILLING_WORKERS" \
+    --projectors-only \
     --skip-existing \
     "$@"
 }
 
 verify_smoke_artifacts() {
   local point_dir="${OUTPUT_ROOT}/branches/up/${UP_LABEL}"
-  python - "$point_dir" "$N_K" <<'PY'
+  python - "$point_dir" "$N_K" "$EPSILON" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -208,15 +211,26 @@ import numpy as np
 
 point_dir = Path(sys.argv[1])
 n_cells = int(sys.argv[2]) ** 2
+epsilon = float(sys.argv[3])
 payload = json.loads((point_dir / "point_summary.json").read_text())
 summary = payload["summary"]
 if summary["direction"] != "up" or len(summary["filling_energy_rows"]) != 3:
     raise SystemExit("invalid SET hysteresis smoke summary")
-with np.load(point_dir / "hf_states.npz") as archive:
+if payload.get("state_storage", {}).get("mode") != "projectors_only":
+    raise SystemExit("smoke point did not use projector-only storage")
+params = payload["params"]
+if int(params["grid"]["n_k"]) ** 2 != n_cells:
+    raise SystemExit("smoke point has the wrong momentum grid")
+if not np.isclose(float(params["interaction"]["epsilon"]), epsilon):
+    raise SystemExit("smoke point has the wrong dielectric constant")
+with np.load(point_dir / "hf_projectors.npz") as archive:
     expected = {f"global_N{n_cells + offset}_P" for offset in (-1, 0, 1)}
-    missing = expected - set(archive.files)
-if missing:
-    raise SystemExit(f"smoke archive is missing {sorted(missing)}")
+    present = set(archive.files)
+if present != expected:
+    raise SystemExit(
+        f"smoke projector archive mismatch: missing={sorted(expected - present)}, "
+        f"unexpected={sorted(present - expected)}"
+    )
 print(f"Verified SET hysteresis smoke artifacts in {point_dir}")
 PY
 }
