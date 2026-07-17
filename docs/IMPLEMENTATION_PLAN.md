@@ -108,6 +108,11 @@ optional physical conversion divides charge density by `a_M^2`.
      Form SET finite differences only after selecting the lower-energy
      converged branch separately for each particle number; retain both
      hysteresis branches and their topology diagnostics in the artifacts.
+   - Allow broad cluster continuations to use an explicit projector-only
+     storage mode.  Retain the complete model, grid, interaction, and HF
+     parameters beside every projector archive so later analyses can rebuild
+     the deterministic mean-field Hamiltonian as `backend.hf_hamiltonian(P)`;
+     do not require duplicated stored HF Hamiltonian arrays in this mode.
    - Provide restartable point artifacts, merged displacement/filling tables,
      and a local/cluster CLI whose exact single-point path is smoke-tested
      before any sweep is scaled up.
