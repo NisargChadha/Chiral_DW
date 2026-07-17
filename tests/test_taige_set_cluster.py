@@ -45,7 +45,7 @@ def test_taige_set_hysteresis_job_encodes_restartable_parallel_pipeline():
     )
     assert "--skip-existing" in text
     assert "--filling-workers" in text
-    assert text.count("--projectors-only") == 2
+    assert text.count("--projectors-only") == 3
     assert "hf_projectors.npz" in text
     assert "projectors only" in text
     assert "scripts/scan_taige_set_spectrum.py" in text

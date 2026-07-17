@@ -296,7 +296,8 @@ case "$PIPELINE_STAGE" in
       --direction merge \
       --u-d-min "$U_D_MIN" \
       --u-d-max "$U_D_MAX" \
-      --n-u-d "$N_U_D"
+      --n-u-d "$N_U_D" \
+      --projectors-only
     ;;
   *)
     echo "Unknown PIPELINE_STAGE=${PIPELINE_STAGE}" >&2

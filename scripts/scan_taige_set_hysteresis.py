@@ -424,6 +424,19 @@ def merge(args: argparse.Namespace, root: Path) -> int:
             "n_displacements": len(selected_rows),
             "n_branch_energy_rows": len(branch_energy_rows),
             "n_selected_energy_rows": len(selected_energy_rows),
+            "state_storage": {
+                "mode": (
+                    "projectors_only" if args.projectors_only else "projectors_and_hf"
+                ),
+                "projector_archive_name": (
+                    "hf_projectors.npz" if args.projectors_only else "hf_states.npz"
+                ),
+                "hf_hamiltonian_reconstruction": "backend.hf_hamiltonian(P)",
+                "selected_projector_lookup": (
+                    "Use selected_direction_Nminus/N0/Nplus in selected_csv to choose "
+                    "branches/{direction}/{u_D_label}/<projector_archive_name>."
+                ),
+            },
             "selection_rule": (
                 "lowest converged intrinsic HF energy selected independently at each N; "
                 "uniform Hartree capacitance then retained in raw SET differences"
