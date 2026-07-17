@@ -91,6 +91,14 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--dos-energy-points", type=int, default=801)
     parser.add_argument("--direct-gap-tolerance-mev", type=float, default=1e-6)
 
+    parser.add_argument(
+        "--projectors-only",
+        action="store_true",
+        help=(
+            "Store final projectors without duplicate HF Hamiltonian arrays; "
+            "H_HF can be reconstructed from the saved parameters and projector."
+        ),
+    )
     parser.add_argument("--skip-existing", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--merge-only", action="store_true")
@@ -217,7 +225,13 @@ def _point_dir(root: Path, u_d: float) -> Path:
     return root / "points" / _label(u_d)
 
 
-def _write_point_artifacts(point_dir: Path, result, elapsed_seconds: float) -> dict[str, Any]:
+def _write_point_artifacts(
+    point_dir: Path,
+    result,
+    elapsed_seconds: float,
+    *,
+    projectors_only: bool = False,
+) -> dict[str, Any]:
     params = result.params
     u_d = float(params.model.displacement_mev)
     filling_rows = [row.model_dump(mode="json") for row in result.filling_energy_rows]
@@ -238,14 +252,18 @@ def _write_point_artifacts(point_dir: Path, result, elapsed_seconds: float) -> d
 
     arrays: dict[str, np.ndarray] = {
         "fixed_vp_plus_P": np.asarray(result.fixed_vp_plus.P),
-        "fixed_vp_plus_H_hf": np.asarray(result.fixed_vp_plus.H_hf),
         "fixed_vp_minus_P": np.asarray(result.fixed_vp_minus.P),
-        "fixed_vp_minus_H_hf": np.asarray(result.fixed_vp_minus.H_hf),
     }
+    if not projectors_only:
+        arrays["fixed_vp_plus_H_hf"] = np.asarray(result.fixed_vp_plus.H_hf)
+        arrays["fixed_vp_minus_H_hf"] = np.asarray(result.fixed_vp_minus.H_hf)
     for n_particles, hf_result in sorted(result.filling_results.items()):
         arrays[f"global_N{n_particles}_P"] = np.asarray(hf_result.P)
-        arrays[f"global_N{n_particles}_H_hf"] = np.asarray(hf_result.H_hf)
-    np.savez_compressed(point_dir / "hf_states.npz", **arrays)
+        if not projectors_only:
+            arrays[f"global_N{n_particles}_H_hf"] = np.asarray(hf_result.H_hf)
+    archive_name = "hf_projectors.npz" if projectors_only else "hf_states.npz"
+    archive_path = point_dir / archive_name
+    np.savez_compressed(archive_path, **arrays)
 
     artifacts = {
         "filling_energies_csv": str(point_dir / "filling_energies.csv"),
@@ -254,15 +272,21 @@ def _write_point_artifacts(point_dir: Path, result, elapsed_seconds: float) -> d
         "fixed_vp_references_csv": str(point_dir / "fixed_vp_references.csv"),
         "hf_chern_numbers_csv": str(point_dir / "hf_chern_numbers.csv"),
         "dos_csv": str(point_dir / "dos.csv"),
-        "hf_states_npz": str(point_dir / "hf_states.npz"),
+        ("hf_projectors_npz" if projectors_only else "hf_states_npz"): str(
+            archive_path
+        ),
     }
     payload = {
-        "schema": "taige_set_point_v1",
+        "schema": "taige_set_point_v2" if projectors_only else "taige_set_point_v1",
         "u_D_meV": u_d,
         "elapsed_seconds": float(elapsed_seconds),
         "params": params.model_dump(mode="json"),
         "summary": result.summary.model_dump(mode="json"),
         "row": result.summary.as_csv_row() | {"elapsed_seconds": float(elapsed_seconds)},
+        "state_storage": {
+            "mode": "projectors_only" if projectors_only else "projectors_and_hf",
+            "hf_hamiltonian_reconstruction": "backend.hf_hamiltonian(P)",
+        },
         "artifacts": artifacts,
     }
     _write_json(point_dir / "point_summary.json", payload)
@@ -285,7 +309,12 @@ def run_point(args: argparse.Namespace, root: Path, u_d: float) -> dict[str, Any
     start = time.perf_counter()
     result = run_taige_set_point(params)
     elapsed = time.perf_counter() - start
-    row = _write_point_artifacts(point_dir, result, elapsed)
+    row = _write_point_artifacts(
+        point_dir,
+        result,
+        elapsed,
+        projectors_only=bool(args.projectors_only),
+    )
     print(
         f"Finished u_D={u_d:g}: C={row['hf_band_chern']:.6g} "
         f"fixed_indirect_gap={row['fixed_indirect_gap_meV']:.6g} meV "

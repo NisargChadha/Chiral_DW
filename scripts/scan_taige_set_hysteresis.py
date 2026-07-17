@@ -50,6 +50,14 @@ def _parser() -> argparse.ArgumentParser:
         default=None,
         help="Limit newly solved points for staged smoke tests.",
     )
+    parser.add_argument(
+        "--projectors-only",
+        action="store_true",
+        help=(
+            "Store final projectors without duplicate HF Hamiltonian arrays; "
+            "H_HF can be reconstructed from the saved parameters and projector."
+        ),
+    )
     parser.add_argument("--skip-existing", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     return parser
@@ -147,11 +155,24 @@ def _load_projectors(path: Path, n_cells: int) -> dict[int, np.ndarray]:
     }
 
 
+def _find_projector_archive(point_dir: Path) -> Path:
+    """Return a projector archive, preferring the projector-only format."""
+
+    candidates = (point_dir / "hf_projectors.npz", point_dir / "hf_states.npz")
+    for path in candidates:
+        if path.exists():
+            return path
+    raise FileNotFoundError(
+        f"Missing projector archive; checked {', '.join(str(path) for path in candidates)}"
+    )
+
+
 def _write_branch_point(
     point_dir: Path,
     result,
     *,
     elapsed_seconds: float,
+    projectors_only: bool = False,
 ) -> None:
     point_dir.mkdir(parents=True, exist_ok=True)
     rows = [
@@ -166,18 +187,31 @@ def _write_branch_point(
     arrays: dict[str, np.ndarray] = {}
     for n_particles, hf_result in sorted(result.filling_results.items()):
         arrays[f"global_N{n_particles}_P"] = np.asarray(hf_result.P)
-        arrays[f"global_N{n_particles}_H_hf"] = np.asarray(hf_result.H_hf)
-    np.savez_compressed(point_dir / "hf_states.npz", **arrays)
+        if not projectors_only:
+            arrays[f"global_N{n_particles}_H_hf"] = np.asarray(hf_result.H_hf)
+    archive_name = "hf_projectors.npz" if projectors_only else "hf_states.npz"
+    archive_path = point_dir / archive_name
+    np.savez_compressed(archive_path, **arrays)
     _write_json(
         point_dir / "point_summary.json",
         {
-            "schema": "taige_set_hysteresis_branch_point_v1",
+            "schema": (
+                "taige_set_hysteresis_branch_point_v2"
+                if projectors_only
+                else "taige_set_hysteresis_branch_point_v1"
+            ),
             "elapsed_seconds": float(elapsed_seconds),
             "params": result.params.model_dump(mode="json"),
             "summary": result.summary.model_dump(mode="json"),
+            "state_storage": {
+                "mode": "projectors_only" if projectors_only else "projectors_and_hf",
+                "hf_hamiltonian_reconstruction": "backend.hf_hamiltonian(P)",
+            },
             "artifacts": {
                 "filling_energies_csv": str(point_dir / "filling_energies.csv"),
-                "hf_states_npz": str(point_dir / "hf_states.npz"),
+                ("hf_projectors_npz" if projectors_only else "hf_states_npz"): str(
+                    archive_path
+                ),
             },
         },
     )
@@ -199,7 +233,7 @@ def run_branch(args: argparse.Namespace, root: Path) -> int:
         )
 
     n_cells = int(template.grid.n_k) ** 2
-    projectors = _load_projectors(seed_dir / "hf_states.npz", n_cells)
+    projectors = _load_projectors(_find_projector_archive(seed_dir), n_cells)
     plan_rows = [
         {
             "sequence_index": index,
@@ -230,9 +264,10 @@ def run_branch(args: argparse.Namespace, root: Path) -> int:
     for u_d in values:
         point_dir = _point_dir(root, args.direction, float(u_d))
         summary_path = point_dir / "point_summary.json"
-        states_path = point_dir / "hf_states.npz"
-        if args.skip_existing and summary_path.exists() and states_path.exists():
-            projectors = _load_projectors(states_path, n_cells)
+        archive_name = "hf_projectors.npz" if args.projectors_only else "hf_states.npz"
+        archive_path = point_dir / archive_name
+        if args.skip_existing and summary_path.exists() and archive_path.exists():
+            projectors = _load_projectors(archive_path, n_cells)
             print(f"Resumed {args.direction} branch at u_D={float(u_d):g} meV", flush=True)
             continue
         if args.max_points is not None and newly_solved >= int(args.max_points):
@@ -251,7 +286,12 @@ def run_branch(args: argparse.Namespace, root: Path) -> int:
             direction=args.direction,
         )
         elapsed = time.perf_counter() - start
-        _write_branch_point(point_dir, result, elapsed_seconds=elapsed)
+        _write_branch_point(
+            point_dir,
+            result,
+            elapsed_seconds=elapsed,
+            projectors_only=bool(args.projectors_only),
+        )
         projectors = {
             n_particles: np.asarray(hf_result.P)
             for n_particles, hf_result in result.filling_results.items()
