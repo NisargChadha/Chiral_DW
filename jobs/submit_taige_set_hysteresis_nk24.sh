@@ -73,30 +73,49 @@ submit_pipeline() {
   mkdir -p logs
 
   local seed_cmd=(
-    sbatch --parsable --array=0-1
-    --export=ALL,PIPELINE_STAGE=seed
+    sbatch --parsable
+    --export=ALL,PIPELINE_STAGE=seed,SEED_TASK_ID=0
     "$SCRIPT_PATH"
   )
   if [[ "${DRY_RUN:-0}" == "1" ]]; then
     quote_command "${seed_cmd[@]}"
     quote_command sbatch --parsable --dependency=afterok:SEED_JOB_ID \
       --export=ALL,PIPELINE_STAGE=smoke "$SCRIPT_PATH"
-    quote_command sbatch --parsable --array=0-1 \
-      --dependency=afterok:SMOKE_JOB_ID \
-      --export=ALL,PIPELINE_STAGE=branch "$SCRIPT_PATH"
-    quote_command sbatch --parsable --dependency=afterok:BRANCH_JOB_ID \
-      --export=ALL,PIPELINE_STAGE=merge "$SCRIPT_PATH"
+    echo "A successful smoke job submits the down-endpoint seed, branches, and merge."
     return 0
   fi
 
-  local seed_job_id smoke_job_id branch_job_id merge_job_id
+  local seed_job_id smoke_job_id
   seed_job_id="$("${seed_cmd[@]}")"
   smoke_job_id="$(
     sbatch --parsable --dependency=afterok:"$seed_job_id" \
       --export=ALL,PIPELINE_STAGE=smoke "$SCRIPT_PATH"
   )"
+
+  echo "Submitted staged Nk=${N_K} Taige SET hysteresis smoke pipeline"
+  echo "  up endpoint seed (u_D=${U_D_MIN}): ${seed_job_id}"
+  echo "  one-point continuation smoke:      ${smoke_job_id}"
+  echo "  state storage:                     projectors only"
+  echo "  output:                            ${OUTPUT_ROOT}"
+  echo "The verified smoke job will submit the remaining endpoint, branches, and merge."
+}
+
+submit_downstream() {
+  cd "$REPO_ROOT"
+  local smoke_job_id=${SLURM_JOB_ID:?downstream submission requires the smoke job id}
+  local marker="${OUTPUT_ROOT}/downstream_jobs.json"
+  if [[ -f "$marker" ]]; then
+    echo "Downstream jobs were already recorded in ${marker}; not submitting duplicates."
+    return 0
+  fi
+
+  local down_seed_job_id branch_job_id merge_job_id
+  down_seed_job_id="$(
+    sbatch --parsable --dependency=afterok:"$smoke_job_id" \
+      --export=ALL,PIPELINE_STAGE=seed,SEED_TASK_ID=1 "$SCRIPT_PATH"
+  )"
   branch_job_id="$(
-    sbatch --parsable --array=0-1 --dependency=afterok:"$smoke_job_id" \
+    sbatch --parsable --array=0-1 --dependency=afterok:"$down_seed_job_id" \
       --export=ALL,PIPELINE_STAGE=branch "$SCRIPT_PATH"
   )"
   merge_job_id="$(
@@ -104,13 +123,28 @@ submit_pipeline() {
       --export=ALL,PIPELINE_STAGE=merge "$SCRIPT_PATH"
   )"
 
-  echo "Submitted Nk=${N_K} Taige SET hysteresis pipeline"
-  echo "  endpoint seeds (u_D=${U_D_MIN},${U_D_MAX}): ${seed_job_id}"
-  echo "  one-point smoke test:                     ${smoke_job_id}"
-  echo "  up/down continuation array:               ${branch_job_id}"
-  echo "  lower-envelope SET merge:                 ${merge_job_id}"
-  echo "  state storage:                             projectors only"
-  echo "  output:                                    ${OUTPUT_ROOT}"
+  python - "$marker" "$smoke_job_id" "$down_seed_job_id" "$branch_job_id" \
+    "$merge_job_id" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+path.parent.mkdir(parents=True, exist_ok=True)
+payload = {
+    "schema": "taige_set_hysteresis_downstream_jobs_v1",
+    "smoke_job_id": sys.argv[2],
+    "down_endpoint_seed_job_id": sys.argv[3],
+    "branch_array_job_id": sys.argv[4],
+    "merge_job_id": sys.argv[5],
+}
+path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+PY
+
+  echo "Smoke passed; submitted the remaining Nk=${N_K} pipeline"
+  echo "  down endpoint seed (u_D=${U_D_MAX}): ${down_seed_job_id}"
+  echo "  up/down continuation array:          ${branch_job_id}"
+  echo "  lower-envelope SET merge:            ${merge_job_id}"
 }
 
 if [[ -z "${PIPELINE_STAGE:-}" ]]; then
@@ -129,7 +163,12 @@ export OPENBLAS_NUM_THREADS=1
 export NUMEXPR_NUM_THREADS=1
 
 run_seed() {
-  local task_id=${SLURM_ARRAY_TASK_ID:?seed stage requires a two-element array}
+  local task_id
+  if [[ -n "${SEED_TASK_ID:-}" ]]; then
+    task_id="$SEED_TASK_ID"
+  else
+    task_id=${SLURM_ARRAY_TASK_ID:?seed stage requires SEED_TASK_ID or an array task}
+  fi
   local u_d seed_output
   case "$task_id" in
     0)
@@ -242,6 +281,7 @@ case "$PIPELINE_STAGE" in
   smoke)
     run_branch up "$UP_SEED_DIR" --max-points 1
     verify_smoke_artifacts
+    submit_downstream
     ;;
   branch)
     case "${SLURM_ARRAY_TASK_ID:?branch stage requires a two-element array}" in

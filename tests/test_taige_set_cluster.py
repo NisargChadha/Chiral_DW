@@ -30,12 +30,19 @@ def test_taige_set_hysteresis_job_encodes_restartable_parallel_pipeline():
     assert 'FILLING_WORKERS=${FILLING_WORKERS:-"3"}' in text
     assert "--array=0-1" in text
     assert "PIPELINE_STAGE=seed" in text
+    assert "SEED_TASK_ID=0" in text
+    assert "SEED_TASK_ID=1" in text
     assert "PIPELINE_STAGE=smoke" in text
     assert "PIPELINE_STAGE=branch" in text
     assert "PIPELINE_STAGE=merge" in text
     assert "--dependency=afterok:" in text
     assert "--max-points 1" in text
     assert "verify_smoke_artifacts" in text
+    assert "submit_downstream" in text
+    assert "downstream_jobs.json" in text
+    assert text.index("verify_smoke_artifacts\n    submit_downstream") > text.index(
+        "smoke)"
+    )
     assert "--skip-existing" in text
     assert "--filling-workers" in text
     assert text.count("--projectors-only") == 2
