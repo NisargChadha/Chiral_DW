@@ -38,6 +38,8 @@ def test_taige_set_hysteresis_job_encodes_restartable_parallel_pipeline():
     assert "--dependency=afterok:" in text
     assert "--max-points 1" in text
     assert "verify_smoke_artifacts" in text
+    assert 'summary["all_fillings_converged"]' in text
+    assert 'validity[\'valid_fixed_per_k_insulator\']' in text
     assert "submit_downstream" in text
     assert "downstream_jobs.json" in text
     assert text.index("verify_smoke_artifacts\n    submit_downstream") > text.index(

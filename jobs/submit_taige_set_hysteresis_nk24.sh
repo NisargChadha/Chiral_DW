@@ -255,6 +255,8 @@ payload = json.loads((point_dir / "point_summary.json").read_text())
 summary = payload["summary"]
 if summary["direction"] != "up" or len(summary["filling_energy_rows"]) != 3:
     raise SystemExit("invalid SET hysteresis smoke summary")
+if not bool(summary["all_fillings_converged"]):
+    raise SystemExit("SET hysteresis smoke has an unconverged filling")
 if payload.get("state_storage", {}).get("mode") != "projectors_only":
     raise SystemExit("smoke point did not use projector-only storage")
 params = payload["params"]
@@ -270,7 +272,12 @@ if present != expected:
         f"smoke projector archive mismatch: missing={sorted(expected - present)}, "
         f"unexpected={sorted(present - expected)}"
     )
-print(f"Verified SET hysteresis smoke artifacts in {point_dir}")
+validity = summary["neutral_topology"]["band_validity"]
+print(
+    f"Verified SET hysteresis smoke artifacts in {point_dir}; "
+    f"indirect_gap={float(validity['indirect_gap_mev']):.6g} meV, "
+    f"valid_insulator={bool(validity['valid_fixed_per_k_insulator'])}"
+)
 PY
 }
 
