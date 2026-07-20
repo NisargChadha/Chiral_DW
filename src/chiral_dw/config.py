@@ -358,6 +358,77 @@ class OrbitalMagnetizationParams(BaseModel):
         return self
 
 
+class TaigeOrbitalMagnetizationWorkflowParams(BaseModel):
+    """One-point Taige VP remote-band and enlarged-HF convergence controls."""
+
+    model_config = ConfigDict(frozen=True)
+
+    model: ContinuumModelParams = Field(
+        default_factory=lambda: ContinuumModelParams(
+            material="MoTe2_Taige",
+            theta_deg=3.7,
+            a0_angstrom=3.47,
+            m_eff=0.62,
+            moire_potential_mev=11.2,
+            phi_deg=91.0,
+            tunneling_mev=-13.3,
+            displacement_mev=0.0,
+            plane_wave_shell=5,
+            n_bands=8,
+            n_active_bands_per_valley=2,
+            active_model="taige",
+        )
+    )
+    grid: ContinuumGridParams = Field(default_factory=lambda: ContinuumGridParams(n_k=18))
+    interaction: ContinuumInteractionParams = Field(
+        default_factory=lambda: ContinuumInteractionParams(
+            v0=1.0,
+            coulomb_kind="dual_gate",
+            epsilon=16.7,
+            gate_distance_nm=30.0,
+            include_q0=True,
+            smear_length_nm=0.347,
+            q_mesh="full",
+            q_shell=1,
+            local_field_cutoff=4,
+            density_vertex_layout="auto",
+            exchange_representation="auto",
+            form_factor_backend="auto",
+        )
+    )
+    hf: ContinuumHFParams = Field(
+        default_factory=lambda: ContinuumHFParams(
+            n_occ_per_k=1,
+            max_iter=160,
+            min_iter=2,
+            mixing_method="oda",
+            mixing=0.45,
+            tolerance=1e-8,
+            energy_tolerance=1e-10,
+        )
+    )
+    orbital: OrbitalMagnetizationParams = Field(default_factory=OrbitalMagnetizationParams)
+    output_dir: str = "results/taige_orbital_magnetization_theta3p7_uD0_nk18"
+    reuse_completed_stages: bool = True
+    persist_backend_caches: bool = False
+
+    @model_validator(mode="after")
+    def _physical_point_and_cutoffs_are_consistent(self) -> "TaigeOrbitalMagnetizationWorkflowParams":
+        if self.model.active_model != "taige":
+            raise ValueError("orbital-magnetization workflow requires the Taige model")
+        if self.model.n_active_bands_per_valley != self.orbital.n_active_bands_per_valley:
+            raise ValueError("model and orbital active-band counts must agree")
+        required_bands = self.orbital.n_active_bands_per_valley + max(
+            self.orbital.remote_cutoffs_per_valley
+        )
+        required_bands = max(required_bands, max(self.orbital.enlarged_hf_bands_per_valley))
+        if self.model.n_bands < required_bands:
+            raise ValueError("model.n_bands is smaller than a requested remote/HF cutoff")
+        if self.hf.n_occ_per_k != self.orbital.n_occ_holes_per_k:
+            raise ValueError("HF and orbital occupied-hole ranks must agree")
+        return self
+
+
 class ContinuumWorkflowParams(BaseModel):
     """Top-level native continuum symmetric-HF response controls."""
 

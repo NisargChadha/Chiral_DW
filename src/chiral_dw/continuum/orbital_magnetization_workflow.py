@@ -3,24 +3,47 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import csv
 import hashlib
 import json
 import os
 from pathlib import Path
+import resource
+import statistics
+import sys
 import tempfile
+import time
 from typing import Any
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
 
-from chiral_dw.config import ContinuumModelParams
-from chiral_dw.continuum.models import ContinuumActiveSpace, ContinuumHFResult, MomentumGrid
-from chiral_dw.continuum.observables import active_basis_frames
+from chiral_dw.config import (
+    ContinuumFiniteQParams,
+    ContinuumModelParams,
+    TaigeOrbitalMagnetizationWorkflowParams,
+)
+from chiral_dw.continuum.models import (
+    ContinuumActiveSpace,
+    ContinuumBundle,
+    ContinuumHFDiagnostics,
+    ContinuumHFResult,
+    MomentumGrid,
+)
+from chiral_dw.continuum.observables import active_basis_frames, valley_polarization
+from chiral_dw.continuum.orbital_magnetization import (
+    HBAR2_OVER_2ME_MEV_NM2,
+    evaluate_projector_orbital_magnetization,
+)
 from chiral_dw.continuum.taige import (
     MoireGeometry,
     TaigeBandStructure,
     TaigeContinuumModel,
     VALLEY_ORDER,
+    active_space_from_taige_bands,
+    build_taige_density_vertices,
+    chern_number_on_grid,
+    compute_taige_bandstructure,
 )
 from chiral_dw.continuum.taige_sewing import TaigeReciprocalTransport
 
@@ -72,6 +95,99 @@ class HoleGapSummary(BaseModel):
     hole_mu_at_electron_vbm_mev: float
     hole_mu_at_electron_cbm_mev: float
     hole_mu_midgap_mev: float
+
+
+class SewingCutoffDiagnostics(BaseModel):
+    """Worst retained state weights across all wrapped central-difference links."""
+
+    model_config = ConfigDict(frozen=True)
+
+    n_boundary_frames: int = Field(ge=0)
+    min_occupied_state_weight: float = Field(ge=0.0)
+    min_empty_state_weight: float = Field(ge=0.0)
+    max_occupied_gram_loss: float = Field(ge=0.0)
+    max_empty_gram_loss: float = Field(ge=0.0)
+
+
+class StageBenchmark(BaseModel):
+    """Wall-time and process-memory record for one workflow stage."""
+
+    model_config = ConfigDict(frozen=True)
+
+    stage: str
+    n_active_bands_per_valley: int | None = Field(default=None, ge=1)
+    n_remote_bands_per_valley: int | None = Field(default=None, ge=0)
+    repeats: int = Field(default=1, ge=1)
+    elapsed_seconds_min: float = Field(ge=0.0)
+    elapsed_seconds_median: float = Field(ge=0.0)
+    process_peak_rss_mb: float = Field(ge=0.0)
+
+
+class OrbitalMagnetizationRow(BaseModel):
+    """One source/cutoff/chemical-potential convergence row."""
+
+    model_config = ConfigDict(frozen=True)
+
+    source_kind: str
+    n_hf_bands_per_valley: int = Field(ge=1)
+    n_remote_bands_per_valley: int = Field(ge=0)
+    n_total_bands_per_valley: int = Field(ge=1)
+    chemical_potential_point: str
+    chemical_potential_electron_mev: float
+    chemical_potential_hole_mev: float
+    orbital_magnetization_mu_b_per_cell: float
+    self_rotation_mu_b_per_cell: float
+    streda_slope_hole_mu_b_per_mev: float
+    streda_slope_electron_mu_b_per_mev: float
+    occupied_hole_chern_fukui: float
+    streda_chern_from_retained_pq: float
+    streda_electron_slope_error_mu_b_per_mev: float
+    hole_indirect_gap_mev: float
+    hole_min_direct_gap_mev: float
+    valley_polarization: float
+    hf_energy_per_cell_mev: float
+    hf_converged: bool
+    hf_iterations: int = Field(ge=0)
+    active_remote_mixing_lambda: float = Field(ge=0.0)
+    occupied_projector_overlap_with_hf2_mean: float = Field(ge=0.0, le=1.000001)
+    occupied_projector_overlap_with_hf2_min: float = Field(ge=0.0, le=1.000001)
+    min_occupied_sewing_weight: float = Field(ge=0.0)
+    min_empty_sewing_weight: float = Field(ge=0.0)
+    max_occupied_hamiltonian_residual_mev: float = Field(ge=0.0)
+    max_empty_hamiltonian_residual_mev: float = Field(ge=0.0)
+
+
+class MatchedCutoffComparison(BaseModel):
+    """Frozen-versus-self-consistent comparison at the same total cutoff."""
+
+    model_config = ConfigDict(frozen=True)
+
+    n_total_bands_per_valley: int = Field(ge=1)
+    frozen_remote_bands_per_valley: int = Field(ge=0)
+    common_electron_mu_mev: float
+    common_mu_inside_both_gaps: bool
+    frozen_magnetization_mu_b_per_cell: float
+    hf_magnetization_mu_b_per_cell: float
+    signed_delta_mu_b_per_cell: float
+    absolute_delta_mu_b_per_cell: float = Field(ge=0.0)
+    relative_delta: float = Field(ge=0.0)
+
+
+class OrbitalMagnetizationWorkflowSummary(BaseModel):
+    """Artifact-level summary of a completed convergence workflow."""
+
+    model_config = ConfigDict(frozen=True)
+
+    result_dir: str
+    band_cache_hash: str
+    frozen_rows: int = Field(ge=0)
+    enlarged_hf_rows: int = Field(ge=0)
+    matched_rows: int = Field(ge=0)
+    benchmark_rows: int = Field(ge=0)
+    largest_remote_cutoff_completed: int = Field(ge=0)
+    largest_hf_cutoff_completed: int = Field(ge=1)
+    all_hf_converged: bool
+    manifest_passed: bool
 
 
 @dataclass(frozen=True)
@@ -375,6 +491,649 @@ def taige_transport_factory(shell: tuple[tuple[int, int], ...]):
         return cache[key].folded_to_raw_vectors(frame)
 
     return transport
+
+
+def sewing_cutoff_diagnostics(
+    *,
+    grid: MomentumGrid,
+    shell: tuple[tuple[int, int], ...],
+    occupied_frames: np.ndarray,
+    empty_frames: np.ndarray,
+) -> SewingCutoffDiagnostics:
+    """Aggregate retained-weight diagnostics over every wrapped central link."""
+
+    occupied_weights: list[float] = []
+    empty_weights: list[float] = []
+    occupied_losses: list[float] = []
+    empty_losses: list[float] = []
+    for ik in range(grid.size):
+        coord = grid.coord_of(ik)
+        for delta in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            folded, shift = grid.shift_plus_q(coord, delta)
+            if shift == (0, 0):
+                continue
+            transport = TaigeReciprocalTransport(shell, shift)
+            neighbor = grid.index_of(folded)
+            occ = transport.frame_diagnostics(occupied_frames[neighbor])
+            emp = transport.frame_diagnostics(empty_frames[neighbor])
+            occupied_weights.append(occ.min_retained_state_weight)
+            empty_weights.append(emp.min_retained_state_weight)
+            occupied_losses.append(occ.max_gram_loss)
+            empty_losses.append(emp.max_gram_loss)
+    return SewingCutoffDiagnostics(
+        n_boundary_frames=len(occupied_weights),
+        min_occupied_state_weight=min(occupied_weights, default=1.0),
+        min_empty_state_weight=min(empty_weights, default=1.0),
+        max_occupied_gram_loss=max(occupied_losses, default=0.0),
+        max_empty_gram_loss=max(empty_losses, default=0.0),
+    )
+
+
+def run_taige_orbital_magnetization_workflow(
+    params: TaigeOrbitalMagnetizationWorkflowParams | None = None,
+) -> OrbitalMagnetizationWorkflowSummary:
+    """Run frozen r=0..6 and self-consistent N=2,3,4 VP convergence."""
+
+    controls = params or TaigeOrbitalMagnetizationWorkflowParams()
+    result_dir = Path(controls.output_dir).expanduser().resolve()
+    result_dir.mkdir(parents=True, exist_ok=True)
+    _write_json_atomic(result_dir / "parameters.json", controls.model_dump(mode="json"))
+    benchmarks: list[StageBenchmark] = []
+    grid = MomentumGrid(controls.grid.n_k)
+
+    band_path = result_dir / "continuum_bands_max.npz"
+    expected_signature = taige_band_cache_signature(controls.model, grid)
+    if controls.reuse_completed_stages and band_path.exists():
+        (bands, band_manifest), benchmark = _benchmark_call(
+            "continuum_band_cache_load",
+            lambda: load_taige_band_cache(
+                band_path, expected_model=controls.model, expected_grid=grid
+            ),
+        )
+        if band_manifest.signature != expected_signature:
+            raise ValueError("loaded band cache has an unexpected signature")
+        benchmarks.append(benchmark)
+    else:
+        bands, benchmark = _benchmark_call(
+            "continuum_diagonalization",
+            lambda: compute_taige_bandstructure(controls.model, grid),
+        )
+        benchmarks.append(benchmark)
+        band_manifest = save_taige_band_cache(band_path, bands)
+
+    hf_data: dict[int, tuple[ContinuumActiveSpace, ContinuumHFResult]] = {}
+    all_hf_cutoffs = tuple(controls.orbital.enlarged_hf_bands_per_valley)
+    n_base = controls.orbital.n_active_bands_per_valley
+    base_active, base_hf, stage_benchmarks = _solve_or_load_vp_hf(
+        controls=controls,
+        bands=bands,
+        band_cache_hash=band_manifest.cache_hash,
+        n_active=n_base,
+        result_dir=result_dir,
+    )
+    hf_data[n_base] = (base_active, base_hf)
+    benchmarks.extend(stage_benchmarks)
+    base_subspace = build_frozen_hole_subspaces(
+        active=base_active,
+        bands=bands,
+        hf=base_hf,
+        n_remote_bands_per_valley=0,
+        n_occ_holes_per_k=controls.orbital.n_occ_holes_per_k,
+    )
+    reference_occupied = base_subspace.occupied_frames
+    reciprocal_basis = bands.geometry.kM_inv_nm * np.column_stack(
+        (bands.geometry.b1, bands.geometry.b2)
+    )
+    transport = taige_transport_factory(bands.shell)
+    frozen_rows: list[OrbitalMagnetizationRow] = []
+    hf_rows: list[OrbitalMagnetizationRow] = []
+    frozen_subspaces: dict[int, FrozenHoleSubspaces] = {}
+    hf_subspaces: dict[int, FrozenHoleSubspaces] = {}
+    k_resolved: dict[str, np.ndarray] = {}
+
+    for n_remote in controls.orbital.remote_cutoffs_per_valley:
+        subspace, embedding_benchmark = _benchmark_call(
+            "frozen_embedding",
+            lambda n_remote=n_remote: build_frozen_hole_subspaces(
+                active=base_active,
+                bands=bands,
+                hf=base_hf,
+                n_remote_bands_per_valley=n_remote,
+                n_occ_holes_per_k=controls.orbital.n_occ_holes_per_k,
+            ),
+            n_active=n_base,
+            n_remote=n_remote,
+        )
+        benchmarks.append(embedding_benchmark)
+        frozen_subspaces[n_remote] = subspace
+        rows, arrays, observable_benchmark = _evaluate_subspace_rows(
+            source_kind="frozen_remote",
+            n_hf=n_base,
+            n_remote=n_remote,
+            active=base_active,
+            hf=base_hf,
+            subspace=subspace,
+            bands=bands,
+            reciprocal_basis=reciprocal_basis,
+            transport=transport,
+            reference_occupied=reference_occupied,
+            repeats=controls.orbital.benchmark_repeats,
+        )
+        frozen_rows.extend(rows)
+        k_resolved.update(arrays)
+        benchmarks.append(observable_benchmark)
+
+    # Only after the full frozen sequence succeeds do we allocate and solve the
+    # larger HF backends.  This preserves the single-point smoke/scale order.
+    for n_active in all_hf_cutoffs:
+        if n_active not in hf_data:
+            active, hf, stage_benchmarks = _solve_or_load_vp_hf(
+                controls=controls,
+                bands=bands,
+                band_cache_hash=band_manifest.cache_hash,
+                n_active=n_active,
+                result_dir=result_dir,
+            )
+            hf_data[n_active] = (active, hf)
+            benchmarks.extend(stage_benchmarks)
+        active, hf = hf_data[n_active]
+        subspace = build_frozen_hole_subspaces(
+            active=active,
+            bands=bands,
+            hf=hf,
+            n_remote_bands_per_valley=0,
+            n_occ_holes_per_k=controls.orbital.n_occ_holes_per_k,
+        )
+        hf_subspaces[n_active] = subspace
+        rows, arrays, observable_benchmark = _evaluate_subspace_rows(
+            source_kind="self_consistent_hf",
+            n_hf=n_active,
+            n_remote=0,
+            active=active,
+            hf=hf,
+            subspace=subspace,
+            bands=bands,
+            reciprocal_basis=reciprocal_basis,
+            transport=transport,
+            reference_occupied=reference_occupied,
+            repeats=controls.orbital.benchmark_repeats,
+        )
+        hf_rows.extend(rows)
+        k_resolved.update(arrays)
+        benchmarks.append(observable_benchmark)
+
+    matched = _matched_cutoff_rows(
+        base_active=base_active,
+        base_hf=base_hf,
+        hf_data=hf_data,
+        frozen_subspaces=frozen_subspaces,
+        hf_subspaces=hf_subspaces,
+        bands=bands,
+        reciprocal_basis=reciprocal_basis,
+        transport=transport,
+    )
+
+    _write_model_csv(result_dir / "remote_convergence.csv", frozen_rows)
+    _write_model_csv(result_dir / "hf_active_space_convergence.csv", hf_rows)
+    _write_model_csv(result_dir / "matched_cutoff_comparison.csv", matched)
+    _write_model_csv(result_dir / "benchmarks.csv", benchmarks)
+    _write_json_atomic(
+        result_dir / "benchmarks.json", [row.model_dump(mode="json") for row in benchmarks]
+    )
+    if controls.orbital.store_k_resolved_terms:
+        _write_npz_atomically(result_dir / "k_resolved_terms.npz", k_resolved)
+
+    all_converged = all(hf.converged for _active, hf in hf_data.values())
+    convergence_marker = result_dir / "hf_convergence.ok"
+    if all_converged:
+        convergence_marker.write_text("all requested VP HF states converged\n")
+    elif convergence_marker.exists():
+        convergence_marker.unlink()
+    artifacts = _workflow_artifacts(result_dir, all_hf_cutoffs)
+    from chiral_dw.artifacts import RunManifest
+
+    manifest = RunManifest.from_artifacts(
+        run_id=result_dir.name,
+        result_dir=str(result_dir),
+        artifacts=artifacts,
+    )
+    summary = OrbitalMagnetizationWorkflowSummary(
+        result_dir=str(result_dir),
+        band_cache_hash=band_manifest.cache_hash,
+        frozen_rows=len(frozen_rows),
+        enlarged_hf_rows=len(hf_rows),
+        matched_rows=len(matched),
+        benchmark_rows=len(benchmarks),
+        largest_remote_cutoff_completed=max(controls.orbital.remote_cutoffs_per_valley),
+        largest_hf_cutoff_completed=max(all_hf_cutoffs),
+        all_hf_converged=all_converged,
+        manifest_passed=manifest.passed,
+    )
+    _write_json_atomic(result_dir / "summary.json", summary.model_dump(mode="json"))
+    # Refresh after summary exists.
+    manifest = RunManifest.from_artifacts(
+        run_id=result_dir.name,
+        result_dir=str(result_dir),
+        artifacts=_workflow_artifacts(result_dir, all_hf_cutoffs),
+    )
+    _write_json_atomic(result_dir / "run_manifest.json", manifest.model_dump(mode="json"))
+    if summary.manifest_passed != manifest.passed:
+        summary = summary.model_copy(update={"manifest_passed": manifest.passed})
+        _write_json_atomic(result_dir / "summary.json", summary.model_dump(mode="json"))
+    return summary
+
+
+def _solve_or_load_vp_hf(
+    *,
+    controls: TaigeOrbitalMagnetizationWorkflowParams,
+    bands: TaigeBandStructure,
+    band_cache_hash: str,
+    n_active: int,
+    result_dir: Path,
+) -> tuple[ContinuumActiveSpace, ContinuumHFResult, list[StageBenchmark]]:
+    model = controls.model.model_copy(update={"n_active_bands_per_valley": int(n_active)})
+    active = active_space_from_taige_bands(bands.grid, model, bands)
+    signature = _hf_state_signature(controls, band_cache_hash, n_active)
+    state_path = result_dir / f"hf_active_{n_active}.npz"
+    benchmarks: list[StageBenchmark] = []
+    if controls.reuse_completed_stages and state_path.exists():
+        hf, benchmark = _benchmark_call(
+            "hf_state_cache_load",
+            lambda: _load_hf_state(state_path, signature),
+            n_active=n_active,
+        )
+        benchmarks.append(benchmark)
+        return active, hf, benchmarks
+
+    vertices, benchmark = _benchmark_call(
+        "density_vertices",
+        lambda: build_taige_density_vertices(active, controls.interaction),
+        n_active=n_active,
+    )
+    benchmarks.append(benchmark)
+    from chiral_dw.continuum.hf import ContinuumHFBackend
+
+    backend, benchmark = _benchmark_call(
+        "exchange_backend",
+        lambda: ContinuumHFBackend(active.h0, vertices, controls.interaction),
+        n_active=n_active,
+    )
+    benchmarks.append(benchmark)
+    bundle = ContinuumBundle(
+        grid=bands.grid,
+        active=active,
+        vertices=backend.vertices,
+        backend=backend,
+        params=model,
+        interaction=controls.interaction,
+        finite_q=ContinuumFiniteQParams(),
+        bands=bands,
+        geometry=bands.geometry,
+    )
+    from chiral_dw.continuum.references import solve_reference_hf
+    from chiral_dw.continuum.symmetry import ValleyU1Constraint
+
+    hf, benchmark = _benchmark_call(
+        "vp_hf_solve",
+        lambda: solve_reference_hf(
+            bundle,
+            "vp_plus",
+            controls.hf,
+            constraint=ValleyU1Constraint(active, pinned_valley="K"),
+        ),
+        n_active=n_active,
+    )
+    benchmarks.append(benchmark)
+    _save_hf_state(state_path, hf, signature)
+    return active, hf, benchmarks
+
+
+def _evaluate_subspace_rows(
+    *,
+    source_kind: str,
+    n_hf: int,
+    n_remote: int,
+    active: ContinuumActiveSpace,
+    hf: ContinuumHFResult,
+    subspace: FrozenHoleSubspaces,
+    bands: TaigeBandStructure,
+    reciprocal_basis: np.ndarray,
+    transport,
+    reference_occupied: np.ndarray,
+    repeats: int,
+) -> tuple[list[OrbitalMagnetizationRow], dict[str, np.ndarray], StageBenchmark]:
+    gap = subspace.gap
+    mu_points = {
+        "vbm": (gap.electron_vbm_mev, gap.hole_mu_at_electron_vbm_mev),
+        "midgap": (gap.electron_midgap_mev, gap.hole_mu_midgap_mev),
+        "cbm": (gap.electron_cbm_mev, gap.hole_mu_at_electron_cbm_mev),
+    }
+    sewing = sewing_cutoff_diagnostics(
+        grid=bands.grid,
+        shell=bands.shell,
+        occupied_frames=subspace.occupied_frames,
+        empty_frames=subspace.empty_frames,
+    )
+    chern = chern_number_on_grid(
+        bands.grid, subspace.occupied_frames, 0, shell=bands.shell
+    )
+    overlap_values = np.abs(
+        np.einsum(
+            "kdi,kdj->kij",
+            reference_occupied.conj(),
+            subspace.occupied_frames,
+            optimize=True,
+        )
+    ) ** 2
+    overlap_mean = float(np.mean(overlap_values))
+    overlap_min = float(np.min(overlap_values))
+    mixing = active_remote_mixing_lambda(active, hf, n_base=2)
+    polarization = float(np.mean(valley_polarization(hf.P, active)))
+
+    def evaluate(mu_hole: float):
+        return evaluate_projector_orbital_magnetization(
+            grid=bands.grid,
+            occupied_frames=subspace.occupied_frames,
+            empty_frames=subspace.empty_frames,
+            hamiltonian_on_occupied=subspace.hamiltonian_on_occupied,
+            hamiltonian_on_empty=subspace.hamiltonian_on_empty,
+            reciprocal_basis_nm_inv=reciprocal_basis,
+            chemical_potential_hole_mev=mu_hole,
+            transport=transport,
+        )
+
+    mid_evaluation, benchmark = _benchmark_call(
+        f"observable_{source_kind}",
+        lambda: evaluate(mu_points["midgap"][1]),
+        repeats=repeats,
+        n_active=n_hf,
+        n_remote=n_remote,
+    )
+    evaluations = {
+        "vbm": evaluate(mu_points["vbm"][1]),
+        "midgap": mid_evaluation,
+        "cbm": evaluate(mu_points["cbm"][1]),
+    }
+    expected_electron_slope = (
+        -chern
+        * bands.geometry.moire_cell_area_nm2
+        / (2.0 * np.pi * HBAR2_OVER_2ME_MEV_NM2)
+    )
+    rows: list[OrbitalMagnetizationRow] = []
+    arrays: dict[str, np.ndarray] = {}
+    for point, evaluation in evaluations.items():
+        summary = evaluation.summary
+        electron_mu, hole_mu = mu_points[point]
+        electron_slope = -summary.streda_slope_mu_b_per_mev
+        rows.append(
+            OrbitalMagnetizationRow(
+                source_kind=source_kind,
+                n_hf_bands_per_valley=n_hf,
+                n_remote_bands_per_valley=n_remote,
+                n_total_bands_per_valley=n_hf + n_remote,
+                chemical_potential_point=point,
+                chemical_potential_electron_mev=electron_mu,
+                chemical_potential_hole_mev=hole_mu,
+                orbital_magnetization_mu_b_per_cell=summary.orbital_magnetization_mu_b_per_cell,
+                self_rotation_mu_b_per_cell=summary.self_rotation_mu_b_per_cell,
+                streda_slope_hole_mu_b_per_mev=summary.streda_slope_mu_b_per_mev,
+                streda_slope_electron_mu_b_per_mev=electron_slope,
+                occupied_hole_chern_fukui=chern,
+                streda_chern_from_retained_pq=summary.streda_chern_from_retained_pq,
+                streda_electron_slope_error_mu_b_per_mev=electron_slope
+                - expected_electron_slope,
+                hole_indirect_gap_mev=gap.hole_indirect_gap_mev,
+                hole_min_direct_gap_mev=gap.hole_min_direct_gap_mev,
+                valley_polarization=polarization,
+                hf_energy_per_cell_mev=float(hf.energy / active.n_k),
+                hf_converged=hf.converged,
+                hf_iterations=hf.n_iter,
+                active_remote_mixing_lambda=mixing,
+                occupied_projector_overlap_with_hf2_mean=overlap_mean,
+                occupied_projector_overlap_with_hf2_min=overlap_min,
+                min_occupied_sewing_weight=sewing.min_occupied_state_weight,
+                min_empty_sewing_weight=sewing.min_empty_state_weight,
+                max_occupied_hamiltonian_residual_mev=(
+                    subspace.diagnostics.max_occupied_hamiltonian_residual_mev
+                ),
+                max_empty_hamiltonian_residual_mev=(
+                    subspace.diagnostics.max_empty_hamiltonian_residual_mev
+                ),
+            )
+        )
+        key = f"{source_kind}_hf{n_hf}_r{n_remote}_{point}"
+        arrays[f"{key}_w_xy_mev_nm2"] = evaluation.w_xy_mev_nm2
+        arrays[f"{key}_n_xy_mev_nm2"] = evaluation.n_xy_mev_nm2
+    return rows, arrays, benchmark
+
+
+def _matched_cutoff_rows(
+    *,
+    base_active: ContinuumActiveSpace,
+    base_hf: ContinuumHFResult,
+    hf_data: dict[int, tuple[ContinuumActiveSpace, ContinuumHFResult]],
+    frozen_subspaces: dict[int, FrozenHoleSubspaces],
+    hf_subspaces: dict[int, FrozenHoleSubspaces],
+    bands: TaigeBandStructure,
+    reciprocal_basis: np.ndarray,
+    transport,
+) -> list[MatchedCutoffComparison]:
+    comparisons: list[MatchedCutoffComparison] = []
+    for n_total, (_active, _hf) in sorted(hf_data.items()):
+        n_remote = n_total - base_active.n_active
+        if n_remote not in frozen_subspaces:
+            continue
+        frozen = frozen_subspaces[n_remote]
+        enlarged = hf_subspaces[n_total]
+        electron_mu = enlarged.gap.electron_midgap_mev
+        hole_mu = -electron_mu
+
+        def moment(subspace: FrozenHoleSubspaces) -> float:
+            return evaluate_projector_orbital_magnetization(
+                grid=bands.grid,
+                occupied_frames=subspace.occupied_frames,
+                empty_frames=subspace.empty_frames,
+                hamiltonian_on_occupied=subspace.hamiltonian_on_occupied,
+                hamiltonian_on_empty=subspace.hamiltonian_on_empty,
+                reciprocal_basis_nm_inv=reciprocal_basis,
+                chemical_potential_hole_mev=hole_mu,
+                transport=transport,
+            ).summary.orbital_magnetization_mu_b_per_cell
+
+        frozen_m = moment(frozen)
+        hf_m = moment(enlarged)
+        delta = hf_m - frozen_m
+        scale = max(abs(frozen_m), abs(hf_m), 1e-12)
+        in_frozen = (
+            frozen.gap.electron_vbm_mev <= electron_mu <= frozen.gap.electron_cbm_mev
+        )
+        in_hf = (
+            enlarged.gap.electron_vbm_mev <= electron_mu <= enlarged.gap.electron_cbm_mev
+        )
+        comparisons.append(
+            MatchedCutoffComparison(
+                n_total_bands_per_valley=n_total,
+                frozen_remote_bands_per_valley=n_remote,
+                common_electron_mu_mev=electron_mu,
+                common_mu_inside_both_gaps=bool(in_frozen and in_hf),
+                frozen_magnetization_mu_b_per_cell=frozen_m,
+                hf_magnetization_mu_b_per_cell=hf_m,
+                signed_delta_mu_b_per_cell=delta,
+                absolute_delta_mu_b_per_cell=abs(delta),
+                relative_delta=abs(delta) / scale,
+            )
+        )
+    return comparisons
+
+
+def active_remote_mixing_lambda(
+    active: ContinuumActiveSpace,
+    hf: ContinuumHFResult,
+    *,
+    n_base: int,
+) -> float:
+    """Return max ||Sigma_RA||/Delta_RA in the bare active-band basis."""
+
+    n = active.n_active
+    if n <= n_base:
+        return 0.0
+    active_indices = np.asarray(list(range(n_base)) + list(range(n, n + n_base)))
+    remote_indices = np.asarray(list(range(n_base, n)) + list(range(n + n_base, 2 * n)))
+    sigma = np.asarray(hf.H_hf - active.h0, dtype=complex)
+    numerator = max(
+        float(np.linalg.norm(block, ord=2))
+        for block in sigma[:, remote_indices][:, :, active_indices]
+    )
+    active_energies = active.hole_energies[:, :, :n_base]
+    remote_energies = active.hole_energies[:, :, n_base:n]
+    separations = np.abs(remote_energies[..., :, None] - active_energies[..., None, :])
+    denominator = max(float(np.min(separations)), 1e-12)
+    return numerator / denominator
+
+
+def _benchmark_call(
+    stage: str,
+    operation,
+    *,
+    repeats: int = 1,
+    n_active: int | None = None,
+    n_remote: int | None = None,
+):
+    elapsed: list[float] = []
+    result = None
+    for _ in range(int(repeats)):
+        start = time.perf_counter()
+        result = operation()
+        elapsed.append(time.perf_counter() - start)
+    benchmark = StageBenchmark(
+        stage=stage,
+        n_active_bands_per_valley=n_active,
+        n_remote_bands_per_valley=n_remote,
+        repeats=repeats,
+        elapsed_seconds_min=min(elapsed),
+        elapsed_seconds_median=statistics.median(elapsed),
+        process_peak_rss_mb=_process_peak_rss_mb(),
+    )
+    return result, benchmark
+
+
+def _process_peak_rss_mb() -> float:
+    value = float(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+    if sys.platform == "darwin":
+        return value / (1024.0**2)
+    return value / 1024.0
+
+
+def _hf_state_signature(
+    controls: TaigeOrbitalMagnetizationWorkflowParams,
+    band_cache_hash: str,
+    n_active: int,
+) -> dict[str, Any]:
+    return {
+        "schema": "taige_orbital_hf_state_v1",
+        "band_cache_hash": band_cache_hash,
+        "n_active_bands_per_valley": int(n_active),
+        "interaction": controls.interaction.model_dump(mode="json"),
+        "hf": controls.hf.model_dump(mode="json"),
+        "constraint": "valley_u1_K",
+    }
+
+
+def _save_hf_state(path: Path, hf: ContinuumHFResult, signature: dict[str, Any]) -> None:
+    metadata = {
+        "signature": signature,
+        "energy": float(hf.energy),
+        "converged": bool(hf.converged),
+        "n_iter": int(hf.n_iter),
+        "diagnostics": hf.diagnostics.model_dump(mode="json"),
+        "seed": hf.seed,
+        "constraint_name": hf.constraint_name,
+    }
+    _write_npz_atomically(
+        path,
+        {
+            "metadata_json": np.asarray(json.dumps(metadata, sort_keys=True)),
+            "P": np.asarray(hf.P, dtype=complex),
+            "H_hf": np.asarray(hf.H_hf, dtype=complex),
+        },
+    )
+
+
+def _load_hf_state(path: Path, signature: dict[str, Any]) -> ContinuumHFResult:
+    try:
+        with np.load(path, allow_pickle=False) as data:
+            metadata = json.loads(str(np.asarray(data["metadata_json"]).item()))
+            p = np.asarray(data["P"], dtype=complex)
+            h_hf = np.asarray(data["H_hf"], dtype=complex)
+    except Exception as exc:
+        raise ValueError(f"could not load HF state {path}: {exc}") from exc
+    if metadata.get("signature") != signature:
+        raise ValueError(f"HF state signature mismatch for {path}")
+    return ContinuumHFResult(
+        P=p,
+        H_hf=h_hf,
+        energy=float(metadata["energy"]),
+        converged=bool(metadata["converged"]),
+        n_iter=int(metadata["n_iter"]),
+        diagnostics=ContinuumHFDiagnostics.model_validate(metadata["diagnostics"]),
+        seed=str(metadata.get("seed") or ""),
+        constraint_name=metadata.get("constraint_name"),
+    )
+
+
+def _write_model_csv(path: Path, rows: list[BaseModel]) -> None:
+    payloads = [row.model_dump(mode="json") for row in rows]
+    if not payloads:
+        raise ValueError(f"refusing to write empty required table {path.name}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    with temporary.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(payloads[0]))
+        writer.writeheader()
+        writer.writerows(payloads)
+    os.replace(temporary, path)
+
+
+def _write_json_atomic(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    os.replace(temporary, path)
+
+
+def _workflow_artifacts(result_dir: Path, hf_cutoffs: tuple[int, ...]):
+    from chiral_dw.artifacts import RunArtifact
+
+    definitions = [
+        ("parameters", "parameters.json", "json", True),
+        ("continuum_bands", "continuum_bands_max.npz", "array", True),
+        ("remote_convergence", "remote_convergence.csv", "table", True),
+        ("hf_convergence", "hf_active_space_convergence.csv", "table", True),
+        ("matched_comparison", "matched_cutoff_comparison.csv", "table", True),
+        ("benchmarks_csv", "benchmarks.csv", "table", True),
+        ("benchmarks_json", "benchmarks.json", "json", True),
+        ("k_resolved_terms", "k_resolved_terms.npz", "array", False),
+        ("summary", "summary.json", "json", True),
+        ("hf_convergence_marker", "hf_convergence.ok", "text", True),
+    ]
+    definitions.extend(
+        (f"hf_active_{n}", f"hf_active_{n}.npz", "array", True) for n in hf_cutoffs
+    )
+    artifacts = []
+    for name, relative, kind, required in definitions:
+        path = result_dir / relative
+        artifacts.append(
+            RunArtifact(
+                name=name,
+                path=str(path),
+                kind=kind,
+                description=f"Taige orbital-magnetization workflow artifact: {name}",
+                required=required,
+                exists=path.exists(),
+                size_bytes=path.stat().st_size if path.exists() else None,
+            )
+        )
+    return artifacts
 
 
 def _stable_hash(payload: dict[str, Any]) -> str:

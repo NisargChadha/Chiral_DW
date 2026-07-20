@@ -21,6 +21,7 @@ from chiral_dw.config import (
     RealSpaceGridParams,
     ResponseParams,
     TMoTe2ACParams,
+    TaigeOrbitalMagnetizationWorkflowParams,
     UnitsParams,
 )
 
@@ -103,6 +104,18 @@ def test_orbital_magnetization_params_fix_remote_and_reference_conventions():
         OrbitalMagnetizationParams(remote_cutoffs_per_valley=(1, 2))
     with pytest.raises(ValidationError):
         OrbitalMagnetizationParams(enlarged_hf_bands_per_valley=(3, 4))
+
+
+def test_taige_orbital_magnetization_production_defaults():
+    params = TaigeOrbitalMagnetizationWorkflowParams()
+
+    assert params.model.theta_deg == pytest.approx(3.7)
+    assert params.model.displacement_mev == pytest.approx(0.0)
+    assert params.model.n_bands == 8
+    assert params.grid.n_k == 18
+    assert params.interaction.q_mesh == "full"
+    assert params.interaction.local_field_cutoff == 4
+    assert params.hf.mixing_method == "oda"
 
 
 def test_response_params_validate_theta_window():
