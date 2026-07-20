@@ -311,6 +311,53 @@ class ContinuumHFParams(BaseModel):
         return self
 
 
+class OrbitalMagnetizationParams(BaseModel):
+    """Controls and conventions for continuum orbital magnetization."""
+
+    model_config = ConfigDict(frozen=True)
+
+    n_active_bands_per_valley: int = Field(default=2, ge=1)
+    remote_cutoffs_per_valley: tuple[int, ...] = tuple(range(7))
+    enlarged_hf_bands_per_valley: tuple[int, ...] = (2, 3, 4)
+    n_occ_holes_per_k: int = Field(default=1, ge=1)
+    chemical_potential_points: tuple[Literal["vbm", "midgap", "cbm"], ...] = (
+        "vbm",
+        "midgap",
+        "cbm",
+    )
+    derivative_method: Literal["sewn_central_projector"] = "sewn_central_projector"
+    observable_scope: Literal["valence_continuum"] = "valence_continuum"
+    reference_convention: Literal["electron_state_minus_filled_valence"] = (
+        "electron_state_minus_filled_valence"
+    )
+    moment_units: Literal["mu_B_per_moire_cell"] = "mu_B_per_moire_cell"
+    convergence_abs_mu_b: float = Field(default=0.02, gt=0.0)
+    convergence_rel: float = Field(default=0.01, gt=0.0)
+    sewing_state_weight_tolerance: float = Field(default=1e-7, gt=0.0)
+    benchmark_repeats: int = Field(default=5, ge=1)
+    store_k_resolved_terms: bool = True
+
+    @model_validator(mode="after")
+    def _cutoff_sequences_are_nested(self) -> "OrbitalMagnetizationParams":
+        remote = tuple(int(value) for value in self.remote_cutoffs_per_valley)
+        if not remote or remote[0] != 0:
+            raise ValueError("remote_cutoffs_per_valley must start at zero")
+        if remote != tuple(sorted(set(remote))):
+            raise ValueError("remote_cutoffs_per_valley must be sorted and unique")
+        enlarged = tuple(int(value) for value in self.enlarged_hf_bands_per_valley)
+        if enlarged != tuple(sorted(set(enlarged))):
+            raise ValueError("enlarged_hf_bands_per_valley must be sorted and unique")
+        if not enlarged or enlarged[0] != int(self.n_active_bands_per_valley):
+            raise ValueError(
+                "enlarged_hf_bands_per_valley must start at n_active_bands_per_valley"
+            )
+        if self.n_occ_holes_per_k >= 2 * self.n_active_bands_per_valley:
+            raise ValueError("the active space must contain an empty electron state")
+        if len(set(self.chemical_potential_points)) != len(self.chemical_potential_points):
+            raise ValueError("chemical_potential_points must be unique")
+        return self
+
+
 class ContinuumWorkflowParams(BaseModel):
     """Top-level native continuum symmetric-HF response controls."""
 

@@ -15,6 +15,7 @@ from chiral_dw.config import (
     FourierACParams,
     FourierCoefficient,
     IdealConjugateLLLChargeBenchmarkParams,
+    OrbitalMagnetizationParams,
     PhysicalCoulombACPreset,
     QHFMChargeBenchmarkParams,
     RealSpaceGridParams,
@@ -89,6 +90,19 @@ def test_native_continuum_params_record_self_contained_hf_defaults():
     assert params.interaction.exchange_representation == "auto"
     assert params.interaction.form_factor_backend == "auto"
     assert params.hf.n_occ_per_k == 1
+
+
+def test_orbital_magnetization_params_fix_remote_and_reference_conventions():
+    params = OrbitalMagnetizationParams()
+
+    assert params.remote_cutoffs_per_valley == tuple(range(7))
+    assert params.enlarged_hf_bands_per_valley == (2, 3, 4)
+    assert params.reference_convention == "electron_state_minus_filled_valence"
+    assert params.observable_scope == "valence_continuum"
+    with pytest.raises(ValidationError):
+        OrbitalMagnetizationParams(remote_cutoffs_per_valley=(1, 2))
+    with pytest.raises(ValidationError):
+        OrbitalMagnetizationParams(enlarged_hf_bands_per_valley=(3, 4))
 
 
 def test_response_params_validate_theta_window():

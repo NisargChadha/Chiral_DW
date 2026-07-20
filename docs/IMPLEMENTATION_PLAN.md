@@ -117,6 +117,42 @@ optional physical conversion divides charge density by `a_M^2`.
      and a local/cluster CLI whose exact single-point path is smoke-tested
      before any sweep is scaled up.
 
+8. **Orbital Magnetization And Remote-Band Convergence**
+   - Evaluate the hole-filling-one VP orbital magnetization with the
+     gauge-covariant occupied/empty-projector formula in the common Taige
+     continuum plane-wave/layer basis.  Report the electron-state result
+     relative to the filled-valence reference; do not attach the filled sea as
+     an additive magnetization to the direct-hole HF result.
+   - For the first physical point use `theta_deg=3.7`, `u_D=0`, `n_k=18`,
+     `plane_wave_shell=5`, two HF-active bands per locked spin-valley, and one
+     occupied hole per momentum.  Hold the two-band HF self-energy fixed while
+     increasing the number of deeper bare valence-continuum bands from zero to
+     six per spin-valley.
+   - Call this a valence-continuum remote-band convergence study.  The current
+     Taige model does not include a separate physical conduction-band
+     manifold, so it cannot establish convergence with respect to true
+     conduction remote states.
+   - Keep the frozen HF correction in the active subspace, but embed it into
+     the common microscopic basis before differentiating.  Reciprocal-boundary
+     finite differences must sew plane-wave coefficients and must record the
+     retained state weight at the finite plane-wave boundary.
+   - Report orbital magnetization at the electron VBM, midgap, and CBM, plus
+     the in-gap chemical-potential slope.  Validate that slope against the
+     occupied-electron Chern number with the same sign and unit convention.
+   - After frozen-remote convergence, solve VP HF self-consistently with two,
+     three, and four active bands per spin-valley and no additional frozen
+     bands.  Compare matched total cutoffs (two-band HF plus one/two frozen
+     bands against three/four-band HF) to isolate remote-band relaxation from
+     observable completeness.
+   - Record orbital magnetization, self-rotation, direct/indirect gaps,
+     microscopic occupied-projector overlap, valley polarization, Chern
+     number, and active-remote HF mixing.  Describe the final result as tested
+     only through the largest completed active and remote cutoffs.
+   - Smoke-test the exact artifact path on a tiny mesh, then run one physical
+     cutoff, the nested frozen sequence, and finally the enlarged HF sequence.
+     Write generated arrays and tables under `results/`; plotting scripts and
+     rendered convergence figures remain under `Plots/` and `Plots/figures/`.
+
 ## Test And Review Protocol
 
 - Before each substantive implementation step: re-read this plan, `AGENTS.md`,
@@ -142,3 +178,7 @@ optional physical conversion divides charge density by `a_M^2`.
 - Final HF reference projectors should be idempotent. If the final idempotent
   projector has a large Aufbau residual, report a self-consistency warning
   rather than silently accepting the reference.
+- Orbital magnetization uses positive elementary charge in the standard
+  electron formula and is reported as a moment in Bohr magnetons per moire
+  cell.  The primary observable is the doped electron state minus the
+  filled-valence reference at the same retained-band cutoff.
