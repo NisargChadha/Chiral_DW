@@ -19,6 +19,7 @@ from chiral_dw.continuum.models import (
     dense_lambdas_from_compact,
     hermitize,
 )
+from chiral_dw.continuum.taige_sewing import reciprocal_shift_gather
 
 GridCoord = tuple[int, int]
 
@@ -775,15 +776,11 @@ def _shift_gather(
     shell_index: dict[GridCoord, int],
     shift: GridCoord,
 ) -> tuple[np.ndarray, np.ndarray]:
-    src: list[int] = []
-    tgt: list[int] = []
-    s1, s2 = int(shift[0]), int(shift[1])
-    for i, (g1, g2) in enumerate(shell):
-        j = shell_index.get((g1 + s1, g2 + s2))
-        if j is not None:
-            src.append(i)
-            tgt.append(j)
-    return np.asarray(src, dtype=int), np.asarray(tgt, dtype=int)
+    # ``shell_index`` remains in the private signature for compatibility with
+    # the density-vertex call sites; the canonical mapping lives in the public
+    # sewing module used by both topology and orbital magnetization.
+    del shell_index
+    return reciprocal_shift_gather(shell, shift)
 
 
 GatherCache = dict[GridCoord, tuple[np.ndarray, np.ndarray]]
