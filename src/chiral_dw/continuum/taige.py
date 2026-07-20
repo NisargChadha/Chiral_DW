@@ -697,6 +697,29 @@ def build_taige_active_space(
     """Build the Taige active hole basis, optionally in a finite-Q frame."""
 
     bands = compute_taige_bandstructure(model, grid)
+    active = active_space_from_taige_bands(grid, model, bands, finite_q)
+    return active, bands
+
+
+def active_space_from_taige_bands(
+    grid: MomentumGrid,
+    model: ContinuumModelParams,
+    bands: TaigeBandStructure,
+    finite_q: ContinuumFiniteQParams | None = None,
+) -> ContinuumActiveSpace:
+    """Slice a cached Taige eigensystem into one HF active space."""
+
+    if bands.grid != grid:
+        raise ValueError("cached bands use a different momentum grid")
+    if bands.model != model:
+        differing = {
+            key
+            for key, value in model.model_dump().items()
+            if key != "n_active_bands_per_valley"
+            and value != bands.model.model_dump().get(key)
+        }
+        if differing:
+            raise ValueError(f"cached bands use incompatible model fields: {sorted(differing)}")
     finite_q_params = finite_q or ContinuumFiniteQParams()
     finite_q_enabled = bool(finite_q_params.enabled)
     q_coord = finite_q_params.q_coord if finite_q_enabled else None
@@ -754,7 +777,7 @@ def build_taige_active_space(
         geometry=bands.geometry,
         bands=bands,
     )
-    return active, bands
+    return active
 
 
 def q_transfers(grid: MomentumGrid, interaction: ContinuumInteractionParams) -> tuple[GridCoord, ...]:
