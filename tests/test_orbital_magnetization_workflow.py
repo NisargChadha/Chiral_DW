@@ -214,5 +214,7 @@ def test_tiny_workflow_smoke_writes_complete_restartable_artifacts(tmp_path) -> 
     second = run_taige_orbital_magnetization_workflow(params)
     assert second.band_cache_hash == first.band_cache_hash
     benchmark_text = (tmp_path / "smoke" / "benchmarks.csv").read_text()
+    assert "continuum_diagonalization" in benchmark_text
+    assert "vp_hf_solve" in benchmark_text
     assert "continuum_band_cache_load" in benchmark_text
     assert "hf_state_cache_load" in benchmark_text

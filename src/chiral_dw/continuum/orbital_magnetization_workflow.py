@@ -188,6 +188,14 @@ class OrbitalMagnetizationWorkflowSummary(BaseModel):
     largest_hf_cutoff_completed: int = Field(ge=1)
     all_hf_converged: bool
     manifest_passed: bool
+    frozen_midgap_last_step_absolute_mu_b: float | None = Field(default=None, ge=0.0)
+    frozen_midgap_last_step_relative: float | None = Field(default=None, ge=0.0)
+    frozen_absolute_tolerance_passed: bool | None = None
+    frozen_relative_tolerance_passed: bool | None = None
+    largest_matched_hf_relaxation_absolute_mu_b: float = Field(ge=0.0)
+    largest_matched_hf_relaxation_relative: float = Field(ge=0.0)
+    observable_scope: str = "valence_continuum"
+    excluded_moments: str = "true conduction-band, microscopic atomic-orbital, and spin moments"
 
 
 @dataclass(frozen=True)
@@ -537,6 +545,7 @@ def run_taige_orbital_magnetization_workflow(
     controls = params or TaigeOrbitalMagnetizationWorkflowParams()
     result_dir = Path(controls.output_dir).expanduser().resolve()
     result_dir.mkdir(parents=True, exist_ok=True)
+    previous_benchmarks = _load_benchmark_csv(result_dir / "benchmarks.csv")
     _write_json_atomic(result_dir / "parameters.json", controls.model_dump(mode="json"))
     benchmarks: list[StageBenchmark] = []
     grid = MomentumGrid(controls.grid.n_k)
@@ -676,6 +685,7 @@ def run_taige_orbital_magnetization_workflow(
     _write_model_csv(result_dir / "remote_convergence.csv", frozen_rows)
     _write_model_csv(result_dir / "hf_active_space_convergence.csv", hf_rows)
     _write_model_csv(result_dir / "matched_cutoff_comparison.csv", matched)
+    benchmarks = _merge_benchmarks(previous_benchmarks, benchmarks)
     _write_model_csv(result_dir / "benchmarks.csv", benchmarks)
     _write_json_atomic(
         result_dir / "benchmarks.json", [row.model_dump(mode="json") for row in benchmarks]
@@ -697,6 +707,23 @@ def run_taige_orbital_magnetization_workflow(
         result_dir=str(result_dir),
         artifacts=artifacts,
     )
+    midgap_frozen = [
+        row for row in frozen_rows if row.chemical_potential_point == "midgap"
+    ]
+    midgap_frozen.sort(key=lambda row: row.n_remote_bands_per_valley)
+    if len(midgap_frozen) >= 2:
+        last_step = abs(
+            midgap_frozen[-1].orbital_magnetization_mu_b_per_cell
+            - midgap_frozen[-2].orbital_magnetization_mu_b_per_cell
+        )
+        last_scale = max(
+            abs(midgap_frozen[-1].orbital_magnetization_mu_b_per_cell), 1e-12
+        )
+        last_relative = last_step / last_scale
+    else:
+        last_step = None
+        last_relative = None
+    largest_match = max(matched, key=lambda row: row.n_total_bands_per_valley)
     summary = OrbitalMagnetizationWorkflowSummary(
         result_dir=str(result_dir),
         band_cache_hash=band_manifest.cache_hash,
@@ -708,6 +735,22 @@ def run_taige_orbital_magnetization_workflow(
         largest_hf_cutoff_completed=max(all_hf_cutoffs),
         all_hf_converged=all_converged,
         manifest_passed=manifest.passed,
+        frozen_midgap_last_step_absolute_mu_b=last_step,
+        frozen_midgap_last_step_relative=last_relative,
+        frozen_absolute_tolerance_passed=(
+            None
+            if last_step is None
+            else last_step <= controls.orbital.convergence_abs_mu_b
+        ),
+        frozen_relative_tolerance_passed=(
+            None
+            if last_relative is None
+            else last_relative <= controls.orbital.convergence_rel
+        ),
+        largest_matched_hf_relaxation_absolute_mu_b=(
+            largest_match.absolute_delta_mu_b_per_cell
+        ),
+        largest_matched_hf_relaxation_relative=largest_match.relative_delta,
     )
     _write_json_atomic(result_dir / "summary.json", summary.model_dump(mode="json"))
     # Refresh after summary exists.
@@ -1092,6 +1135,50 @@ def _write_model_csv(path: Path, rows: list[BaseModel]) -> None:
         writer.writeheader()
         writer.writerows(payloads)
     os.replace(temporary, path)
+
+
+def _load_benchmark_csv(path: Path) -> list[StageBenchmark]:
+    if not path.exists():
+        return []
+    try:
+        with path.open(newline="") as handle:
+            rows = []
+            for raw in csv.DictReader(handle):
+                for key in (
+                    "n_active_bands_per_valley",
+                    "n_remote_bands_per_valley",
+                ):
+                    if raw.get(key) == "":
+                        raw[key] = None
+                rows.append(StageBenchmark.model_validate(raw))
+            return rows
+    except Exception as exc:
+        raise ValueError(f"could not parse existing benchmark table {path}") from exc
+
+
+def _merge_benchmarks(
+    previous: list[StageBenchmark], current: list[StageBenchmark]
+) -> list[StageBenchmark]:
+    """Keep cold and warm stage records across restart runs without duplicates."""
+
+    merged: dict[tuple[str, int | None, int | None], StageBenchmark] = {}
+    for row in [*previous, *current]:
+        key = (
+            row.stage,
+            row.n_active_bands_per_valley,
+            row.n_remote_bands_per_valley,
+        )
+        merged[key] = row
+    return sorted(
+        merged.values(),
+        key=lambda row: (
+            row.n_active_bands_per_valley is not None,
+            row.n_active_bands_per_valley or 0,
+            row.n_remote_bands_per_valley is not None,
+            row.n_remote_bands_per_valley or 0,
+            row.stage,
+        ),
+    )
 
 
 def _write_json_atomic(path: Path, payload: Any) -> None:
