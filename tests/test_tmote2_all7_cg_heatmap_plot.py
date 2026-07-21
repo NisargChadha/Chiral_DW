@@ -46,7 +46,7 @@ def test_hf_phase_diagram_has_requested_categorical_colors():
 def test_hf_phase_labels_match_previous_tmote2_placement():
     module = _load_plot_module()
 
-    assert module.FONTS["phase_label"] == 18
+    assert module.FONTS["phase_label"] == module.FONTS["axis_label"] == 32
     assert module.PHASE_LABELS == (
         {"text": "VP\n$C=0$", "theta_deg": 2.50, "u_D_meV": 10.0},
         {"text": "VP\n$C=1$", "theta_deg": 3.50, "u_D_meV": 2.5},

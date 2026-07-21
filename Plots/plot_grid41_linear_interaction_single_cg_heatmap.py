@@ -45,7 +45,7 @@ FONTS = {
     "axis_label": 32,
     "tick_label": 22,
     "legend": 22,
-    "phase_label": 18,
+    "phase_label": 32,
     "colorbar_label": 32,
     "colorbar_tick": 22,
 }
