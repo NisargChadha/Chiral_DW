@@ -10,7 +10,6 @@ import numpy as np
 import pandas as pd
 from matplotlib.collections import LineCollection
 from matplotlib.colors import LinearSegmentedColormap, ListedColormap, TwoSlopeNorm
-from matplotlib.patches import Patch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -38,7 +37,7 @@ FIGURE = {
     "size": (7.4, 7.4),
     "dpi": 280,
     "cg_subplots_adjust": {"left": 0.12, "right": 0.82, "bottom": 0.12, "top": 0.96},
-    "phase_subplots_adjust": {"left": 0.12, "right": 0.73, "bottom": 0.12, "top": 0.96},
+    "phase_subplots_adjust": {"left": 0.12, "right": 0.96, "bottom": 0.12, "top": 0.96},
 }
 
 FONTS = {
@@ -46,6 +45,7 @@ FONTS = {
     "axis_label": 32,
     "tick_label": 22,
     "legend": 22,
+    "phase_label": 18,
     "colorbar_label": 32,
     "colorbar_tick": 22,
 }
@@ -91,6 +91,12 @@ LINE_STYLES = {
 
 CG_BOUNDARY_KEYS = ("vp_chern", "vp_ivc")
 PHASE_CODES = {"vp_c0": 0, "vp_c1": 1, "ivc": 2}
+
+PHASE_LABELS = (
+    {"text": "VP\n$C=0$", "theta_deg": 2.50, "u_D_meV": 10.0},
+    {"text": "VP\n$C=1$", "theta_deg": 3.50, "u_D_meV": 2.5},
+    {"text": "IVC", "theta_deg": 3.62, "u_D_meV": 18.2},
+)
 
 
 def _apply_style() -> None:
@@ -294,20 +300,18 @@ def _plot_phase_diagram(
         boundary.set_joinstyle("miter")
         ax.add_collection(boundary)
 
-    handles = [
-        Patch(facecolor=COLORS[key], edgecolor=COLORS["axis"], linewidth=0.8, label=LABELS[key])
-        for key in ("vp_c0", "vp_c1", "ivc")
-    ]
-    ax.legend(
-        handles=handles,
-        loc="upper left",
-        bbox_to_anchor=(1.04, 1.0),
-        frameon=False,
-        borderaxespad=0.0,
-        handlelength=1.25,
-        handletextpad=0.55,
-        labelspacing=0.45,
-    )
+    for phase_label in PHASE_LABELS:
+        ax.text(
+            phase_label["theta_deg"],
+            phase_label["u_D_meV"],
+            phase_label["text"],
+            ha="center",
+            va="center",
+            color="black",
+            fontsize=FONTS["phase_label"],
+            linespacing=0.9,
+            zorder=9,
+        )
     _setup_axes(ax, theta_vals, u_vals)
     return _save(fig, PHASE_OUTPUT_STEM)
 
