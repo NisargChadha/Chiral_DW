@@ -343,6 +343,53 @@ def _down_form_factor(
     return complex(c_target.conj() @ matrix @ c_source)
 
 
+def _ac_vertex_q_slab(
+    *,
+    model: NonIdealACLLModel,
+    active: ContinuumActiveSpace,
+    q_list: tuple[tuple[int, int], ...],
+    g_channels: tuple[tuple[int, int], ...],
+    q_start: int,
+    q_stop: int,
+) -> tuple[int, np.ndarray, np.ndarray]:
+    """Build one independent q-slab of finite-LL AC density vertices."""
+
+    grid = active.grid
+    count = int(q_stop) - int(q_start)
+    target_minus_q = np.empty((count, grid.size), dtype=int)
+    lambdas = np.zeros(
+        (count, len(g_channels), grid.size, active.dim, active.dim),
+        dtype=complex,
+    )
+    for local_iq, iq in enumerate(range(int(q_start), int(q_stop))):
+        q = q_list[iq]
+        q_cart = _cart_from_coord(model, (q[0] / grid.n1, q[1] / grid.n2))
+        for ik in range(grid.size):
+            source_coord, rec_shift = grid.shift_minus_q(grid.coord_of(ik), q)
+            source = grid.index_of(source_coord)
+            target_minus_q[local_iq, ik] = source
+            rec_shift_cart = _cart_from_coord(model, rec_shift)
+            for ig, g in enumerate(g_channels):
+                g_total = _cart_from_coord(model, g) + rec_shift_cart
+                lambdas[local_iq, ig, ik, 0, 0] = _up_form_factor(
+                    model,
+                    active,
+                    source=source,
+                    target=ik,
+                    q_cart=q_cart,
+                    g_total_cart=g_total,
+                )
+                lambdas[local_iq, ig, ik, 1, 1] = _down_form_factor(
+                    model,
+                    active,
+                    source=source,
+                    target=ik,
+                    q_cart=q_cart,
+                    g_total_cart=g_total,
+                )
+    return int(q_start), target_minus_q, lambdas
+
+
 def build_ac_density_vertices(
     model: NonIdealACLLModel,
     active: ContinuumActiveSpace,
@@ -366,30 +413,47 @@ def build_ac_density_vertices(
 
     for iq, q in enumerate(q_list):
         q_is_zero[iq] = q == (0, 0)
-        q_cart = _cart_from_coord(model, (q[0] / grid.n1, q[1] / grid.n2))
-        for ik in range(grid.size):
-            source_coord, rec_shift = grid.shift_minus_q(grid.coord_of(ik), q)
-            source = grid.index_of(source_coord)
-            target_minus_q[iq, ik] = source
-            rec_shift_cart = _cart_from_coord(model, rec_shift)
-            for ig, g in enumerate(g_channels):
-                g_total = _cart_from_coord(model, g) + rec_shift_cart
-                lambdas[iq, ig, ik, 0, 0] = _up_form_factor(
-                    model,
-                    active,
-                    source=source,
-                    target=ik,
-                    q_cart=q_cart,
-                    g_total_cart=g_total,
-                )
-                lambdas[iq, ig, ik, 1, 1] = _down_form_factor(
-                    model,
-                    active,
-                    source=source,
-                    target=ik,
-                    q_cart=q_cart,
-                    g_total_cart=g_total,
-                )
+
+    n_workers = max(1, min(int(controls.vertex_workers), n_q))
+    if n_workers == 1:
+        slab_results = (
+            _ac_vertex_q_slab(
+                model=model,
+                active=active,
+                q_list=q_list,
+                g_channels=g_channels,
+                q_start=0,
+                q_stop=n_q,
+            ),
+        )
+    else:
+        from joblib import Parallel, delayed
+
+        bounds = np.linspace(0, n_q, n_workers + 1, dtype=int)
+        tasks = (
+            delayed(_ac_vertex_q_slab)(
+                model=model,
+                active=active,
+                q_list=q_list,
+                g_channels=g_channels,
+                q_start=int(start),
+                q_stop=int(stop),
+            )
+            for start, stop in zip(bounds[:-1], bounds[1:])
+            if int(start) < int(stop)
+        )
+        slab_results = Parallel(
+            n_jobs=n_workers,
+            backend="loky",
+            return_as="generator",
+            mmap_mode="r",
+            max_nbytes="32M",
+        )(tasks)
+
+    for q_start, target_slab, lambda_slab in slab_results:
+        q_stop = q_start + target_slab.shape[0]
+        target_minus_q[q_start:q_stop] = target_slab
+        lambdas[q_start:q_stop] = lambda_slab
 
     q_vectors, q_norm, v_q, v_over_a = _interaction_arrays(
         model,

@@ -168,6 +168,33 @@ def test_explicit_active_space_and_vertex_path_matches_bundle_builder():
     assert np.allclose(backend.h0, bundle.backend.h0)
 
 
+def test_ac_vertex_workers_match_serial_full_q_construction():
+    params = _small_params()
+    serial_params = params.model_copy(
+        update={
+            "interaction": params.interaction.model_copy(
+                update={"q_mesh": "full", "vertex_workers": 1}
+            )
+        }
+    )
+    parallel_params = serial_params.model_copy(
+        update={
+            "interaction": serial_params.interaction.model_copy(
+                update={"vertex_workers": 2}
+            )
+        }
+    )
+
+    serial = build_ac_projected_bundle(serial_params).vertices
+    parallel = build_ac_projected_bundle(parallel_params).vertices
+
+    assert len(serial.q_shifts) == params.grid.n_total
+    assert serial.q_shifts == parallel.q_shifts
+    assert np.array_equal(serial.target_minus_q, parallel.target_minus_q)
+    assert np.allclose(serial.lambda_blocks, parallel.lambda_blocks, atol=1e-12)
+    assert np.allclose(serial.v_over_a, parallel.v_over_a, atol=1e-14)
+
+
 def test_dimensionless_dual_gate_weights_include_correct_q0_limit():
     params = _small_params()
     bundle = build_ac_projected_bundle(params)
