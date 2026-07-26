@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from pydantic import BaseModel, ConfigDict, Field
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
@@ -42,6 +43,9 @@ from chiral_dw.continuum import (  # noqa: E402
     symmetric_convex_path,
 )
 
+COULOMB_MEV_NM = 1439.96454784255
+HBAR2_OVER_2ME_MEV_NM2 = 38.0998212
+
 
 @dataclass(frozen=True)
 class ACSweepPoint:
@@ -61,6 +65,92 @@ class ACSweepPoint:
             "b1": float(self.b1),
             "u1": float(self.u1),
         }
+
+
+class ACContinuumMatch(BaseModel):
+    """Physical Taige-continuum scales used by a projected AC sweep."""
+
+    model_config = ConfigDict(frozen=True)
+
+    theta_deg: float = Field(gt=0.0)
+    a0_angstrom: float = Field(gt=0.0)
+    m_eff: float = Field(gt=0.0)
+    epsilon: float = Field(gt=0.0)
+    gate_distance_nm: float = Field(gt=0.0)
+    interaction_multiplier: float = Field(ge=0.0)
+    moire_length_nm: float = Field(gt=0.0)
+    moire_cell_area_nm2: float = Field(gt=0.0)
+    landau_level_spacing_mev: float = Field(gt=0.0)
+    characteristic_coulomb_mev: float = Field(ge=0.0)
+    characteristic_coulomb_to_ll_ratio: float = Field(ge=0.0)
+    maximum_allowed_coulomb_to_ll_ratio: float = Field(gt=0.0)
+
+
+def _continuum_match(args: argparse.Namespace) -> ACContinuumMatch:
+    """Return and validate the physical continuum normalization for the AC run."""
+
+    theta = np.deg2rad(float(args.continuum_theta_deg))
+    a_m_nm = (
+        float(args.continuum_a0_angstrom)
+        / (2.0 * np.sin(0.5 * theta))
+        / 10.0
+    )
+    area_nm2 = float(np.sqrt(3.0) * a_m_nm**2 / 2.0)
+    l2_nm2 = area_nm2 / (2.0 * np.pi)
+    omega_c_mev = float(
+        2.0
+        * HBAR2_OVER_2ME_MEV_NM2
+        / (float(args.continuum_m_eff) * l2_nm2)
+    )
+    characteristic_coulomb_mev = float(
+        float(args.v0)
+        * COULOMB_MEV_NM
+        / (float(args.epsilon) * a_m_nm)
+    )
+    ratio = characteristic_coulomb_mev / omega_c_mev
+    maximum_ratio = float(args.max_coulomb_to_ll_ratio)
+    if args.coulomb_kind == "dual_gate" and ratio >= maximum_ratio:
+        raise ValueError(
+            "physical dual-gate interaction is too strong for the finite-LL projection: "
+            f"E_C/(hbar*omega_c)={ratio:.6g} must be below {maximum_ratio:.6g}; "
+            "reduce --v0 or raise the LL spacing through the continuum parameters"
+        )
+
+    derived_moire_length = a_m_nm
+    derived_energy_unit = omega_c_mev
+    if args.moire_length_nm is not None:
+        if args.coulomb_kind == "dual_gate" and not np.isclose(
+            float(args.moire_length_nm), derived_moire_length, rtol=1e-8, atol=1e-10
+        ):
+            raise ValueError(
+                "--moire-length-nm does not match the continuum-derived moire length; "
+                "change --continuum-theta-deg/--continuum-a0-angstrom instead"
+            )
+        derived_moire_length = float(args.moire_length_nm)
+    if args.energy_unit_mev is not None:
+        if args.coulomb_kind == "dual_gate" and not np.isclose(
+            float(args.energy_unit_mev), derived_energy_unit, rtol=1e-8, atol=1e-10
+        ):
+            raise ValueError(
+                "--energy-unit-mev does not match the continuum-derived LL spacing; "
+                "change --continuum-theta-deg/--continuum-m-eff instead"
+            )
+        derived_energy_unit = float(args.energy_unit_mev)
+
+    return ACContinuumMatch(
+        theta_deg=float(args.continuum_theta_deg),
+        a0_angstrom=float(args.continuum_a0_angstrom),
+        m_eff=float(args.continuum_m_eff),
+        epsilon=float(args.epsilon),
+        gate_distance_nm=float(args.gate_distance_nm),
+        interaction_multiplier=float(args.v0),
+        moire_length_nm=derived_moire_length,
+        moire_cell_area_nm2=area_nm2,
+        landau_level_spacing_mev=derived_energy_unit,
+        characteristic_coulomb_mev=characteristic_coulomb_mev,
+        characteristic_coulomb_to_ll_ratio=ratio,
+        maximum_allowed_coulomb_to_ll_ratio=maximum_ratio,
+    )
 
 
 def _json_default(value: Any) -> Any:
@@ -127,6 +217,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--interaction-strength-scale", "--v0", dest="v0", type=float, default=0.2)
     parser.add_argument("--dimensionless-gate-distance", "--gate-distance", dest="gate_distance", type=float, default=2.0)
+    parser.add_argument("--q-mesh", choices=["shell", "full"], default="shell")
     parser.add_argument("--q-shell", type=int, default=1)
     parser.add_argument("--local-field-cutoff", type=int, default=1)
     parser.add_argument("--epsilon", type=float, default=16.7)
@@ -135,8 +226,19 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--omit-q0", action="store_true")
     parser.add_argument("--exchange-scale", type=float, default=1.0)
     parser.add_argument("--hartree-scale", type=float, default=1.0)
-    parser.add_argument("--moire-length-nm", type=float, default=1.0)
-    parser.add_argument("--energy-unit-mev", type=float, default=1.0)
+    parser.add_argument("--vertex-workers", type=int, default=1)
+    parser.add_argument("--exchange-workers", type=int, default=1)
+    parser.add_argument("--moire-length-nm", type=float, default=None)
+    parser.add_argument("--energy-unit-mev", type=float, default=None)
+    parser.add_argument("--continuum-theta-deg", type=float, default=3.5)
+    parser.add_argument("--continuum-a0-angstrom", type=float, default=3.47)
+    parser.add_argument("--continuum-m-eff", type=float, default=0.62)
+    parser.add_argument(
+        "--max-coulomb-to-ll-ratio",
+        type=float,
+        default=0.25,
+        help="Require v0*e^2/(epsilon*a_M)/(hbar*omega_c) to stay below this value.",
+    )
 
     parser.add_argument("--n-occ-per-k", type=int, default=1)
     parser.add_argument("--max-iter", type=int, default=800)
@@ -222,11 +324,18 @@ def _point_dir(output_root: Path, point: ACSweepPoint) -> Path:
     return output_root / "points" / point.label
 
 
-def _params_for_point(args: argparse.Namespace, point: ACSweepPoint, point_dir: Path) -> ACProjectedHFParams:
+def _params_for_point(
+    args: argparse.Namespace,
+    point: ACSweepPoint,
+    point_dir: Path,
+    continuum_match: ACContinuumMatch | None = None,
+) -> ACProjectedHFParams:
+    physical = continuum_match or _continuum_match(args)
     interaction = ContinuumInteractionParams(
         coulomb_kind=args.coulomb_kind,
         v0=float(args.v0),
         gate_distance=float(args.gate_distance),
+        q_mesh=args.q_mesh,
         q_shell=int(args.q_shell),
         local_field_cutoff=int(args.local_field_cutoff),
         epsilon=float(args.epsilon),
@@ -235,6 +344,8 @@ def _params_for_point(args: argparse.Namespace, point: ACSweepPoint, point_dir: 
         smear_length_nm=float(args.smear_length_nm),
         exchange_scale=float(args.exchange_scale),
         hartree_scale=float(args.hartree_scale),
+        vertex_workers=int(args.vertex_workers),
+        exchange_workers=int(args.exchange_workers),
     )
     hf = ContinuumHFParams(
         n_occ_per_k=int(args.n_occ_per_k),
@@ -266,8 +377,8 @@ def _params_for_point(args: argparse.Namespace, point: ACSweepPoint, point_dir: 
         response=response,
         active_band=int(args.active_band),
         band_diagnostics_n_k=int(args.band_diagnostics_n_k),
-        moire_length_nm=float(args.moire_length_nm),
-        energy_unit_mev=float(args.energy_unit_mev),
+        moire_length_nm=float(physical.moire_length_nm),
+        energy_unit_mev=float(physical.landau_level_spacing_mev),
         output_dir=str(point_dir),
     )
 
@@ -481,6 +592,7 @@ def merge_point_summaries(output_root: Path) -> list[dict[str, Any]]:
 
 def _write_plan(output_root: Path, points: list[ACSweepPoint], args: argparse.Namespace) -> None:
     rows = [point.as_row() | {"point_dir": str(_point_dir(output_root, point))} for point in points]
+    continuum_match = _continuum_match(args)
     _write_csv(output_root / "sweep_plan.csv", rows)
     _write_json(
         output_root / "sweep_plan.json",
@@ -488,6 +600,7 @@ def _write_plan(output_root: Path, points: list[ACSweepPoint], args: argparse.Na
             "points": rows,
             "n_points": len(rows),
             "active_space_convention": "one active AC band per valley; default active_band=0 is the lowest band",
+            "continuum_match": continuum_match.model_dump(mode="json"),
             "args": {
                 key: value
                 for key, value in vars(args).items()
@@ -504,7 +617,8 @@ def run_point(args: argparse.Namespace, output_root: Path, point: ACSweepPoint) 
         print(f"Skipping existing {point.label}: {point_summary}")
         return _load_point_summary(point_summary)
 
-    params = _params_for_point(args, point, point_dir)
+    continuum_match = _continuum_match(args)
+    params = _params_for_point(args, point, point_dir, continuum_match)
     _write_json(point_dir / "point_params.json", params.model_dump(mode="json"))
     print(
         "Running AC projected HF "
@@ -613,10 +727,24 @@ def run_point(args: argparse.Namespace, output_root: Path, point: ACSweepPoint) 
         "active_band": int(params.active_band),
         "n_active_bands_per_valley": int(bundle.active.n_active),
         "coulomb_kind": params.interaction.coulomb_kind,
+        "q_mesh": params.interaction.q_mesh,
         "v0_over_omega_c": float(params.interaction.v0),
+        "interaction_multiplier": float(params.interaction.v0),
         "gate_distance": float(params.interaction.gate_distance),
+        "gate_distance_nm": float(params.interaction.gate_distance_nm),
+        "epsilon": float(params.interaction.epsilon),
         "q_shell": int(params.interaction.q_shell),
         "local_field_cutoff": int(params.interaction.local_field_cutoff),
+        "vertex_workers": int(params.interaction.vertex_workers),
+        "exchange_workers": int(params.interaction.exchange_workers),
+        "moire_length_nm": float(params.moire_length_nm),
+        "landau_level_spacing_mev": float(params.energy_unit_mev),
+        "characteristic_coulomb_mev": float(
+            continuum_match.characteristic_coulomb_mev
+        ),
+        "characteristic_coulomb_to_ll_ratio": float(
+            continuum_match.characteristic_coulomb_to_ll_ratio
+        ),
         "interaction_scale": interaction_scale,
         "finite_q_interaction_scale": finite_q_interaction_scale,
         "interaction_gap_ratio": float(interaction_gap_ratio),
@@ -662,6 +790,7 @@ def run_point(args: argparse.Namespace, output_root: Path, point: ACSweepPoint) 
             "point": point.as_row(),
             "row": row,
             "params": params.model_dump(mode="json"),
+            "continuum_match": continuum_match.model_dump(mode="json"),
             "band_diagnostics": band_diag,
             "reference_diagnostics": reference_rows,
             "active_space_convention": "one active AC band per valley; active_band selects the finite-LL band before HF",

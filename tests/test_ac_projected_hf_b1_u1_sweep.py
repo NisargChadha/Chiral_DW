@@ -42,6 +42,10 @@ def test_ac_b1_u1_sweep_dry_run_writes_selected_plan(tmp_path):
     plan = json.loads((output_root / "sweep_plan.json").read_text())
     assert plan["n_points"] == 1
     assert plan["args"]["coulomb_kind"] == "dimensionless_dual_gate"
+    assert np.isclose(plan["continuum_match"]["moire_length_nm"], 5.681350588613268)
+    assert np.isclose(
+        plan["continuum_match"]["landau_level_spacing_mev"], 27.625318938039467
+    )
     assert plan["active_space_convention"].startswith("one active AC band per valley")
     point = plan["points"][0]
     assert point["b_index"] == 1
@@ -49,6 +53,64 @@ def test_ac_b1_u1_sweep_dry_run_writes_selected_plan(tmp_path):
     assert point["b1"] == 0.0
     assert point["u1"] == 0.0
     assert "points/b_001_u_001" in point["point_dir"]
+
+
+def test_ac_b1_u1_physical_dual_gate_plan_records_safe_continuum_match(tmp_path):
+    output_root = tmp_path / "physical"
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--output-root",
+            str(output_root),
+            "--b1",
+            "0.0",
+            "--u1",
+            "0.0",
+            "--coulomb-kind",
+            "dual_gate",
+            "--q-mesh",
+            "full",
+            "--v0",
+            "0.1",
+            "--dry-run",
+        ],
+        check=True,
+    )
+
+    plan = json.loads((output_root / "sweep_plan.json").read_text())
+    match = plan["continuum_match"]
+    assert plan["args"]["q_mesh"] == "full"
+    assert np.isclose(match["theta_deg"], 3.5)
+    assert np.isclose(match["a0_angstrom"], 3.47)
+    assert np.isclose(match["m_eff"], 0.62)
+    assert match["characteristic_coulomb_to_ll_ratio"] < 0.25
+    assert np.isclose(match["characteristic_coulomb_to_ll_ratio"], 0.0549384545)
+
+
+def test_ac_b1_u1_physical_dual_gate_rejects_interaction_above_ll_guard(tmp_path):
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--output-root",
+            str(tmp_path / "too_strong"),
+            "--b1",
+            "0.0",
+            "--u1",
+            "0.0",
+            "--coulomb-kind",
+            "dual_gate",
+            "--v0",
+            "1.0",
+            "--dry-run",
+        ],
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode != 0
+    assert "interaction is too strong" in result.stderr
 
 
 def test_ac_b1_u1_sweep_canonicalizes_linspace_roundoff(tmp_path):
@@ -218,9 +280,10 @@ def test_ac_b1_u1_sweep_tiny_point_runs_overlap_response(tmp_path):
     assert (output_root / "sweep.csv").exists()
 
 
-def test_ac_b1_u1_sweep_job_uses_121_point_array_and_lowest_band_default():
+def test_ac_b1_u1_sweep_job_maps_six_meshes_and_uses_multicore_physical_dual_gate():
     text = JOB.read_text()
-    assert "#SBATCH --array=0-120" in text
+    assert "#SBATCH --array=0-725%24" in text
+    assert "#SBATCH -c 4" in text
     assert "#SBATCH --mem=24G" in text
     assert "SLURM_ARRAY_TASK_ID" in text
     assert "scripts/scan_ac_projected_hf_b1_u1.py" in text
@@ -232,9 +295,19 @@ def test_ac_b1_u1_sweep_job_uses_121_point_array_and_lowest_band_default():
     assert 'N_U1=${N_U1:-"11"}' in text
     assert 'N_LL=${N_LL:-"6"}' in text
     assert 'ACTIVE_BAND=${ACTIVE_BAND:-"0"}' in text
-    assert 'N_K=${N_K:-"18"}' in text
-    assert 'COULOMB_KIND=${COULOMB_KIND:-"dimensionless_dual_gate"}' in text
+    assert 'N_K_LIST=${N_K_LIST:-"15,18,21,24,27,30"}' in text
+    assert 'COULOMB_KIND=${COULOMB_KIND:-"dual_gate"}' in text
+    assert 'Q_MESH=${Q_MESH:-"full"}' in text
     assert 'V0=${V0:-"0.1"}' in text
+    assert 'CONTINUUM_THETA_DEG=${CONTINUUM_THETA_DEG:-"3.5"}' in text
+    assert 'CONTINUUM_A0_ANGSTROM=${CONTINUUM_A0_ANGSTROM:-"3.47"}' in text
+    assert 'CONTINUUM_M_EFF=${CONTINUUM_M_EFF:-"0.62"}' in text
+    assert 'VERTEX_WORKERS=${VERTEX_WORKERS:-"${SLURM_CPUS_PER_TASK:-1}"}' in text
+    assert 'EXCHANGE_WORKERS=${EXCHANGE_WORKERS:-"${SLURM_CPUS_PER_TASK:-1}"}' in text
+    assert "export OMP_NUM_THREADS=1" in text
+    assert "MESH_INDEX=$((GLOBAL_TASK_ID / POINTS_PER_MESH))" in text
+    assert "POINT_TASK_ID=$((GLOBAL_TASK_ID % POINTS_PER_MESH))" in text
+    assert "--no-write-plan" in text
 
 
 def test_ac_b1_u1_sweep_no_write_plan_leaves_shared_plan_untouched(tmp_path):
