@@ -27,7 +27,7 @@ mkdir -p logs
 
 # Override any value with:
 # sbatch --export=ALL,NAME=value jobs/scan_ac_projected_hf_b1_u1_array.sh
-OUTPUT_ROOT=${OUTPUT_ROOT:-"results/ac_b1_u1_cg_taige_dual_gate_nll6_grid11_nk15_30"}
+OUTPUT_ROOT=${OUTPUT_ROOT:-"results/ac_b1_u1_cg_taige_dual_gate_eps4_nll8_grid11_nk15_30"}
 
 B1_MIN=${B1_MIN:-"-0.1"}
 B1_MAX=${B1_MAX:-"0.1"}
@@ -36,7 +36,7 @@ U1_MIN=${U1_MIN:-"-0.1"}
 U1_MAX=${U1_MAX:-"0.1"}
 N_U1=${N_U1:-"11"}
 
-N_LL=${N_LL:-"6"}
+N_LL=${N_LL:-"8"}
 ACTIVE_BAND=${ACTIVE_BAND:-"0"}
 N_K_LIST=${N_K_LIST:-"15,18,21,24,27,30"}
 
@@ -46,7 +46,7 @@ GATE_DISTANCE=${GATE_DISTANCE:-"2.0"}
 Q_MESH=${Q_MESH:-"full"}
 Q_SHELL=${Q_SHELL:-"1"}
 LOCAL_FIELD_CUTOFF=${LOCAL_FIELD_CUTOFF:-"1"}
-EPSILON=${EPSILON:-"16.7"}
+EPSILON=${EPSILON:-"4.0"}
 GATE_DISTANCE_NM=${GATE_DISTANCE_NM:-"30.0"}
 SMEAR_LENGTH_NM=${SMEAR_LENGTH_NM:-"0.347"}
 INCLUDE_Q0=${INCLUDE_Q0:-"1"}

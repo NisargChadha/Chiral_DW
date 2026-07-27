@@ -311,12 +311,13 @@ def test_ac_b1_u1_sweep_job_maps_six_meshes_and_uses_multicore_physical_dual_gat
     assert 'U1_MIN=${U1_MIN:-"-0.1"}' in text
     assert 'U1_MAX=${U1_MAX:-"0.1"}' in text
     assert 'N_U1=${N_U1:-"11"}' in text
-    assert 'N_LL=${N_LL:-"6"}' in text
+    assert 'N_LL=${N_LL:-"8"}' in text
     assert 'ACTIVE_BAND=${ACTIVE_BAND:-"0"}' in text
     assert 'N_K_LIST=${N_K_LIST:-"15,18,21,24,27,30"}' in text
     assert 'COULOMB_KIND=${COULOMB_KIND:-"dual_gate"}' in text
     assert 'Q_MESH=${Q_MESH:-"full"}' in text
     assert 'V0=${V0:-"0.1"}' in text
+    assert 'EPSILON=${EPSILON:-"4.0"}' in text
     assert 'CONTINUUM_THETA_DEG=${CONTINUUM_THETA_DEG:-"3.5"}' in text
     assert 'CONTINUUM_A0_ANGSTROM=${CONTINUUM_A0_ANGSTROM:-"3.47"}' in text
     assert 'CONTINUUM_M_EFF=${CONTINUUM_M_EFF:-"0.62"}' in text
