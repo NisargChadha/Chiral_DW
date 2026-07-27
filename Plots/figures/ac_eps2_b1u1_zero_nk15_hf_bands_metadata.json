@@ -1,0 +1,52 @@
+{
+  "params": {
+    "n_k": 15,
+    "n_ll": 6,
+    "b1": 0.0,
+    "u1": 0.0,
+    "epsilon": 2.0,
+    "interaction_multiplier": 0.1,
+    "gate_distance_nm": 30.0,
+    "smear_length_nm": 0.347,
+    "theta_deg": 3.5,
+    "a0_angstrom": 3.47,
+    "m_eff": 0.62,
+    "local_field_cutoff": 1,
+    "workers": 4
+  },
+  "derived_scales": {
+    "moire_length_nm": 5.681350588613268,
+    "moire_cell_area_nm2": 27.953346723161367,
+    "landau_level_spacing_mev": 27.62531893803947,
+    "characteristic_coulomb_mev": 12.672730941200584,
+    "characteristic_coulomb_to_ll_ratio": 0.458736095305329
+  },
+  "spectra": {
+    "vp": {
+      "occupied_band_max_mev": -14.05990912617328,
+      "empty_band_min_mev": -3.5011628193111965e-16,
+      "direct_gap_min_mev": 14.05990912617328,
+      "indirect_gap_mev": 14.05990912617328,
+      "occupied_bandwidth_mev": 33.26275437794418,
+      "empty_bandwidth_mev": 6.526748751980791e-16,
+      "converged": true,
+      "n_iter": 2,
+      "aufbau_residual_norm": 0.0,
+      "energy_per_cell_mev": -15.692202440412116
+    },
+    "ivc": {
+      "occupied_band_max_mev": -13.197660169037018,
+      "empty_band_min_mev": -10.650694440874439,
+      "direct_gap_min_mev": 9.452412356767706,
+      "indirect_gap_mev": 2.5469657281625793,
+      "occupied_bandwidth_mev": 21.90338399392896,
+      "empty_bandwidth_mev": 9.788445483738178,
+      "converged": true,
+      "n_iter": 30,
+      "aufbau_residual_norm": 4.616966332309279e-09,
+      "energy_per_cell_mev": -12.806157195399123
+    }
+  },
+  "energy_zero": "each panel is shifted by its occupied-band maximum",
+  "momentum_path": "discrete Gamma-M-kappa-Gamma tour on the solved nk x nk mesh"
+}
