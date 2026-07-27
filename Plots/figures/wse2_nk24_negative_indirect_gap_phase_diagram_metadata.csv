@@ -1,0 +1,2 @@
+material,n_k,negative_gap_threshold_meV,ivc_selection,ground_state_rule,vp_gap_rule,input_csv,n_grid_points,n_negative_total,n_negative_vp,n_negative_ivc,minimum_selected_indirect_gap_meV,maximum_selected_indirect_gap_meV
+WSe2_Taige,24,0.0,lowest_energy_clean_branch,IVC if E_IVC < E_VP; ties prefer VP,indirect gap of the lower-energy VP+ or VP- reference,results/wse2_ivc_hysteresis_finite_size_nk18_24_grid41_linear_interaction_recomputed_sharded/nk_024/hysteresis_sweep.csv,1681,188,111,77,-24.305059627729975,31.291596132890113
