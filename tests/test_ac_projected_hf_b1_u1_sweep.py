@@ -269,6 +269,10 @@ def test_ac_b1_u1_sweep_tiny_point_runs_overlap_response(tmp_path):
     assert row["active_band"] == 0
     assert row["n_ll"] == 1
     assert row["energy_unit"] == "hbar_omega_c"
+    assert (
+        row["density_form_factor_convention"]
+        == "magnetic_bloch_source_to_target_folded_q_plus_g_v1"
+    )
     assert np.isclose(
         row["vp_plus_gap_mev"],
         row["vp_plus_gap_over_omega_c"] * row["landau_level_spacing_mev"],

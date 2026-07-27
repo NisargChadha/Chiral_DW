@@ -33,6 +33,9 @@ from chiral_dw.continuum.models import (
 from chiral_dw.continuum.symmetry import mesh_inversion_map
 
 E2_MEV_NM = 1439.96454784255
+AC_DENSITY_FORM_FACTOR_CONVENTION = (
+    "magnetic_bloch_source_to_target_folded_q_plus_g_v1"
+)
 
 
 class C3SymmetrizedACBackend:
@@ -628,6 +631,7 @@ def build_ac_projected_bundle(
 
 
 __all__ = [
+    "AC_DENSITY_FORM_FACTOR_CONVENTION",
     "ACProjectedBandStructure",
     "build_ac_active_space",
     "build_ac_density_vertices",

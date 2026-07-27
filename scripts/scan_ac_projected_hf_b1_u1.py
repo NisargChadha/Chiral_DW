@@ -21,7 +21,10 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from chiral_dw.ac.projected import build_ac_projected_bundle  # noqa: E402
+from chiral_dw.ac.projected import (  # noqa: E402
+    AC_DENSITY_FORM_FACTOR_CONVENTION,
+    build_ac_projected_bundle,
+)
 from chiral_dw.ac.response import (  # noqa: E402
     ACBandOverlapProvider,
     ac_projector_chern,
@@ -822,6 +825,7 @@ def run_point(args: argparse.Namespace, output_root: Path, point: ACSweepPoint) 
         "q_shell": int(params.interaction.q_shell),
         "local_field_cutoff": int(params.interaction.local_field_cutoff),
         "density_vertex_scheme": params.density_vertex_scheme,
+        "density_form_factor_convention": AC_DENSITY_FORM_FACTOR_CONVENTION,
         "channel_candidate_count": int(channel_mask.size),
         "channel_active_count": int(np.count_nonzero(channel_mask)),
         "interaction_channel_c3_residual": channel_c3_residual,
@@ -977,6 +981,7 @@ def run_point(args: argparse.Namespace, output_root: Path, point: ACSweepPoint) 
             "band_diagnostics": band_diag,
             "reference_diagnostics": reference_rows,
             "active_space_convention": "one active AC band per valley; active_band selects the finite-LL band before HF",
+            "density_form_factor_convention": AC_DENSITY_FORM_FACTOR_CONVENTION,
         },
     )
     print(
