@@ -205,8 +205,14 @@ def test_ac_b2_u2_sweep_tiny_point_runs_overlap_response(tmp_path):
             "5",
             "--q-shell",
             "1",
+            "--q-mesh",
+            "full",
             "--local-field-cutoff",
             "1",
+            "--vertex-workers",
+            "2",
+            "--exchange-workers",
+            "2",
             "--max-iter",
             "220",
             "--min-iter",
@@ -231,6 +237,9 @@ def test_ac_b2_u2_sweep_tiny_point_runs_overlap_response(tmp_path):
     assert row["n_active_bands_per_valley"] == 1
     assert row["active_band"] == 0
     assert row["n_ll"] == 1
+    assert summary["params"]["interaction"]["q_mesh"] == "full"
+    assert summary["params"]["interaction"]["vertex_workers"] == 2
+    assert summary["params"]["interaction"]["exchange_workers"] == 2
     assert row["hf_all_converged"] is True
     assert row["reference_chern_valid"] is True
     assert row["response_status"] == "ok"

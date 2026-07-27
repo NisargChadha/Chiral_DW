@@ -140,6 +140,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--interaction-strength-scale", "--v0", dest="v0", type=float, default=0.2)
     parser.add_argument("--dimensionless-gate-distance", "--gate-distance", dest="gate_distance", type=float, default=2.0)
+    parser.add_argument("--q-mesh", choices=["shell", "full"], default="shell")
     parser.add_argument("--q-shell", type=int, default=1)
     parser.add_argument("--local-field-cutoff", type=int, default=1)
     parser.add_argument("--epsilon", type=float, default=16.7)
@@ -148,6 +149,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--omit-q0", action="store_true")
     parser.add_argument("--exchange-scale", type=float, default=1.0)
     parser.add_argument("--hartree-scale", type=float, default=1.0)
+    parser.add_argument("--vertex-workers", type=int, default=1)
+    parser.add_argument("--exchange-workers", type=int, default=1)
     parser.add_argument("--moire-length-nm", type=float, default=1.0)
     parser.add_argument("--energy-unit-mev", type=float, default=1.0)
 
@@ -249,6 +252,7 @@ def _params_for_point(args: argparse.Namespace, point: ACSweepPoint, point_dir: 
         coulomb_kind=args.coulomb_kind,
         v0=float(args.v0),
         gate_distance=float(args.gate_distance),
+        q_mesh=args.q_mesh,
         q_shell=int(args.q_shell),
         local_field_cutoff=int(args.local_field_cutoff),
         epsilon=float(args.epsilon),
@@ -257,6 +261,8 @@ def _params_for_point(args: argparse.Namespace, point: ACSweepPoint, point_dir: 
         smear_length_nm=float(args.smear_length_nm),
         exchange_scale=float(args.exchange_scale),
         hartree_scale=float(args.hartree_scale),
+        vertex_workers=int(args.vertex_workers),
+        exchange_workers=int(args.exchange_workers),
     )
     hf = ContinuumHFParams(
         n_occ_per_k=int(args.n_occ_per_k),
