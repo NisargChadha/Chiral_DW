@@ -13,12 +13,14 @@ from chiral_dw.config import (
     ContinuumInteractionParams,
     ContinuumModelParams,
 )
-from chiral_dw.continuum.hf import ContinuumHFBackend
+from chiral_dw.continuum.hf import ContinuumHFBackend, EnergyComponents
 from chiral_dw.continuum.momentum_channels import (
-    C3_RADIAL_Q_PLUS_G_V1,
+    C3_RADIAL_Q_PLUS_G_V2,
     c3_channel_index_map,
+    c3_mesh_index_map,
     c3_radial_channel_mask,
     hexagonal_q_shell,
+    inversion_channel_index_map,
     reciprocal_box,
 )
 from chiral_dw.continuum.models import (
@@ -31,6 +33,93 @@ from chiral_dw.continuum.models import (
 from chiral_dw.continuum.symmetry import mesh_inversion_map
 
 E2_MEV_NM = 1439.96454784255
+
+
+class C3SymmetrizedACBackend:
+    """C3 orbit average of an AC HF functional without constraining its density."""
+
+    def __init__(self, base: ContinuumHFBackend, grid: MomentumGrid) -> None:
+        self.base = base
+        self.grid = grid
+        self.c3_partner = c3_mesh_index_map(grid)
+        self.h0 = self._average_covariant_operator(base.h0)
+
+    def __getattr__(self, name: str):
+        return getattr(self.base, name)
+
+    def _rotate_blocks(self, blocks: np.ndarray, turns: int = 1) -> np.ndarray:
+        out = np.asarray(blocks, dtype=complex)
+        for _ in range(int(turns) % 3):
+            rotated = np.empty_like(out)
+            rotated[self.c3_partner] = out
+            out = rotated
+        return out
+
+    def _pull_back_blocks(self, blocks: np.ndarray, turns: int) -> np.ndarray:
+        return self._rotate_blocks(blocks, (-int(turns)) % 3)
+
+    def _average_covariant_operator(self, blocks: np.ndarray) -> np.ndarray:
+        return hermitize(
+            sum(self._rotate_blocks(blocks, turn) for turn in range(3)) / 3.0
+        )
+
+    def _average_hamiltonian_map(self, method_name: str, density: np.ndarray) -> np.ndarray:
+        terms = []
+        for turn in range(3):
+            rotated_density = self._rotate_blocks(density, turn)
+            rotated_hamiltonian = getattr(self.base, method_name)(rotated_density)
+            terms.append(self._pull_back_blocks(rotated_hamiltonian, turn))
+        return hermitize(sum(terms) / 3.0)
+
+    def hartree_hamiltonian(self, density: np.ndarray) -> np.ndarray:
+        return self._average_hamiltonian_map("hartree_hamiltonian", density)
+
+    def fock_hamiltonian(self, density: np.ndarray) -> np.ndarray:
+        return self._average_hamiltonian_map("fock_hamiltonian", density)
+
+    def hf_hamiltonian(self, P: np.ndarray) -> np.ndarray:
+        density = self.as_block_density(P)
+        Q = density - self.p_ref
+        return hermitize(self.h0 + self.hartree_hamiltonian(Q) + self.fock_hamiltonian(Q))
+
+    def interaction_components(self, Q: np.ndarray) -> tuple[float, float]:
+        density = self.as_block_density(Q)
+        components = [
+            self.base.interaction_components(self._rotate_blocks(density, turn))
+            for turn in range(3)
+        ]
+        return (
+            float(np.mean([row[0] for row in components])),
+            float(np.mean([row[1] for row in components])),
+        )
+
+    def interaction_energy(self, Q: np.ndarray) -> float:
+        hartree, fock = self.interaction_components(Q)
+        return float(hartree + fock)
+
+    def uniform_hartree_energy(self, Q: np.ndarray) -> float:
+        density = self.as_block_density(Q)
+        return float(
+            np.mean(
+                [
+                    self.base.uniform_hartree_energy(self._rotate_blocks(density, turn))
+                    for turn in range(3)
+                ]
+            )
+        )
+
+    def energy(self, P: np.ndarray) -> EnergyComponents:
+        density = self.as_block_density(P)
+        rows = [self.base.energy(self._rotate_blocks(density, turn)) for turn in range(3)]
+        return EnergyComponents(
+            total=float(np.mean([row.total for row in rows])),
+            one_body=float(np.mean([row.one_body for row in rows])),
+            hartree=float(np.mean([row.hartree for row in rows])),
+            fock=float(np.mean([row.fock for row in rows])),
+        )
+
+    def total_energy(self, P: np.ndarray) -> float:
+        return self.energy(P).total
 
 
 @dataclass(frozen=True)
@@ -306,35 +395,16 @@ def _up_form_factor(
     source: int,
     target: int,
     q_cart: np.ndarray,
-    g_total_cart: np.ndarray,
+    g_cart: np.ndarray,
 ) -> complex:
     c_source = active.band_vectors[int(source), 0, :, 0]
     c_target = active.band_vectors[int(target), 0, :, 0]
-    k_source = active.bands.k_points[int(source)]
     k_target = active.bands.k_points[int(target)]
-    matrix = model.density_form_factor_matrix(k_target, k_source, -q_cart + g_total_cart)
-    return complex(c_target.conj() @ matrix @ c_source)
-
-
-def _down_form_factor(
-    model: NonIdealACLLModel,
-    active: ContinuumActiveSpace,
-    *,
-    source: int,
-    target: int,
-    q_cart: np.ndarray,
-    g_total_cart: np.ndarray,
-) -> complex:
-    c_source = active.band_vectors[int(source), 1, :, 0]
-    c_target = active.band_vectors[int(target), 1, :, 0]
-    k_source = active.bands.k_points[int(source)]
-    k_target = active.bands.k_points[int(target)]
-    matrix = np.conj(
-        model.density_form_factor_matrix(
-            -k_target,
-            -k_source,
-            q_cart - g_total_cart,
-        )
+    k_source_unfolded = k_target - q_cart
+    matrix = model.density_form_factor_matrix(
+        k_target,
+        k_source_unfolded,
+        -q_cart - g_cart,
     )
     return complex(c_target.conj() @ matrix @ c_source)
 
@@ -362,33 +432,20 @@ def _ac_vertex_q_slab(
         q = q_list[iq]
         q_cart = _cart_from_coord(model, (q[0] / grid.n1, q[1] / grid.n2))
         for ik in range(grid.size):
-            source_coord, rec_shift = grid.shift_minus_q(grid.coord_of(ik), q)
+            source_coord, _ = grid.shift_minus_q(grid.coord_of(ik), q)
             source = grid.index_of(source_coord)
             target_minus_q[local_iq, ik] = source
-            rec_shift_cart = _cart_from_coord(model, rec_shift)
             for ig, g in enumerate(g_channels):
                 if not channel_in_disk[iq, ig]:
                     continue
-                # The unfolded source satisfies k_target-q = k_source+R.
-                # Rewriting the reference vertex
-                # M(k_target, k_target-q, -q+G) in the folded source basis
-                # therefore requires G_total=G-R, not G+R.
-                g_total = _cart_from_coord(model, g) - rec_shift_cart
+                g_cart = _cart_from_coord(model, g)
                 lambdas[local_iq, ig, ik, 0, 0] = _up_form_factor(
                     model,
                     active,
                     source=source,
                     target=ik,
                     q_cart=q_cart,
-                    g_total_cart=g_total,
-                )
-                lambdas[local_iq, ig, ik, 1, 1] = _down_form_factor(
-                    model,
-                    active,
-                    source=source,
-                    target=ik,
-                    q_cart=q_cart,
-                    g_total_cart=g_total,
+                    g_cart=g_cart,
                 )
     return int(q_start), target_minus_q, lambdas
 
@@ -466,6 +523,19 @@ def build_ac_density_vertices(
         target_minus_q[q_start:q_stop] = target_slab
         lambdas[q_start:q_stop] = lambda_slab
 
+    inversion_partner = inversion_channel_index_map(
+        grid,
+        q_list,
+        g_channels,
+        channel_in_disk,
+    )
+    momentum_inversion = mesh_inversion_map(grid)
+    for iq, ig in np.argwhere(channel_in_disk):
+        jq, jg = inversion_partner[iq, ig]
+        lambdas[iq, ig, :, 1, 1] = np.conj(
+            lambdas[jq, jg, momentum_inversion, 0, 0]
+        )
+
     q_vectors, q_norm, v_q, v_over_a = _interaction_arrays(
         model,
         grid,
@@ -501,7 +571,7 @@ def build_ac_projected_bundle(
     """Build a two-valley projected HF bundle from finite-LL AC bands."""
 
     controls = params or ACProjectedHFParams()
-    if controls.density_vertex_scheme != C3_RADIAL_Q_PLUS_G_V1:
+    if controls.density_vertex_scheme != C3_RADIAL_Q_PLUS_G_V2:
         raise ValueError(
             f"unsupported AC density vertex scheme {controls.density_vertex_scheme!r}"
         )
@@ -523,7 +593,8 @@ def build_ac_projected_bundle(
         moire_length_nm=controls.moire_length_nm,
         energy_unit_mev=controls.energy_unit_mev,
     )
-    backend = ContinuumHFBackend(active.h0, vertices, interaction_controls)
+    raw_backend = ContinuumHFBackend(active.h0, vertices, interaction_controls)
+    backend = C3SymmetrizedACBackend(raw_backend, momentum_grid)
     return ContinuumBundle(
         grid=active.grid,
         active=active,

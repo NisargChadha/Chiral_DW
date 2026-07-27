@@ -8,7 +8,7 @@ from typing import Protocol
 import numpy as np
 
 GridCoord = tuple[int, int]
-C3_RADIAL_Q_PLUS_G_V1 = "c3_radial_q_plus_g_v1"
+C3_RADIAL_Q_PLUS_G_V2 = "c3_radial_q_plus_g_orbit_symmetrized_v2"
 
 
 class _GridShape(Protocol):
@@ -127,6 +127,50 @@ def c3_channel_index_map(
         example = missing[0]
         raise ValueError(
             f"retained q+G domain is not C3 closed; "
+            f"{len(missing)} channels are missing, including {example[0]} -> {example[1]}"
+        )
+    return partner
+
+
+def inversion_channel_index_map(
+    grid: _GridShape,
+    q_list: Sequence[GridCoord],
+    g_channels: Sequence[GridCoord],
+    channel_mask: np.ndarray,
+) -> np.ndarray:
+    """Map every retained channel to the representative of ``-(q+G)``."""
+
+    if int(grid.n1) != int(grid.n2):
+        raise ValueError("inversion channel maps require n1 == n2")
+    mask = np.asarray(channel_mask, dtype=bool)
+    expected_shape = (len(q_list), len(g_channels))
+    if mask.shape != expected_shape:
+        raise ValueError(f"channel_mask must have shape {expected_shape}")
+
+    n = int(grid.n1)
+    lookup: dict[GridCoord, tuple[int, int]] = {}
+    for iq, (qi, qj) in enumerate(q_list):
+        for ig, (g1, g2) in enumerate(g_channels):
+            if not mask[iq, ig]:
+                continue
+            key = (int(qi) + n * int(g1), int(qj) + n * int(g2))
+            if key in lookup:
+                raise ValueError(f"duplicate retained q+G channel {key}")
+            lookup[key] = (iq, ig)
+
+    partner = np.full(mask.shape + (2,), -1, dtype=int)
+    missing: list[tuple[GridCoord, GridCoord]] = []
+    for key, (iq, ig) in lookup.items():
+        inverted = (-key[0], -key[1])
+        target = lookup.get(inverted)
+        if target is None:
+            missing.append((key, inverted))
+        else:
+            partner[iq, ig] = target
+    if missing:
+        example = missing[0]
+        raise ValueError(
+            f"retained q+G domain is not inversion closed; "
             f"{len(missing)} channels are missing, including {example[0]} -> {example[1]}"
         )
     return partner

@@ -32,14 +32,16 @@ from chiral_dw.continuum import (
     ValleyU1Constraint,
     active_basis_frames,
     build_symmetric_hf_references,
+    mesh_inversion_map,
     symmetric_convex_path,
 )
 from chiral_dw.continuum.momentum_channels import (
-    C3_RADIAL_Q_PLUS_G_V1,
+    C3_RADIAL_Q_PLUS_G_V2,
     c3_channel_index_map,
     c3_channel_value_residual,
     c3_radial_channel_mask,
     c3_spectrum_residual,
+    inversion_channel_index_map,
     reciprocal_box,
 )
 from chiral_dw.response import k_theta_from_projectors_with_basis
@@ -137,7 +139,7 @@ def test_ac_vertices_zero_excluded_channels_and_preserve_c3_weights():
         mask,
     )
 
-    assert params.density_vertex_scheme == C3_RADIAL_Q_PLUS_G_V1
+    assert params.density_vertex_scheme == C3_RADIAL_Q_PLUS_G_V2
     assert np.all(vertices.lambda_blocks[~mask] == 0.0)
     assert np.all(vertices.v_over_a[~mask] == 0.0)
     assert vertices.v_q is not None
@@ -162,7 +164,8 @@ def test_ac_folded_vertex_matches_reference_unfolded_formula():
     vertices = bundle.vertices
     q = (-2, 1)
     iq = vertices.q_shifts.index(q)
-    ig = vertices.g_channels.index((0, 0))
+    g = (1, 0)
+    ig = vertices.g_channels.index(g)
     target = bundle.grid.index_of((0, 2))
     source = int(vertices.target_minus_q[iq, target])
     k_target = bundle.bands.k_points[target]
@@ -170,6 +173,7 @@ def test_ac_folded_vertex_matches_reference_unfolded_formula():
         q[0] / bundle.grid.n1 * model.fields.G_shell[0]
         + q[1] / bundle.grid.n2 * model.fields.G_shell[1]
     )
+    g_cart = g[0] * model.fields.G_shell[0] + g[1] * model.fields.G_shell[1]
     k_source_unfolded = k_target - q_cart
     c_target = bundle.active.band_vectors[target, 0, :, 0]
     c_source = bundle.active.band_vectors[source, 0, :, 0]
@@ -178,12 +182,40 @@ def test_ac_folded_vertex_matches_reference_unfolded_formula():
         @ model.density_form_factor_matrix(
             k_target,
             k_source_unfolded,
-            -q_cart,
+            -q_cart - g_cart,
         )
         @ c_source
     )
 
     assert np.allclose(vertices.lambda_blocks[iq, ig, target, 0, 0], reference, atol=1e-12)
+
+
+def test_ac_down_vertices_are_exact_time_reversed_up_vertices():
+    base = _ideal_lll_params(n_k=6, n_theta=8)
+    params = base.model_copy(
+        update={
+            "interaction": base.interaction.model_copy(
+                update={"q_mesh": "full", "vertex_workers": 2}
+            )
+        }
+    )
+    bundle = build_ac_projected_bundle(params)
+    vertices = bundle.vertices
+    mask = np.asarray(vertices.channel_in_disk, dtype=bool)
+    partner = inversion_channel_index_map(
+        bundle.grid,
+        vertices.q_shifts,
+        vertices.g_channels,
+        mask,
+    )
+    momentum_inversion = mesh_inversion_map(bundle.grid)
+
+    for iq, ig in np.argwhere(mask):
+        jq, jg = partner[iq, ig]
+        expected = np.conj(
+            vertices.lambda_blocks[jq, jg, momentum_inversion, 0, 0]
+        )
+        assert np.allclose(vertices.lambda_blocks[iq, ig, :, 1, 1], expected, atol=1e-12)
 
 
 def test_c3_symmetric_vp_density_produces_c3_symmetric_ac_hf_spectrum():
@@ -205,6 +237,40 @@ def test_c3_symmetric_vp_density_produces_c3_symmetric_ac_hf_spectrum():
         jk = _c3_mesh_partner(bundle.grid, ik)
         assert np.allclose(spectrum[ik], spectrum[jk], atol=1e-10)
     assert c3_spectrum_residual(bundle.grid, h_hf) < 1e-10
+
+
+def test_ac_hf_functional_is_c3_covariant_without_projector_constraint():
+    base = _ideal_lll_params(n_k=6, n_theta=8)
+    params = base.model_copy(
+        update={
+            "interaction": base.interaction.model_copy(
+                update={"q_mesh": "full", "vertex_workers": 1}
+            )
+        }
+    )
+    bundle = build_ac_projected_bundle(params)
+    rng = np.random.default_rng(19)
+    density = np.empty_like(bundle.active.h0)
+    for ik in range(bundle.grid.size):
+        spinor = rng.normal(size=2) + 1j * rng.normal(size=2)
+        spinor /= np.linalg.norm(spinor)
+        density[ik] = np.outer(spinor, spinor.conj())
+
+    rotated = np.empty_like(density)
+    for ik in range(bundle.grid.size):
+        rotated[_c3_mesh_partner(bundle.grid, ik)] = density[ik]
+    H = bundle.backend.hf_hamiltonian(density)
+    H_rotated = bundle.backend.hf_hamiltonian(rotated)
+    expected_rotated_H = np.empty_like(H)
+    for ik in range(bundle.grid.size):
+        expected_rotated_H[_c3_mesh_partner(bundle.grid, ik)] = H[ik]
+
+    assert np.isclose(
+        bundle.backend.energy(density).total,
+        bundle.backend.energy(rotated).total,
+        atol=1e-11,
+    )
+    assert np.allclose(H_rotated, expected_rotated_H, atol=1e-11)
 
 
 def test_kahler_chi_solves_periodic_poisson_equation():
