@@ -268,6 +268,19 @@ def test_ac_b1_u1_sweep_tiny_point_runs_overlap_response(tmp_path):
     assert row["n_active_bands_per_valley"] == 1
     assert row["active_band"] == 0
     assert row["n_ll"] == 1
+    assert row["energy_unit"] == "hbar_omega_c"
+    assert np.isclose(
+        row["vp_plus_gap_mev"],
+        row["vp_plus_gap_over_omega_c"] * row["landau_level_spacing_mev"],
+    )
+    assert np.isclose(
+        row["min_direct_gap_mev"],
+        row["min_direct_gap_over_omega_c"] * row["landau_level_spacing_mev"],
+    )
+    assert np.isclose(
+        row["interaction_gap_ratio"],
+        row["characteristic_coulomb_to_active_band_gap_ratio"],
+    )
     assert row["hf_all_converged"] is True
     assert row["reference_chern_valid"] is True
     assert row["response_status"] == "ok"

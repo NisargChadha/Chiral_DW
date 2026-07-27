@@ -397,6 +397,7 @@ def _reference_result_rows(point: ACSweepPoint, params: ACProjectedHFParams, bun
     channel_diagnostics = reference_diagnostics(refs)
     rows: list[dict[str, Any]] = []
     norm = float(bundle.backend.n_blocks)
+    energy_unit_mev = float(params.energy_unit_mev)
     for key, label in names.items():
         result = getattr(refs, key)
         diag = result.diagnostics
@@ -407,11 +408,19 @@ def _reference_result_rows(point: ACSweepPoint, params: ACProjectedHFParams, bun
                 **point.as_row(),
                 "reference": label,
                 "energy": float(result.energy),
+                "energy_over_omega_c": float(result.energy),
+                "energy_mev": float(result.energy * energy_unit_mev),
                 "energy_per_cell": float(result.energy / norm),
+                "energy_per_cell_over_omega_c": float(result.energy / norm),
+                "energy_per_cell_mev": float(result.energy / norm * energy_unit_mev),
                 "converged": bool(result.converged),
                 "n_iter": int(result.n_iter),
                 "direct_gap_min": float(diag.direct_gap_min),
+                "direct_gap_min_over_omega_c": float(diag.direct_gap_min),
+                "direct_gap_min_mev": float(diag.direct_gap_min * energy_unit_mev),
                 "indirect_gap": float(diag.indirect_gap),
+                "indirect_gap_over_omega_c": float(diag.indirect_gap),
+                "indirect_gap_mev": float(diag.indirect_gap * energy_unit_mev),
                 "aufbau_residual_norm": float(diag.aufbau_residual_norm),
                 "commutator_norm": float(diag.commutator_norm),
                 "constraint_error": float(diag.constraint_error),
@@ -435,9 +444,16 @@ def _reference_result_rows(point: ACSweepPoint, params: ACProjectedHFParams, bun
     return rows
 
 
-def _path_rows(point: ACSweepPoint, bundle, projectors: np.ndarray, path_diagnostics) -> list[dict[str, Any]]:
+def _path_rows(
+    point: ACSweepPoint,
+    params: ACProjectedHFParams,
+    bundle,
+    projectors: np.ndarray,
+    path_diagnostics,
+) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     norm = float(bundle.backend.n_blocks)
+    energy_unit_mev = float(params.energy_unit_mev)
     for idx, (projector, diag) in enumerate(zip(projectors, path_diagnostics, strict=True)):
         energy = bundle.backend.energy(projector)
         rows.append(
@@ -450,13 +466,37 @@ def _path_rows(point: ACSweepPoint, bundle, projectors: np.ndarray, path_diagnos
                 "w_vp_minus": float(diag.w_vp_minus),
                 "w_ivc": float(diag.w_ivc),
                 "direct_gap_min": float(diag.direct_gap_min),
+                "direct_gap_min_over_omega_c": float(diag.direct_gap_min),
+                "direct_gap_min_mev": float(diag.direct_gap_min * energy_unit_mev),
                 "indirect_gap": float(diag.indirect_gap),
+                "indirect_gap_over_omega_c": float(diag.indirect_gap),
+                "indirect_gap_mev": float(diag.indirect_gap * energy_unit_mev),
                 "projector_idempotency_error_fro": float(diag.projector_idempotency_error_fro),
                 "projector_idempotency_error_max": float(diag.projector_idempotency_error_max),
                 "energy_total_per_cell": float(energy.total / norm),
+                "energy_total_per_cell_over_omega_c": float(energy.total / norm),
+                "energy_total_per_cell_mev": float(
+                    energy.total / norm * energy_unit_mev
+                ),
                 "energy_one_body_per_cell": float(energy.one_body / norm),
+                "energy_one_body_per_cell_over_omega_c": float(
+                    energy.one_body / norm
+                ),
+                "energy_one_body_per_cell_mev": float(
+                    energy.one_body / norm * energy_unit_mev
+                ),
                 "energy_hartree_per_cell": float(energy.hartree / norm),
+                "energy_hartree_per_cell_over_omega_c": float(
+                    energy.hartree / norm
+                ),
+                "energy_hartree_per_cell_mev": float(
+                    energy.hartree / norm * energy_unit_mev
+                ),
                 "energy_fock_per_cell": float(energy.fock / norm),
+                "energy_fock_per_cell_over_omega_c": float(energy.fock / norm),
+                "energy_fock_per_cell_mev": float(
+                    energy.fock / norm * energy_unit_mev
+                ),
             }
         )
     return rows
@@ -537,7 +577,11 @@ def _write_sweep_arrays(output_root: Path, rows: list[dict[str, Any]]) -> None:
         "cG": np.full(shape, np.nan, dtype=float),
         "bandwidth": np.full(shape, np.nan, dtype=float),
         "min_direct_gap": np.full(shape, np.nan, dtype=float),
+        "min_direct_gap_mev": np.full(shape, np.nan, dtype=float),
         "interaction_gap_ratio": np.full(shape, np.nan, dtype=float),
+        "characteristic_coulomb_to_active_band_gap_ratio": np.full(
+            shape, np.nan, dtype=float
+        ),
         "vp_plus_energy_per_cell": np.full(shape, np.nan, dtype=float),
         "vp_minus_energy_per_cell": np.full(shape, np.nan, dtype=float),
         "ivc_energy_per_cell": np.full(shape, np.nan, dtype=float),
@@ -680,7 +724,7 @@ def run_point(args: argparse.Namespace, output_root: Path, point: ACSweepPoint) 
             bundle.active.dim,
         )
         response = k_theta_from_ac_projectors(provider, projector_grid, theta_edges, phi_nodes)
-        path_rows = _path_rows(point, bundle, projectors, path_diagnostics)
+        path_rows = _path_rows(point, params, bundle, projectors, path_diagnostics)
         response_rows = _response_rows(point, response)
     elif not reference_chern_valid:
         response_status = "skipped_invalid_reference_chern"
@@ -736,7 +780,16 @@ def run_point(args: argparse.Namespace, output_root: Path, point: ACSweepPoint) 
     ]
     finite_q_interaction_scale = float(max(nonzero_channels)) if nonzero_channels else float("nan")
     min_direct_gap = float(band_diag.get("min_direct_gap", float("nan")))
-    interaction_gap_ratio = interaction_scale / max(min_direct_gap, 1e-15)
+    energy_unit_mev = float(params.energy_unit_mev)
+    min_direct_gap_mev = min_direct_gap * energy_unit_mev
+    characteristic_coulomb_to_active_band_gap_ratio = (
+        float(continuum_match.characteristic_coulomb_mev)
+        / max(min_direct_gap_mev, 1e-15)
+    )
+    active_band_projection_valid = bool(
+        np.isfinite(characteristic_coulomb_to_active_band_gap_ratio)
+        and characteristic_coulomb_to_active_band_gap_ratio < 1.0
+    )
     vp_best_per_cell = min(float(refs.vp_plus.energy), float(refs.vp_minus.energy)) / float(bundle.backend.n_blocks)
     ivc_per_cell = float(refs.ivc.energy / bundle.backend.n_blocks)
     path_gap_min = float("nan")
@@ -779,6 +832,7 @@ def run_point(args: argparse.Namespace, output_root: Path, point: ACSweepPoint) 
         "vertex_workers": int(params.interaction.vertex_workers),
         "exchange_workers": int(params.interaction.exchange_workers),
         "moire_length_nm": float(params.moire_length_nm),
+        "energy_unit": "hbar_omega_c",
         "landau_level_spacing_mev": float(params.energy_unit_mev),
         "characteristic_coulomb_mev": float(
             continuum_match.characteristic_coulomb_mev
@@ -787,21 +841,63 @@ def run_point(args: argparse.Namespace, output_root: Path, point: ACSweepPoint) 
             continuum_match.characteristic_coulomb_to_ll_ratio
         ),
         "interaction_scale": interaction_scale,
+        "max_channel_weight_over_omega_c": interaction_scale,
         "finite_q_interaction_scale": finite_q_interaction_scale,
-        "interaction_gap_ratio": float(interaction_gap_ratio),
+        "finite_q_max_channel_weight_over_omega_c": finite_q_interaction_scale,
+        "interaction_gap_ratio": float(
+            characteristic_coulomb_to_active_band_gap_ratio
+        ),
+        "characteristic_coulomb_to_active_band_gap_ratio": float(
+            characteristic_coulomb_to_active_band_gap_ratio
+        ),
+        "active_band_projection_valid": active_band_projection_valid,
         "bandwidth": float(band_diag.get("bandwidth", float("nan"))),
+        "bandwidth_over_omega_c": float(
+            band_diag.get("bandwidth", float("nan"))
+        ),
+        "bandwidth_mev": float(
+            band_diag.get("bandwidth", float("nan")) * energy_unit_mev
+        ),
         "min_direct_gap": min_direct_gap,
+        "min_direct_gap_over_omega_c": min_direct_gap,
+        "min_direct_gap_mev": min_direct_gap_mev,
         "band_chern": float(band_diag.get("chern", float("nan"))),
         "berry_min": float(band_diag.get("berry_min", float("nan"))),
         "berry_max": float(band_diag.get("berry_max", float("nan"))),
         "berry_std": float(band_diag.get("berry_std", float("nan"))),
         "vp_plus_energy": float(refs.vp_plus.energy),
+        "vp_plus_energy_over_omega_c": float(refs.vp_plus.energy),
+        "vp_plus_energy_mev": float(refs.vp_plus.energy * energy_unit_mev),
         "vp_minus_energy": float(refs.vp_minus.energy),
+        "vp_minus_energy_over_omega_c": float(refs.vp_minus.energy),
+        "vp_minus_energy_mev": float(refs.vp_minus.energy * energy_unit_mev),
         "ivc_energy": float(refs.ivc.energy),
+        "ivc_energy_over_omega_c": float(refs.ivc.energy),
+        "ivc_energy_mev": float(refs.ivc.energy * energy_unit_mev),
         "vp_plus_energy_per_cell": float(refs.vp_plus.energy / bundle.backend.n_blocks),
+        "vp_plus_energy_per_cell_over_omega_c": float(
+            refs.vp_plus.energy / bundle.backend.n_blocks
+        ),
+        "vp_plus_energy_per_cell_mev": float(
+            refs.vp_plus.energy / bundle.backend.n_blocks * energy_unit_mev
+        ),
         "vp_minus_energy_per_cell": float(refs.vp_minus.energy / bundle.backend.n_blocks),
+        "vp_minus_energy_per_cell_over_omega_c": float(
+            refs.vp_minus.energy / bundle.backend.n_blocks
+        ),
+        "vp_minus_energy_per_cell_mev": float(
+            refs.vp_minus.energy / bundle.backend.n_blocks * energy_unit_mev
+        ),
         "ivc_energy_per_cell": ivc_per_cell,
+        "ivc_energy_per_cell_over_omega_c": ivc_per_cell,
+        "ivc_energy_per_cell_mev": float(ivc_per_cell * energy_unit_mev),
         "ivc_minus_best_vp_energy_per_cell": float(ivc_per_cell - vp_best_per_cell),
+        "ivc_minus_best_vp_energy_per_cell_over_omega_c": float(
+            ivc_per_cell - vp_best_per_cell
+        ),
+        "ivc_minus_best_vp_energy_per_cell_mev": float(
+            (ivc_per_cell - vp_best_per_cell) * energy_unit_mev
+        ),
         "vp_plus_converged": bool(refs.vp_plus.converged),
         "vp_minus_converged": bool(refs.vp_minus.converged),
         "ivc_converged": bool(refs.ivc.converged),
@@ -810,8 +906,42 @@ def run_point(args: argparse.Namespace, output_root: Path, point: ACSweepPoint) 
         "vp_minus_n_iter": int(refs.vp_minus.n_iter),
         "ivc_n_iter": int(refs.ivc.n_iter),
         "vp_plus_gap": float(refs.vp_plus.diagnostics.direct_gap_min),
+        "vp_plus_gap_over_omega_c": float(
+            refs.vp_plus.diagnostics.direct_gap_min
+        ),
+        "vp_plus_gap_mev": float(
+            refs.vp_plus.diagnostics.direct_gap_min * energy_unit_mev
+        ),
         "vp_minus_gap": float(refs.vp_minus.diagnostics.direct_gap_min),
+        "vp_minus_gap_over_omega_c": float(
+            refs.vp_minus.diagnostics.direct_gap_min
+        ),
+        "vp_minus_gap_mev": float(
+            refs.vp_minus.diagnostics.direct_gap_min * energy_unit_mev
+        ),
         "ivc_gap": float(refs.ivc.diagnostics.direct_gap_min),
+        "ivc_gap_over_omega_c": float(refs.ivc.diagnostics.direct_gap_min),
+        "ivc_gap_mev": float(
+            refs.ivc.diagnostics.direct_gap_min * energy_unit_mev
+        ),
+        "vp_plus_indirect_gap_over_omega_c": float(
+            refs.vp_plus.diagnostics.indirect_gap
+        ),
+        "vp_plus_indirect_gap_mev": float(
+            refs.vp_plus.diagnostics.indirect_gap * energy_unit_mev
+        ),
+        "vp_minus_indirect_gap_over_omega_c": float(
+            refs.vp_minus.diagnostics.indirect_gap
+        ),
+        "vp_minus_indirect_gap_mev": float(
+            refs.vp_minus.diagnostics.indirect_gap * energy_unit_mev
+        ),
+        "ivc_indirect_gap_over_omega_c": float(
+            refs.ivc.diagnostics.indirect_gap
+        ),
+        "ivc_indirect_gap_mev": float(
+            refs.ivc.diagnostics.indirect_gap * energy_unit_mev
+        ),
         "vp_plus_residual": float(refs.vp_plus.diagnostics.aufbau_residual_norm),
         "vp_minus_residual": float(refs.vp_minus.diagnostics.aufbau_residual_norm),
         "ivc_residual": float(refs.ivc.diagnostics.aufbau_residual_norm),
