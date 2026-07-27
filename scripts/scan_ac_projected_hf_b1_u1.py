@@ -701,6 +701,18 @@ def run_point(args: argparse.Namespace, output_root: Path, point: ACSweepPoint) 
         K=np.asarray(response.K, dtype=float),
         cG=np.asarray(response.cG, dtype=float),
     )
+    np.savez_compressed(
+        point_dir / "reference_states.npz",
+        active_h0=np.asarray(bundle.active.h0, dtype=complex),
+        k_fractional=np.asarray(bundle.bands.k_fractional, dtype=float),
+        k_points=np.asarray(bundle.bands.k_points, dtype=float),
+        vp_plus_P=np.asarray(refs.vp_plus.P, dtype=complex),
+        vp_plus_H_hf=np.asarray(refs.vp_plus.H_hf, dtype=complex),
+        vp_minus_P=np.asarray(refs.vp_minus.P, dtype=complex),
+        vp_minus_H_hf=np.asarray(refs.vp_minus.H_hf, dtype=complex),
+        ivc_P=np.asarray(refs.ivc.P, dtype=complex),
+        ivc_H_hf=np.asarray(refs.ivc.H_hf, dtype=complex),
+    )
 
     band_diag = bundle.bands.diagnostics if bundle.bands is not None else {}
     channel_mask = np.asarray(bundle.vertices.channel_in_disk, dtype=bool)

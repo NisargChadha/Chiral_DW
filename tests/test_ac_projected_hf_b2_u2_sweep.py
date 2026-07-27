@@ -239,6 +239,7 @@ def test_ac_b2_u2_sweep_tiny_point_runs_overlap_response(tmp_path):
     assert abs(row["chern_vp_minus"] + 1.0) < 5e-3
     assert abs(row["chern_ivc"]) < 5e-3
     assert (point_dir / "response.npz").exists()
+    assert (point_dir / "reference_states.npz").exists()
     assert len(list(csv.DictReader((point_dir / "hf_chern_numbers.csv").open()))) == 3
     assert (output_root / "sweep.csv").exists()
 
