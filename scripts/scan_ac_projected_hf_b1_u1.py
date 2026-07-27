@@ -589,6 +589,14 @@ def _write_sweep_arrays(output_root: Path, rows: list[dict[str, Any]]) -> None:
         "vp_minus_energy_per_cell": np.full(shape, np.nan, dtype=float),
         "ivc_energy_per_cell": np.full(shape, np.nan, dtype=float),
         "ivc_minus_best_vp_energy_per_cell": np.full(shape, np.nan, dtype=float),
+        "vp_plus_gap_mev": np.full(shape, np.nan, dtype=float),
+        "vp_plus_indirect_gap_mev": np.full(shape, np.nan, dtype=float),
+        "vp_minus_gap_mev": np.full(shape, np.nan, dtype=float),
+        "vp_minus_indirect_gap_mev": np.full(shape, np.nan, dtype=float),
+        "ivc_gap_mev": np.full(shape, np.nan, dtype=float),
+        "ivc_indirect_gap_mev": np.full(shape, np.nan, dtype=float),
+        "path_direct_gap_min_mev": np.full(shape, np.nan, dtype=float),
+        "path_indirect_gap_min_mev": np.full(shape, np.nan, dtype=float),
         "chern_vp_plus": np.full(shape, np.nan, dtype=float),
         "chern_vp_minus": np.full(shape, np.nan, dtype=float),
         "chern_ivc": np.full(shape, np.nan, dtype=float),
@@ -795,10 +803,16 @@ def run_point(args: argparse.Namespace, output_root: Path, point: ACSweepPoint) 
     )
     vp_best_per_cell = min(float(refs.vp_plus.energy), float(refs.vp_minus.energy)) / float(bundle.backend.n_blocks)
     ivc_per_cell = float(refs.ivc.energy / bundle.backend.n_blocks)
-    path_gap_min = float("nan")
+    path_direct_gap_min = float("nan")
+    path_indirect_gap_min = float("nan")
     path_idempotency_max = float("nan")
     if path_diagnostics is not None:
-        path_gap_min = float(np.min([row.direct_gap_min for row in path_diagnostics]))
+        path_direct_gap_min = float(
+            np.min([row.direct_gap_min for row in path_diagnostics])
+        )
+        path_indirect_gap_min = float(
+            np.min([row.indirect_gap for row in path_diagnostics])
+        )
         path_idempotency_max = float(np.max([row.projector_idempotency_error_max for row in path_diagnostics]))
     elapsed = time.perf_counter() - start
     row = {
@@ -967,7 +981,13 @@ def run_point(args: argparse.Namespace, output_root: Path, point: ACSweepPoint) 
         "cG": float(response.cG),
         "K_min": float(np.nanmin(response.K)) if np.any(np.isfinite(response.K)) else float("nan"),
         "K_max": float(np.nanmax(response.K)) if np.any(np.isfinite(response.K)) else float("nan"),
-        "path_gap_min": path_gap_min,
+        "path_gap_min": path_direct_gap_min,
+        "path_direct_gap_min_over_omega_c": path_direct_gap_min,
+        "path_direct_gap_min_mev": float(path_direct_gap_min * energy_unit_mev),
+        "path_indirect_gap_min_over_omega_c": path_indirect_gap_min,
+        "path_indirect_gap_min_mev": float(
+            path_indirect_gap_min * energy_unit_mev
+        ),
         "path_projector_idempotency_error_max": path_idempotency_max,
         "point_dir": str(point_dir),
     }

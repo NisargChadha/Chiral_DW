@@ -1,7 +1,8 @@
 #!/bin/bash
 #SBATCH -J ac_b1u1_cG
 #SBATCH -p serial_requeue
-#SBATCH --array=0-725%24
+# 4 momentum meshes * 11 * 11 (B1,U1) points = 484 array tasks.
+#SBATCH --array=0-483%24
 #SBATCH -t 24:00:00
 #SBATCH -c 4
 #SBATCH --mem=24G
@@ -27,7 +28,7 @@ mkdir -p logs
 
 # Override any value with:
 # sbatch --export=ALL,NAME=value jobs/scan_ac_projected_hf_b1_u1_array.sh
-OUTPUT_ROOT=${OUTPUT_ROOT:-"results/ac_b1_u1_cg_taige_dual_gate_eps4_nll8_grid11_nk15_30"}
+OUTPUT_ROOT=${OUTPUT_ROOT:-"results/ac_b1_u1_cg_dual_gate_eps4_nll8_grid11_nk15_24"}
 
 B1_MIN=${B1_MIN:-"-0.1"}
 B1_MAX=${B1_MAX:-"0.1"}
@@ -38,7 +39,7 @@ N_U1=${N_U1:-"11"}
 
 N_LL=${N_LL:-"8"}
 ACTIVE_BAND=${ACTIVE_BAND:-"0"}
-N_K_LIST=${N_K_LIST:-"15,18,21,24,27,30"}
+N_K_LIST=${N_K_LIST:-"15,18,21,24"}
 
 COULOMB_KIND=${COULOMB_KIND:-"dual_gate"}
 V0=${V0:-"0.1"}
@@ -173,5 +174,6 @@ echo "Resources: cpus=${SLURM_CPUS_PER_TASK:-unset} vertex_workers=${VERTEX_WORK
   --no-write-plan \
   --skip-existing
 
-echo "Task ${GLOBAL_TASK_ID} complete. After one mesh finishes, merge with:"
+echo "Task ${GLOBAL_TASK_ID} complete. After the array finishes, merge each mesh with:"
 echo "${PYTHON_BIN} scripts/scan_ac_projected_hf_b1_u1.py --output-root ${MESH_OUTPUT_ROOT} --merge-only"
+echo "The merged sweep.csv contains cG and VP/IVC gap summaries; sweep_path_theta_edges.csv contains every interpolated-path direct and indirect gap."

@@ -224,6 +224,9 @@ def test_ac_b1_u1_sweep_merge_only_collects_point_summaries(tmp_path):
     arrays = np.load(output_root / "sweep_arrays.npz")
     assert arrays["cG"][0, 0] == -0.05
     assert arrays["chern_vp_plus"][0, 0] == 1.0
+    assert "vp_plus_gap_mev" in arrays
+    assert "ivc_indirect_gap_mev" in arrays
+    assert "path_indirect_gap_min_mev" in arrays
 
 
 def test_ac_b1_u1_sweep_tiny_point_runs_overlap_response(tmp_path):
@@ -285,6 +288,20 @@ def test_ac_b1_u1_sweep_tiny_point_runs_overlap_response(tmp_path):
         row["interaction_gap_ratio"],
         row["characteristic_coulomb_to_active_band_gap_ratio"],
     )
+    assert np.isclose(
+        row["path_gap_min"],
+        row["path_direct_gap_min_over_omega_c"],
+    )
+    assert np.isclose(
+        row["path_direct_gap_min_mev"],
+        row["path_direct_gap_min_over_omega_c"]
+        * row["landau_level_spacing_mev"],
+    )
+    assert np.isclose(
+        row["path_indirect_gap_min_mev"],
+        row["path_indirect_gap_min_over_omega_c"]
+        * row["landau_level_spacing_mev"],
+    )
     assert row["hf_all_converged"] is True
     assert row["reference_chern_valid"] is True
     assert row["response_status"] == "ok"
@@ -298,9 +315,9 @@ def test_ac_b1_u1_sweep_tiny_point_runs_overlap_response(tmp_path):
     assert (output_root / "sweep.csv").exists()
 
 
-def test_ac_b1_u1_sweep_job_maps_six_meshes_and_uses_multicore_physical_dual_gate():
+def test_ac_b1_u1_sweep_job_maps_four_meshes_and_uses_multicore_physical_dual_gate():
     text = JOB.read_text()
-    assert "#SBATCH --array=0-725%24" in text
+    assert "#SBATCH --array=0-483%24" in text
     assert "#SBATCH -c 4" in text
     assert "#SBATCH --mem=24G" in text
     assert "SLURM_ARRAY_TASK_ID" in text
@@ -313,7 +330,7 @@ def test_ac_b1_u1_sweep_job_maps_six_meshes_and_uses_multicore_physical_dual_gat
     assert 'N_U1=${N_U1:-"11"}' in text
     assert 'N_LL=${N_LL:-"8"}' in text
     assert 'ACTIVE_BAND=${ACTIVE_BAND:-"0"}' in text
-    assert 'N_K_LIST=${N_K_LIST:-"15,18,21,24,27,30"}' in text
+    assert 'N_K_LIST=${N_K_LIST:-"15,18,21,24"}' in text
     assert 'COULOMB_KIND=${COULOMB_KIND:-"dual_gate"}' in text
     assert 'Q_MESH=${Q_MESH:-"full"}' in text
     assert 'V0=${V0:-"0.1"}' in text
