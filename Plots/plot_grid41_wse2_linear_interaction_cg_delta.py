@@ -52,6 +52,7 @@ FONTS = {
     "axis_label": 24,
     "tick_label": 20,
     "legend": 18,
+    "phase_label": 20,
     "colorbar_label": 26,
     "colorbar_tick": 20,
 }
@@ -91,6 +92,12 @@ LINE_STYLES = {
     "vp_chern": {"linestyle": "--", "linewidth": 2.25, "zorder": 9},
     "vp_ivc": {"linestyle": "-", "linewidth": 2.1, "zorder": 10},
 }
+
+CROPPED_PHASE_LABELS = (
+    {"text": "VP\n$C=0$", "theta_deg": 2.30, "u_D_meV": 10.5},
+    {"text": "VP\n$C=1$", "theta_deg": 3.38, "u_D_meV": 3.0},
+    {"text": "IVC", "theta_deg": 3.40, "u_D_meV": 17.0},
+)
 
 
 def _apply_style() -> None:
@@ -399,6 +406,22 @@ def _box_axes(ax: plt.Axes) -> None:
         spine.set_linewidth(AXES["spine_linewidth"])
 
 
+def _add_phase_labels(ax: plt.Axes, labels: tuple[dict[str, object], ...]) -> None:
+    for label in labels:
+        ax.text(
+            float(label["theta_deg"]),
+            float(label["u_D_meV"]),
+            str(label["text"]),
+            ha="center",
+            va="center",
+            fontsize=FONTS["phase_label"],
+            fontweight="normal",
+            linespacing=0.9,
+            color="black",
+            zorder=12,
+        )
+
+
 def _boundary_masks(heat: pd.DataFrame, theta_vals: np.ndarray, u_vals: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     ivc_large = _grid(heat, theta_vals, u_vals, "ivc_large_gap_region_nk24").astype(float)
     vp_topo = _grid(heat, theta_vals, u_vals, "vp_topological_region_nk24").astype(float)
@@ -568,6 +591,7 @@ def _plot_single_cg_cropped(heat: pd.DataFrame) -> list[Path]:
     ax.set_xticks(
         [tick for tick in AXES["xticks"] if theta_vals.min() <= tick <= SINGLE_CROPPED_THETA_MAX_DEG]
     )
+    _add_phase_labels(ax, CROPPED_PHASE_LABELS)
     return _save(fig, SINGLE_CROPPED_OUTPUT_STEM)
 
 
