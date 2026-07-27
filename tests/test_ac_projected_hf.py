@@ -150,7 +150,7 @@ def test_ac_vertices_zero_excluded_channels_and_preserve_c3_weights():
         assert np.isclose(vertices.v_q[iq, ig], vertices.v_q[jq, jg], atol=1e-13)
 
 
-def test_ac_folded_vertex_matches_reference_unfolded_formula():
+def test_ac_folded_vertex_matches_source_to_target_reference_formula():
     base = _ideal_lll_params(n_k=6, n_theta=8)
     params = base.model_copy(
         update={
@@ -168,26 +168,109 @@ def test_ac_folded_vertex_matches_reference_unfolded_formula():
     ig = vertices.g_channels.index(g)
     target = bundle.grid.index_of((0, 2))
     source = int(vertices.target_minus_q[iq, target])
-    k_target = bundle.bands.k_points[target]
-    q_cart = (
-        q[0] / bundle.grid.n1 * model.fields.G_shell[0]
-        + q[1] / bundle.grid.n2 * model.fields.G_shell[1]
+    source_coord, source_shift = bundle.grid.shift_minus_q(
+        bundle.grid.coord_of(target),
+        q,
     )
-    g_cart = g[0] * model.fields.G_shell[0] + g[1] * model.fields.G_shell[1]
-    k_source_unfolded = k_target - q_cart
+    assert source == bundle.grid.index_of(source_coord)
+    k_source = bundle.bands.k_points[source]
+    k_target = bundle.bands.k_points[target]
+    g_effective = (
+        source_shift[0] - g[0],
+        source_shift[1] - g[1],
+    )
+    g_effective_cart = (
+        g_effective[0] * model.fields.G_shell[0]
+        + g_effective[1] * model.fields.G_shell[1]
+    )
     c_target = bundle.active.band_vectors[target, 0, :, 0]
     c_source = bundle.active.band_vectors[source, 0, :, 0]
     reference = (
-        c_target.conj()
+        c_source.conj()
         @ model.density_form_factor_matrix(
+            k_source,
             k_target,
-            k_source_unfolded,
-            -q_cart - g_cart,
+            g_effective_cart,
         )
-        @ c_source
+        @ c_target
     )
 
     assert np.allclose(vertices.lambda_blocks[iq, ig, target, 0, 0], reference, atol=1e-12)
+
+
+def test_ideal_lll_vertices_have_exact_gaussian_q_plus_g_magnitude():
+    base = _ideal_lll_params(n_k=6, n_theta=8)
+    params = base.model_copy(
+        update={
+            "interaction": base.interaction.model_copy(
+                update={"q_mesh": "full", "vertex_workers": 1}
+            )
+        }
+    )
+    bundle = build_ac_projected_bundle(params)
+    model = bundle.form_factors
+    vertices = bundle.vertices
+
+    for iq, q in enumerate(vertices.q_shifts):
+        q_cart = (
+            q[0] / bundle.grid.n1 * model.fields.G_shell[0]
+            + q[1] / bundle.grid.n2 * model.fields.G_shell[1]
+        )
+        for ig, g in enumerate(vertices.g_channels):
+            if not vertices.channel_in_disk[iq, ig]:
+                continue
+            g_cart = g[0] * model.fields.G_shell[0] + g[1] * model.fields.G_shell[1]
+            physical_q = q_cart + g_cart
+            expected = np.exp(-model.l2 * np.dot(physical_q, physical_q) / 4.0)
+            actual = np.abs(vertices.lambda_blocks[iq, ig, :, 0, 0])
+            assert np.allclose(actual, expected, atol=1e-12)
+
+
+def test_nonideal_ac_vertices_are_hermitian_and_c3_covariant_in_magnitude():
+    base = _ideal_lll_params(n_k=6, n_theta=8)
+    params = base.model_copy(
+        update={
+            "ac": FirstShellACParams(b1=0.1, u1=0.1, n_ll=4),
+            "interaction": base.interaction.model_copy(
+                update={"q_mesh": "full", "vertex_workers": 1}
+            ),
+        }
+    )
+    bundle = build_ac_projected_bundle(params)
+    vertices = bundle.vertices
+    mask = np.asarray(vertices.channel_in_disk, dtype=bool)
+    inversion = inversion_channel_index_map(
+        bundle.grid,
+        vertices.q_shifts,
+        vertices.g_channels,
+        mask,
+    )
+    rotation = c3_channel_index_map(
+        bundle.grid,
+        vertices.q_shifts,
+        vertices.g_channels,
+        mask,
+    )
+    c3_momentum = np.asarray(
+        [_c3_mesh_partner(bundle.grid, ik) for ik in range(bundle.grid.size)]
+    )
+
+    for iq, ig in np.argwhere(mask):
+        jq, jg = inversion[iq, ig]
+        for target in range(bundle.grid.size):
+            source = int(vertices.target_minus_q[iq, target])
+            assert np.allclose(
+                vertices.lambda_blocks[iq, ig, target, 0, 0],
+                np.conj(vertices.lambda_blocks[jq, jg, source, 0, 0]),
+                atol=1e-12,
+            )
+
+        rq, rg = rotation[iq, ig]
+        assert np.allclose(
+            np.abs(vertices.lambda_blocks[iq, ig, :, 0, 0]),
+            np.abs(vertices.lambda_blocks[rq, rg, c3_momentum, 0, 0]),
+            atol=1e-12,
+        )
 
 
 def test_ac_down_vertices_are_exact_time_reversed_up_vertices():

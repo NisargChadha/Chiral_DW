@@ -394,19 +394,40 @@ def _up_form_factor(
     *,
     source: int,
     target: int,
-    q_cart: np.ndarray,
-    g_cart: np.ndarray,
+    source_shift: tuple[int, int],
+    g_channel: tuple[int, int],
 ) -> complex:
+    """Return the scalar hole vertex for physical momentum ``q+G``.
+
+    ``density_form_factor_matrix(k, p, G)`` uses the source-to-target
+    magnetic-Bloch convention
+
+    ``<u_k|exp(i G.r)|u_p>``.
+
+    If ``target-q = source+source_shift`` on the finite momentum torus, the
+    unfolded target is obtained from the stored target by the reciprocal
+    shift ``-source_shift``.  In the LL convention the physical local-field
+    image ``q+G`` therefore enters the stored source/target overlap as the
+    reciprocal argument ``source_shift-G``.  Keeping this folding shift is
+    essential: in the ideal LLL it gives
+    ``|Lambda(q,G)| = exp(-l_B^2 |q+G|^2 / 4)`` and preserves
+    ``rho(q+G)^dagger = rho(-q-G)`` across Brillouin-zone boundaries.
+    """
+
     c_source = active.band_vectors[int(source), 0, :, 0]
     c_target = active.band_vectors[int(target), 0, :, 0]
+    k_source = active.bands.k_points[int(source)]
     k_target = active.bands.k_points[int(target)]
-    k_source_unfolded = k_target - q_cart
-    matrix = model.density_form_factor_matrix(
-        k_target,
-        k_source_unfolded,
-        -q_cart - g_cart,
+    g_effective = (
+        int(source_shift[0]) - int(g_channel[0]),
+        int(source_shift[1]) - int(g_channel[1]),
     )
-    return complex(c_target.conj() @ matrix @ c_source)
+    matrix = model.density_form_factor_matrix(
+        k_source,
+        k_target,
+        _cart_from_coord(model, g_effective),
+    )
+    return complex(c_source.conj() @ matrix @ c_target)
 
 
 def _ac_vertex_q_slab(
@@ -430,22 +451,20 @@ def _ac_vertex_q_slab(
     )
     for local_iq, iq in enumerate(range(int(q_start), int(q_stop))):
         q = q_list[iq]
-        q_cart = _cart_from_coord(model, (q[0] / grid.n1, q[1] / grid.n2))
         for ik in range(grid.size):
-            source_coord, _ = grid.shift_minus_q(grid.coord_of(ik), q)
+            source_coord, source_shift = grid.shift_minus_q(grid.coord_of(ik), q)
             source = grid.index_of(source_coord)
             target_minus_q[local_iq, ik] = source
             for ig, g in enumerate(g_channels):
                 if not channel_in_disk[iq, ig]:
                     continue
-                g_cart = _cart_from_coord(model, g)
                 lambdas[local_iq, ig, ik, 0, 0] = _up_form_factor(
                     model,
                     active,
                     source=source,
                     target=ik,
-                    q_cart=q_cart,
-                    g_cart=g_cart,
+                    source_shift=source_shift,
+                    g_channel=g,
                 )
     return int(q_start), target_minus_q, lambdas
 
