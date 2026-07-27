@@ -64,6 +64,9 @@ optional physical conversion divides charge density by `a_M^2`.
    - Maintain the finite-LL nonideal AC backend, projected physical energies,
      source-field projectors, `K(theta)`, dimensionless `cG`, and radial charge
      profiles.
+   - Regulate projected interaction channels with a C3-invariant radial cutoff
+     on the combined physical momentum `q+G`; do not use the candidate
+     reciprocal box itself as the physical cutoff.
 
 4. **Native Continuum HF**
    - Implement Chiral_DW-native active-space construction, density vertices,

@@ -448,6 +448,7 @@ class ACProjectedHFParams(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
+    density_vertex_scheme: Literal["c3_radial_q_plus_g_v1"] = "c3_radial_q_plus_g_v1"
     grid: ContinuumGridParams = Field(default_factory=lambda: ContinuumGridParams(n_k=5))
     ac: FirstShellACParams | FourierACParams | TMoTe2ACParams = Field(
         default_factory=lambda: FirstShellACParams(b1=0.2, u1=0.05, n_ll=5)

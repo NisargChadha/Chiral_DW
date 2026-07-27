@@ -34,6 +34,14 @@ from chiral_dw.continuum import (
     build_symmetric_hf_references,
     symmetric_convex_path,
 )
+from chiral_dw.continuum.momentum_channels import (
+    C3_RADIAL_Q_PLUS_G_V1,
+    c3_channel_index_map,
+    c3_channel_value_residual,
+    c3_radial_channel_mask,
+    c3_spectrum_residual,
+    reciprocal_box,
+)
 from chiral_dw.response import k_theta_from_projectors_with_basis
 
 
@@ -85,6 +93,120 @@ def _uniform_vp_ivc_path(theta_edges: np.ndarray, n_k: int) -> np.ndarray:
     return projectors
 
 
+def _full_q_list(n_k: int) -> tuple[tuple[int, int], ...]:
+    axis = [i if i <= n_k // 2 else i - n_k for i in range(n_k)]
+    return tuple((i, j) for i in axis for j in axis)
+
+
+def _c3_mesh_partner(grid: MomentumGrid, ik: int) -> int:
+    i, j = grid.coord_of(ik)
+    return grid.index_of(((-i - j) % grid.n1, i % grid.n2))
+
+
+def test_c3_radial_q_plus_g_domain_is_closed_on_requested_meshes():
+    g_channels = reciprocal_box(1)
+    for n_k in (15, 18, 21, 24, 27, 30):
+        grid = MomentumGrid(n_k)
+        q_list = _full_q_list(n_k)
+        mask = c3_radial_channel_mask(grid, q_list, g_channels, 1)
+        partner = c3_channel_index_map(grid, q_list, g_channels, mask)
+
+        assert np.any(mask)
+        assert not np.all(mask)
+        assert np.all(partner[mask] >= 0)
+        third = partner[partner[..., 0], partner[..., 1]]
+        third = partner[third[..., 0], third[..., 1]]
+        assert np.array_equal(third[mask], np.argwhere(mask))
+
+
+def test_ac_vertices_zero_excluded_channels_and_preserve_c3_weights():
+    params = _ideal_lll_params(n_k=6, n_theta=8).model_copy(
+        update={
+            "interaction": _ideal_lll_params(n_k=6, n_theta=8).interaction.model_copy(
+                update={"q_mesh": "full", "vertex_workers": 1}
+            )
+        }
+    )
+    bundle = build_ac_projected_bundle(params)
+    vertices = bundle.vertices
+    mask = np.asarray(vertices.channel_in_disk, dtype=bool)
+    partner = c3_channel_index_map(
+        bundle.grid,
+        vertices.q_shifts,
+        vertices.g_channels,
+        mask,
+    )
+
+    assert params.density_vertex_scheme == C3_RADIAL_Q_PLUS_G_V1
+    assert np.all(vertices.lambda_blocks[~mask] == 0.0)
+    assert np.all(vertices.v_over_a[~mask] == 0.0)
+    assert vertices.v_q is not None
+    assert np.all(vertices.v_q[~mask] == 0.0)
+    assert c3_channel_value_residual(vertices.v_q, partner, mask) < 1e-13
+    for iq, ig in np.argwhere(mask):
+        jq, jg = partner[iq, ig]
+        assert np.isclose(vertices.v_q[iq, ig], vertices.v_q[jq, jg], atol=1e-13)
+
+
+def test_ac_folded_vertex_matches_reference_unfolded_formula():
+    base = _ideal_lll_params(n_k=6, n_theta=8)
+    params = base.model_copy(
+        update={
+            "interaction": base.interaction.model_copy(
+                update={"q_mesh": "full", "vertex_workers": 1}
+            )
+        }
+    )
+    bundle = build_ac_projected_bundle(params)
+    model = bundle.form_factors
+    vertices = bundle.vertices
+    q = (-2, 1)
+    iq = vertices.q_shifts.index(q)
+    ig = vertices.g_channels.index((0, 0))
+    target = bundle.grid.index_of((0, 2))
+    source = int(vertices.target_minus_q[iq, target])
+    k_target = bundle.bands.k_points[target]
+    q_cart = (
+        q[0] / bundle.grid.n1 * model.fields.G_shell[0]
+        + q[1] / bundle.grid.n2 * model.fields.G_shell[1]
+    )
+    k_source_unfolded = k_target - q_cart
+    c_target = bundle.active.band_vectors[target, 0, :, 0]
+    c_source = bundle.active.band_vectors[source, 0, :, 0]
+    reference = (
+        c_target.conj()
+        @ model.density_form_factor_matrix(
+            k_target,
+            k_source_unfolded,
+            -q_cart,
+        )
+        @ c_source
+    )
+
+    assert np.allclose(vertices.lambda_blocks[iq, ig, target, 0, 0], reference, atol=1e-12)
+
+
+def test_c3_symmetric_vp_density_produces_c3_symmetric_ac_hf_spectrum():
+    base = _ideal_lll_params(n_k=6, n_theta=8)
+    params = base.model_copy(
+        update={
+            "interaction": base.interaction.model_copy(
+                update={"q_mesh": "full", "vertex_workers": 1}
+            )
+        }
+    )
+    bundle = build_ac_projected_bundle(params)
+    density = np.zeros_like(bundle.active.h0)
+    density[:, 0, 0] = 1.0
+    spectrum = np.linalg.eigvalsh(bundle.backend.hf_hamiltonian(density))
+    h_hf = bundle.backend.hf_hamiltonian(density)
+
+    for ik in range(bundle.grid.size):
+        jk = _c3_mesh_partner(bundle.grid, ik)
+        assert np.allclose(spectrum[ik], spectrum[jk], atol=1e-10)
+    assert c3_spectrum_residual(bundle.grid, h_hf) < 1e-10
+
+
 def test_kahler_chi_solves_periodic_poisson_equation():
     ll_model = NonIdealACLLModel(FirstShellACParams(b1=0.15, u1=0.0, n_ll=3))
     G, b_coeff, _A = ll_model.vector_potential_coefficients()
@@ -121,7 +243,7 @@ def test_ac_projected_bundle_shapes_tprime_and_density_identities():
 
     assert active.h0.shape == (9, 2, 2)
     assert active.band_vectors.shape == (9, 2, 3, 1)
-    assert vertices.lambda_blocks.shape[:3] == (9, 9, 9)
+    assert vertices.lambda_blocks.shape[:3] == (7, 9, 9)
     assert active_basis_frames(active).shape == (9, 6, 2)
     assert TPrimeConstraint(active).symmetry_error(active.h0) < 1e-12
     assert ValleyU1Constraint(active).symmetry_error(vertices.lambda_blocks[0, 0]) < 1e-12

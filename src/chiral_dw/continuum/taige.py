@@ -9,6 +9,11 @@ import numpy as np
 from pydantic import BaseModel, ConfigDict
 
 from chiral_dw.config import ContinuumFiniteQParams, ContinuumInteractionParams, ContinuumModelParams
+from chiral_dw.continuum.momentum_channels import (
+    c3_radial_channel_mask,
+    hexagonal_q_shell,
+    reciprocal_box as _shared_reciprocal_box,
+)
 from chiral_dw.continuum.models import (
     ContinuumActiveSpace,
     DensityVertices,
@@ -504,10 +509,7 @@ def centered_mesh_transfers(grid: MomentumGrid) -> tuple[GridCoord, ...]:
 
 
 def reciprocal_box(g_cutoff: int) -> tuple[GridCoord, ...]:
-    n = int(g_cutoff)
-    coords = [(g1, g2) for g1 in range(-n, n + 1) for g2 in range(-n, n + 1)]
-    coords.sort(key=lambda c: (c[0] ** 2 + c[1] ** 2 + c[0] * c[1], c[0], c[1]))
-    return tuple(coords)
+    return _shared_reciprocal_box(g_cutoff)
 
 
 def valley_to_tau(valley: str) -> int:
@@ -783,15 +785,7 @@ def active_space_from_taige_bands(
 def q_transfers(grid: MomentumGrid, interaction: ContinuumInteractionParams) -> tuple[GridCoord, ...]:
     if interaction.q_mesh == "full":
         return centered_mesh_transfers(grid)
-    radius = int(interaction.q_shell)
-    shifts = [
-        (di, dj)
-        for di in range(-radius, radius + 1)
-        for dj in range(-radius, radius + 1)
-        if max(abs(di), abs(dj)) <= radius
-    ]
-    shifts = sorted(set(shifts), key=lambda x: (abs(x[0]) + abs(x[1]), x[0], x[1]))
-    return tuple(shifts)
+    return hexagonal_q_shell(interaction.q_shell)
 
 
 def _shift_gather(
@@ -897,15 +891,13 @@ def _channel_mask(
     g_channels: tuple[GridCoord, ...],
     local_field_cutoff: int,
 ) -> np.ndarray:
-    mask = np.ones((len(q_list), len(g_channels)), dtype=bool)
-    if int(local_field_cutoff) <= 0:
-        return mask
-    cutoff = float(local_field_cutoff) * np.sqrt(3.0) / 2.0
-    for iq, (qi, qj) in enumerate(q_list):
-        for ig, (g1, g2) in enumerate(g_channels):
-            q_cart = (qi / grid.n1 + g1) * geometry.b1 + (qj / grid.n2 + g2) * geometry.b2
-            mask[iq, ig] = np.linalg.norm(q_cart) < cutoff
-    return mask
+    del geometry
+    return c3_radial_channel_mask(
+        grid,
+        q_list,
+        g_channels,
+        local_field_cutoff,
+    )
 
 
 def coulomb_potential_mev_nm2(

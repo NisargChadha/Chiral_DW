@@ -14,6 +14,13 @@ from chiral_dw.config import (
     ContinuumModelParams,
 )
 from chiral_dw.continuum.hf import ContinuumHFBackend
+from chiral_dw.continuum.momentum_channels import (
+    C3_RADIAL_Q_PLUS_G_V1,
+    c3_channel_index_map,
+    c3_radial_channel_mask,
+    hexagonal_q_shell,
+    reciprocal_box,
+)
 from chiral_dw.continuum.models import (
     ContinuumActiveSpace,
     ContinuumBundle,
@@ -40,10 +47,7 @@ class ACProjectedBandStructure:
 
 
 def _reciprocal_box(g_cutoff: int) -> tuple[tuple[int, int], ...]:
-    n = int(g_cutoff)
-    coords = [(g1, g2) for g1 in range(-n, n + 1) for g2 in range(-n, n + 1)]
-    coords.sort(key=lambda c: (c[0] ** 2 + c[1] ** 2 + c[0] * c[1], c[0], c[1]))
-    return tuple(coords)
+    return reciprocal_box(g_cutoff)
 
 
 def _centered_mesh_transfers(grid: MomentumGrid) -> tuple[tuple[int, int], ...]:
@@ -59,15 +63,7 @@ def _q_transfers(
 ) -> tuple[tuple[int, int], ...]:
     if interaction.q_mesh == "full":
         return _centered_mesh_transfers(grid)
-    radius = int(interaction.q_shell)
-    shifts = [
-        (di, dj)
-        for di in range(-radius, radius + 1)
-        for dj in range(-radius, radius + 1)
-        if max(abs(di), abs(dj)) <= radius
-    ]
-    shifts = sorted(set(shifts), key=lambda x: (abs(x[0]) + abs(x[1]), x[0], x[1]))
-    return tuple(shifts)
+    return hexagonal_q_shell(interaction.q_shell)
 
 
 def _mesh_fractional(grid: MomentumGrid) -> np.ndarray:
@@ -349,6 +345,7 @@ def _ac_vertex_q_slab(
     active: ContinuumActiveSpace,
     q_list: tuple[tuple[int, int], ...],
     g_channels: tuple[tuple[int, int], ...],
+    channel_in_disk: np.ndarray,
     q_start: int,
     q_stop: int,
 ) -> tuple[int, np.ndarray, np.ndarray]:
@@ -370,7 +367,13 @@ def _ac_vertex_q_slab(
             target_minus_q[local_iq, ik] = source
             rec_shift_cart = _cart_from_coord(model, rec_shift)
             for ig, g in enumerate(g_channels):
-                g_total = _cart_from_coord(model, g) + rec_shift_cart
+                if not channel_in_disk[iq, ig]:
+                    continue
+                # The unfolded source satisfies k_target-q = k_source+R.
+                # Rewriting the reference vertex
+                # M(k_target, k_target-q, -q+G) in the folded source basis
+                # therefore requires G_total=G-R, not G+R.
+                g_total = _cart_from_coord(model, g) - rec_shift_cart
                 lambdas[local_iq, ig, ik, 0, 0] = _up_form_factor(
                     model,
                     active,
@@ -409,7 +412,13 @@ def build_ac_density_vertices(
     target_minus_q = np.empty((n_q, grid.size), dtype=int)
     q_is_zero = np.zeros(n_q, dtype=bool)
     lambdas = np.zeros((n_q, n_g, grid.size, active.dim, active.dim), dtype=complex)
-    channel_in_disk = np.ones((n_q, n_g), dtype=bool)
+    channel_in_disk = c3_radial_channel_mask(
+        grid,
+        q_list,
+        g_channels,
+        controls.local_field_cutoff,
+    )
+    c3_channel_index_map(grid, q_list, g_channels, channel_in_disk)
 
     for iq, q in enumerate(q_list):
         q_is_zero[iq] = q == (0, 0)
@@ -422,6 +431,7 @@ def build_ac_density_vertices(
                 active=active,
                 q_list=q_list,
                 g_channels=g_channels,
+                channel_in_disk=channel_in_disk,
                 q_start=0,
                 q_stop=n_q,
             ),
@@ -436,6 +446,7 @@ def build_ac_density_vertices(
                 active=active,
                 q_list=q_list,
                 g_channels=g_channels,
+                channel_in_disk=channel_in_disk,
                 q_start=int(start),
                 q_stop=int(stop),
             )
@@ -464,6 +475,8 @@ def build_ac_density_vertices(
         moire_length_nm=moire_length_nm,
         energy_unit_mev=energy_unit_mev,
     )
+    v_q = np.where(channel_in_disk, v_q, 0.0)
+    v_over_a = np.where(channel_in_disk, v_over_a, 0.0)
     return DensityVertices(
         q_shifts=q_list,
         target_minus_q=target_minus_q,
@@ -488,6 +501,10 @@ def build_ac_projected_bundle(
     """Build a two-valley projected HF bundle from finite-LL AC bands."""
 
     controls = params or ACProjectedHFParams()
+    if controls.density_vertex_scheme != C3_RADIAL_Q_PLUS_G_V1:
+        raise ValueError(
+            f"unsupported AC density vertex scheme {controls.density_vertex_scheme!r}"
+        )
     ac_controls = ac_params or controls.ac
     grid_controls = grid or controls.grid
     interaction_controls = interaction or controls.interaction

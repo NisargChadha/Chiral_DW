@@ -465,11 +465,11 @@ def test_taige_density_vertices_have_q0_identity_and_smeared_dual_gate_weights()
 
     assert vertices.vertex_layout == "valley_compact"
     assert vertices.lambda_blocks.shape[:3] == (0, 0, 4)
-    assert vertices.lambda_compact.shape[:4] == (9, 1, 4, 2)
+    assert vertices.lambda_compact.shape[:4] == (7, 1, 4, 2)
     dense_lambdas = density_vertices_dense_lambdas(vertices)
-    assert dense_lambdas.shape[:3] == (9, 1, 4)
+    assert dense_lambdas.shape[:3] == (7, 1, 4)
     assert np.allclose(dense_lambdas[iq0, 0], np.eye(bundle.active.dim), atol=1e-10)
-    assert vertices.v_over_a.shape == (9, 1)
+    assert vertices.v_over_a.shape == (7, 1)
     assert vertices.v_over_a[iq0, 0] > 0.0
 
     dense = _tiny_taige_bundle(interaction.model_copy(update={"density_vertex_layout": "dense"}))

@@ -41,6 +41,11 @@ from chiral_dw.continuum import (  # noqa: E402
     reference_diagnostics,
     symmetric_convex_path,
 )
+from chiral_dw.continuum.momentum_channels import (  # noqa: E402
+    c3_channel_index_map,
+    c3_channel_value_residual,
+    c3_spectrum_residual,
+)
 
 
 @dataclass(frozen=True)
@@ -329,6 +334,10 @@ def _reference_result_rows(point: ACSweepPoint, params: ACProjectedHFParams, bun
                 "valley_diagonal_norm": float(channels.valley_diagonal_norm),
                 "intervalley_norm": float(channels.intervalley_norm),
                 "hermiticity_error": float(channels.hermiticity_error),
+                "hf_spectrum_c3_residual": c3_spectrum_residual(
+                    bundle.grid,
+                    result.H_hf,
+                ),
             }
         )
     return rows
@@ -603,6 +612,18 @@ def run_point(args: argparse.Namespace, output_root: Path, point: ACSweepPoint) 
     )
 
     band_diag = bundle.bands.diagnostics if bundle.bands is not None else {}
+    channel_mask = np.asarray(bundle.vertices.channel_in_disk, dtype=bool)
+    channel_partner = c3_channel_index_map(
+        bundle.grid,
+        bundle.vertices.q_shifts,
+        bundle.vertices.g_channels,
+        channel_mask,
+    )
+    channel_c3_residual = c3_channel_value_residual(
+        bundle.vertices.v_over_a,
+        channel_partner,
+        channel_mask,
+    )
     interaction_scale = float(np.max(np.abs(bundle.vertices.v_over_a)))
     nonzero_channels = [
         abs(float(bundle.vertices.v_over_a[iq, ig]))
@@ -640,6 +661,14 @@ def run_point(args: argparse.Namespace, output_root: Path, point: ACSweepPoint) 
         "gate_distance": float(params.interaction.gate_distance),
         "q_shell": int(params.interaction.q_shell),
         "local_field_cutoff": int(params.interaction.local_field_cutoff),
+        "density_vertex_scheme": params.density_vertex_scheme,
+        "channel_candidate_count": int(channel_mask.size),
+        "channel_active_count": int(np.count_nonzero(channel_mask)),
+        "interaction_channel_c3_residual": channel_c3_residual,
+        "bare_spectrum_c3_residual": c3_spectrum_residual(
+            bundle.grid,
+            bundle.active.h0,
+        ),
         "interaction_scale": interaction_scale,
         "finite_q_interaction_scale": finite_q_interaction_scale,
         "interaction_gap_ratio": float(interaction_gap_ratio),
@@ -669,6 +698,18 @@ def run_point(args: argparse.Namespace, output_root: Path, point: ACSweepPoint) 
         "vp_plus_residual": float(refs.vp_plus.diagnostics.aufbau_residual_norm),
         "vp_minus_residual": float(refs.vp_minus.diagnostics.aufbau_residual_norm),
         "ivc_residual": float(refs.ivc.diagnostics.aufbau_residual_norm),
+        "vp_plus_hf_spectrum_c3_residual": c3_spectrum_residual(
+            bundle.grid,
+            refs.vp_plus.H_hf,
+        ),
+        "vp_minus_hf_spectrum_c3_residual": c3_spectrum_residual(
+            bundle.grid,
+            refs.vp_minus.H_hf,
+        ),
+        "ivc_hf_spectrum_c3_residual": c3_spectrum_residual(
+            bundle.grid,
+            refs.ivc.H_hf,
+        ),
         "chern_vp_plus": float(cherns["vp_plus"]),
         "chern_vp_minus": float(cherns["vp_minus"]),
         "chern_ivc": float(cherns["ivc"]),
