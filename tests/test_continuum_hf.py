@@ -18,6 +18,7 @@ from chiral_dw.continuum import (
     active_basis_frames,
     build_continuum_bundle,
     build_symmetric_hf_references,
+    build_taige_q_sector_bundles,
     convex_weights,
     evaluate_hf_high_symmetry_path,
     linear_interaction_hamiltonian,
@@ -41,6 +42,7 @@ from chiral_dw.continuum.models import SymmetricHFReferences, block_trace_produc
 from chiral_dw.continuum.models import dense_lambdas_from_compact
 from chiral_dw.continuum.hf import _hermitize_dense_in_place
 from chiral_dw.continuum.seeds import ivc_seed, valley_polarized_seed
+from chiral_dw.continuum.taige import build_taige_density_vertices
 from chiral_dw.response import compute_cG, k_theta_from_projectors_with_basis
 
 
@@ -238,6 +240,146 @@ def test_finite_q_taige_backend_matches_slow_hartree_fock_reference():
     )
     assert np.allclose(bundle.backend.hartree_hamiltonian(Q), _slow_hartree(bundle.backend, Q))
     assert np.allclose(bundle.backend.fock_hamiltonian(Q), _slow_fock(bundle.backend, Q))
+
+
+@pytest.mark.parametrize("layout", ["valley_compact", "dense"])
+def test_rolled_finite_q_backend_matches_direct_reconstruction(layout):
+    interaction = ContinuumInteractionParams(
+        coulomb_kind="dimensionless_screened",
+        v0=0.04,
+        q_shell=1,
+        local_field_cutoff=1,
+        density_vertex_layout=layout,
+        exchange_representation="auto",
+    )
+    finite_q = ContinuumFiniteQParams(
+        enabled=True,
+        q_coord=taige_ivc_minus_q_coord(6),
+        half_shift_coord=taige_ivc_minus_half_shift_coord(6),
+    )
+    _q0_bundle, rolled_bundle = build_taige_q_sector_bundles(
+        taige_model_params(
+            theta_deg=3.5,
+            u_D=0.0,
+            plane_wave_shell=1,
+            n_bands=2,
+        ),
+        ContinuumGridParams(n_k=6),
+        interaction,
+        finite_q,
+    )
+    direct_vertices = build_taige_density_vertices(
+        rolled_bundle.active,
+        interaction,
+    )
+    direct_backend = ContinuumHFBackend(
+        rolled_bundle.active.h0,
+        direct_vertices,
+        interaction,
+    )
+    rolled_backend = rolled_bundle.backend
+    rng = np.random.default_rng(71)
+    density = hermitize(
+        rng.normal(size=rolled_bundle.active.h0.shape)
+        + 1j * rng.normal(size=rolled_bundle.active.h0.shape)
+    )
+
+    assert direct_backend.exchange_representation == rolled_backend.exchange_representation
+    assert direct_backend.exchange_representation == (
+        "valley_sector" if layout == "valley_compact" else "dense"
+    )
+    assert np.allclose(
+        direct_backend.dense_exchange_tve_for_debug(),
+        rolled_backend.dense_exchange_tve_for_debug(),
+        atol=1e-12,
+    )
+    assert np.allclose(
+        direct_backend.hartree_hamiltonian(density),
+        rolled_backend.hartree_hamiltonian(density),
+        atol=1e-12,
+    )
+    assert np.allclose(
+        direct_backend.fock_hamiltonian(density),
+        rolled_backend.fock_hamiltonian(density),
+        atol=1e-12,
+    )
+    assert np.allclose(
+        direct_backend.hf_hamiltonian(density),
+        rolled_backend.hf_hamiltonian(density),
+        atol=1e-12,
+    )
+    direct_energy = direct_backend.energy(density)
+    rolled_energy = rolled_backend.energy(density)
+    assert direct_energy.one_body == pytest.approx(rolled_energy.one_body, abs=1e-12)
+    assert direct_energy.hartree == pytest.approx(rolled_energy.hartree, abs=1e-12)
+    assert direct_energy.fock == pytest.approx(rolled_energy.fock, abs=1e-12)
+    assert direct_energy.total == pytest.approx(rolled_energy.total, abs=1e-12)
+
+    hf_params = ContinuumHFParams(
+        n_occ_per_k=1,
+        max_iter=4,
+        min_iter=1,
+        mixing_method="linear",
+        mixing=0.4,
+        seed_random_weight=0.0,
+    )
+    seed = ivc_seed(rolled_bundle.active)
+    direct_result = solve_hf(direct_backend, seed, hf_params)
+    rolled_result = solve_hf(rolled_backend, seed, hf_params)
+    assert direct_result.energy == pytest.approx(rolled_result.energy, abs=1e-12)
+    assert np.allclose(direct_result.H_hf, rolled_result.H_hf, atol=1e-12)
+    assert np.allclose(direct_result.P, rolled_result.P, atol=1e-12)
+
+
+def test_shared_q_sector_backends_are_isolated_before_and_after_retention():
+    interaction = ContinuumInteractionParams(
+        coulomb_kind="dimensionless_screened",
+        v0=0.04,
+        q_shell=1,
+        local_field_cutoff=1,
+        density_vertex_retention="hartree_only",
+    )
+    finite_q = ContinuumFiniteQParams(
+        enabled=True,
+        q_coord=taige_ivc_minus_q_coord(6),
+        half_shift_coord=taige_ivc_minus_half_shift_coord(6),
+    )
+    q0_bundle, finite_bundle = build_taige_q_sector_bundles(
+        taige_model_params(
+            theta_deg=3.5,
+            u_D=0.0,
+            plane_wave_shell=1,
+            n_bands=1,
+        ),
+        ContinuumGridParams(n_k=6),
+        interaction,
+        finite_q,
+    )
+    q0_backend = q0_bundle.backend
+    finite_backend = finite_bundle.backend
+
+    assert q0_backend is not finite_backend
+    assert q0_backend.valley_sector_exchange is not finite_backend.valley_sector_exchange
+    assert not np.shares_memory(q0_backend.lambda_compact, finite_backend.lambda_compact)
+    assert not np.shares_memory(q0_backend.target_minus_q, finite_backend.target_minus_q)
+    assert not np.shares_memory(
+        q0_backend.valley_sector_exchange.sectors,
+        finite_backend.valley_sector_exchange.sectors,
+    )
+    finite_lambdas = finite_backend.lambda_compact.copy()
+    finite_targets = finite_backend.target_minus_q.copy()
+    finite_exchange = finite_backend.valley_sector_exchange.sectors.copy()
+
+    q0_backend.lambda_compact[...] = 0.0
+    q0_backend.target_minus_q[...] = 0
+    q0_backend.valley_sector_exchange.sectors[...] = 0.0
+
+    assert np.array_equal(finite_backend.lambda_compact, finite_lambdas)
+    assert np.array_equal(finite_backend.target_minus_q, finite_targets)
+    assert np.array_equal(
+        finite_backend.valley_sector_exchange.sectors,
+        finite_exchange,
+    )
 
 
 def test_taige_hartree_only_retention_preserves_backend_physics():

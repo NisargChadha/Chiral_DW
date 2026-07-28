@@ -13,11 +13,13 @@ from chiral_dw.continuum import (
     ContinuumSymmetricHFBranch,
     ContinuumHFDiagnostics,
     ContinuumHFResult,
+    MomentumGrid,
     SymmetricHFReferences,
     TPrimeConstraint,
     ValleyU1Constraint,
     active_basis_frames,
     build_continuum_bundle,
+    build_taige_q_sector_bundles,
     build_symmetric_hf_references,
     chern_number_table,
     compute_taige_path_spectrum,
@@ -38,12 +40,16 @@ from chiral_dw.continuum import (
     taige_ivc_minus_shift_choice,
     taige_model_params,
 )
+import chiral_dw.continuum.taige as taige_mod
 import chiral_dw.continuum.workflow as workflow_mod
 from chiral_dw.continuum.seeds import build_seed, mix_projector_seeds
 from chiral_dw.continuum.taige import (
     TaigeContinuumModel,
+    build_taige_active_space,
     build_taige_density_vertices,
+    compute_taige_bandstructure,
     coulomb_potential_mev_nm2,
+    roll_taige_density_vertices,
 )
 from chiral_dw.response import compute_cG, k_theta_from_projectors_with_basis
 
@@ -675,6 +681,155 @@ def test_taige_finite_q_density_vertices_use_shifted_physical_sources():
         break
     else:
         raise AssertionError("finite-Q source map did not shift any K-valley source")
+
+
+def test_shared_taige_q_sector_builder_computes_bands_once(monkeypatch):
+    calls = 0
+    original = taige_mod.compute_taige_bandstructure
+
+    def counted(model, grid):
+        nonlocal calls
+        calls += 1
+        return original(model, grid)
+
+    monkeypatch.setattr(taige_mod, "compute_taige_bandstructure", counted)
+    model = taige_model_params(
+        theta_deg=3.5,
+        u_D=0.0,
+        plane_wave_shell=1,
+        n_bands=2,
+    )
+    finite_q = ContinuumFiniteQParams(
+        enabled=True,
+        q_coord=taige_ivc_minus_q_coord(6),
+        half_shift_coord=taige_ivc_minus_half_shift_coord(6),
+    )
+    q0_bundle, finite_bundle = build_taige_q_sector_bundles(
+        model,
+        ContinuumGridParams(n_k=6),
+        ContinuumInteractionParams(
+            coulomb_kind="dimensionless_screened",
+            v0=0.02,
+            q_shell=0,
+            local_field_cutoff=0,
+        ),
+        finite_q,
+    )
+
+    assert calls == 1
+    assert q0_bundle.bands is finite_bundle.bands
+    assert q0_bundle.active.bands is finite_bundle.active.bands
+    assert q0_bundle.active.finite_q_enabled is False
+    assert finite_bundle.active.finite_q_enabled is True
+
+    standalone_q0 = build_continuum_bundle(
+        model=model,
+        grid=ContinuumGridParams(n_k=6),
+        interaction=ContinuumInteractionParams(
+            coulomb_kind="dimensionless_screened",
+            v0=0.02,
+            q_shell=0,
+            local_field_cutoff=0,
+        ),
+    )
+    assert calls == 2
+    assert np.allclose(q0_bundle.active.h0, standalone_q0.active.h0)
+    _assert_matching_density_vertices(q0_bundle.vertices, standalone_q0.vertices)
+    assert np.allclose(
+        q0_bundle.backend.dense_exchange_tve_for_debug(),
+        standalone_q0.backend.dense_exchange_tve_for_debug(),
+    )
+
+
+@pytest.mark.parametrize("layout", ["valley_compact", "dense"])
+def test_taige_rolled_vertices_exhaustively_match_direct_reconstruction(layout):
+    model = taige_model_params(
+        theta_deg=3.5,
+        u_D=0.0,
+        plane_wave_shell=1,
+        n_bands=2,
+    )
+    grid_params = ContinuumGridParams(n_k=6)
+    grid = MomentumGrid(grid_params.n_k)
+    finite_q = ContinuumFiniteQParams(
+        enabled=True,
+        q_coord=taige_ivc_minus_q_coord(6),
+        half_shift_coord=taige_ivc_minus_half_shift_coord(6),
+    )
+    bands = compute_taige_bandstructure(model, grid)
+    q0_active, _ = build_taige_active_space(grid, model, bands=bands)
+    finite_active, _ = build_taige_active_space(
+        grid,
+        model,
+        finite_q,
+        bands=bands,
+    )
+    baseline_q0 = None
+    baseline_direct = None
+
+    for backend in ("scalar", "cached_gather", "vectorized"):
+        serial_interaction = ContinuumInteractionParams(
+            coulomb_kind="dimensionless_screened",
+            v0=0.05,
+            q_shell=1,
+            local_field_cutoff=1,
+            density_vertex_layout=layout,
+            form_factor_backend=backend,
+            vertex_workers=1,
+        )
+        parallel_interaction = serial_interaction.model_copy(
+            update={"vertex_workers": 2}
+        )
+        q0_serial = build_taige_density_vertices(q0_active, serial_interaction)
+        q0_parallel = build_taige_density_vertices(q0_active, parallel_interaction)
+        rolled_serial = roll_taige_density_vertices(q0_serial, finite_active)
+        rolled_parallel = roll_taige_density_vertices(q0_parallel, finite_active)
+        direct_serial = build_taige_density_vertices(
+            finite_active,
+            serial_interaction,
+        )
+        direct_parallel = build_taige_density_vertices(
+            finite_active,
+            parallel_interaction,
+        )
+
+        _assert_matching_density_vertices(q0_serial, q0_parallel)
+        _assert_matching_density_vertices(rolled_serial, rolled_parallel)
+        _assert_matching_density_vertices(rolled_serial, direct_serial)
+        _assert_matching_density_vertices(rolled_serial, direct_parallel)
+        if baseline_q0 is None:
+            baseline_q0 = q0_serial
+            baseline_direct = direct_serial
+        else:
+            _assert_matching_density_vertices(baseline_q0, q0_serial)
+            _assert_matching_density_vertices(baseline_direct, direct_serial)
+
+        if layout == "valley_compact":
+            q0_lambda = q0_serial.lambda_compact
+            rolled_lambda = rolled_serial.lambda_compact
+        else:
+            q0_lambda = q0_serial.lambda_blocks
+            rolled_lambda = rolled_serial.lambda_blocks
+        assert q0_lambda is not None
+        assert rolled_lambda is not None
+        for iq in range(len(q0_serial.q_shifts)):
+            for ig in range(len(q0_serial.g_channels)):
+                for ik in range(finite_active.n_k):
+                    for valley in range(2):
+                        source = int(finite_active.source_index[ik, valley])
+                        if layout == "valley_compact":
+                            expected = q0_lambda[iq, ig, source, valley]
+                            actual = rolled_lambda[iq, ig, ik, valley]
+                        else:
+                            start = valley * finite_active.n_active
+                            stop = start + finite_active.n_active
+                            expected = q0_lambda[
+                                iq, ig, source, start:stop, start:stop
+                            ]
+                            actual = rolled_lambda[
+                                iq, ig, ik, start:stop, start:stop
+                            ]
+                        assert np.allclose(actual, expected, atol=1e-12)
 
 
 def test_projector_like_seed_mix_preserves_trace_and_hf_snapshots_are_recorded():

@@ -4,6 +4,7 @@ from chiral_dw.continuum.builder import (
     build_active_space,
     build_continuum_bundle,
     build_density_vertices,
+    build_taige_q_sector_bundles,
 )
 from chiral_dw.continuum.backend_cache import (
     LoadedTaigeBackendCache,
@@ -180,6 +181,7 @@ from chiral_dw.continuum.taige import (
     chern_number_table,
     compute_taige_bandstructure,
     compute_taige_path_spectrum,
+    roll_taige_density_vertices,
     taige_material_label,
     taige_material_smear_length_nm,
     taige_interaction_params,
@@ -296,6 +298,7 @@ __all__ = [
     "build_active_space",
     "build_continuum_bundle",
     "build_density_vertices",
+    "build_taige_q_sector_bundles",
     "build_frozen_hole_subspaces",
     "build_seed",
     "build_symmetric_hf_references",
@@ -354,6 +357,7 @@ __all__ = [
     "run_continuum_symmetric_hf_workflow",
     "run_taige_branch_selected_symmetric_hf_workflow",
     "run_taige_orbital_magnetization_workflow",
+    "roll_taige_density_vertices",
     "records_to_csv_rows",
     "save_taige_backend_cache",
     "save_taige_band_cache",

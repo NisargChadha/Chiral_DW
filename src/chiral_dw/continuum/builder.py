@@ -157,6 +157,14 @@ def build_continuum_bundle(
     model_params = model or ContinuumModelParams()
     interaction_params = interaction or ContinuumInteractionParams()
     finite_q_params = finite_q or ContinuumFiniteQParams()
+    if model_params.active_model == "taige" and finite_q_params.enabled:
+        _q0_bundle, finite_q_bundle = build_taige_q_sector_bundles(
+            model=model_params,
+            grid=grid,
+            interaction=interaction_params,
+            finite_q=finite_q_params,
+        )
+        return finite_q_bundle
     active = build_active_space(grid, model_params, finite_q_params)
     vertices = build_density_vertices(active, interaction_params)
     from chiral_dw.continuum.hf import ContinuumHFBackend
@@ -173,4 +181,83 @@ def build_continuum_bundle(
         bands=active.bands,
         geometry=active.geometry,
         form_factors=None,
+    )
+
+
+def build_taige_q_sector_bundles(
+    model: ContinuumModelParams,
+    grid: ContinuumGridParams | None,
+    interaction: ContinuumInteractionParams | None,
+    finite_q: ContinuumFiniteQParams,
+) -> tuple[ContinuumBundle, ContinuumBundle]:
+    """Build q=0 and finite-Q Taige bundles from shared bands and raw vertices."""
+
+    if model.active_model != "taige":
+        raise ValueError("shared Taige q-sector construction requires active_model='taige'")
+    if not finite_q.enabled:
+        raise ValueError("finite_q must be enabled for paired q-sector construction")
+
+    from chiral_dw.continuum.hf import ContinuumHFBackend
+    from chiral_dw.continuum.taige import (
+        build_taige_active_space,
+        build_taige_density_vertices,
+        compute_taige_bandstructure,
+        roll_taige_density_vertices,
+    )
+
+    grid_params = grid or ContinuumGridParams()
+    interaction_params = interaction or ContinuumInteractionParams()
+    momentum_grid = MomentumGrid(grid_params.n_k)
+    bands = compute_taige_bandstructure(model, momentum_grid)
+    q0_params = ContinuumFiniteQParams()
+    q0_active, _ = build_taige_active_space(
+        momentum_grid,
+        model,
+        q0_params,
+        bands=bands,
+    )
+    finite_q_active, _ = build_taige_active_space(
+        momentum_grid,
+        model,
+        finite_q,
+        bands=bands,
+    )
+
+    raw_q0_vertices = build_taige_density_vertices(q0_active, interaction_params)
+    raw_finite_q_vertices = roll_taige_density_vertices(
+        raw_q0_vertices,
+        finite_q_active,
+    )
+    q0_backend = ContinuumHFBackend(
+        q0_active.h0,
+        raw_q0_vertices,
+        interaction_params,
+    )
+    finite_q_backend = ContinuumHFBackend(
+        finite_q_active.h0,
+        raw_finite_q_vertices,
+        interaction_params,
+    )
+
+    def _bundle(
+        active: ContinuumActiveSpace,
+        backend: ContinuumHFBackend,
+        controls: ContinuumFiniteQParams,
+    ) -> ContinuumBundle:
+        return ContinuumBundle(
+            grid=active.grid,
+            active=active,
+            vertices=backend.vertices,
+            backend=backend,
+            params=model,
+            interaction=interaction_params,
+            finite_q=controls,
+            bands=bands,
+            geometry=active.geometry,
+            form_factors=None,
+        )
+
+    return (
+        _bundle(q0_active, q0_backend, q0_params),
+        _bundle(finite_q_active, finite_q_backend, finite_q),
     )

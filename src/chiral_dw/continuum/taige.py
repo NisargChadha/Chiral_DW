@@ -695,12 +695,13 @@ def build_taige_active_space(
     grid: MomentumGrid,
     model: ContinuumModelParams,
     finite_q: ContinuumFiniteQParams | None = None,
+    bands: TaigeBandStructure | None = None,
 ) -> tuple[ContinuumActiveSpace, TaigeBandStructure]:
-    """Build the Taige active hole basis, optionally in a finite-Q frame."""
+    """Build the Taige active hole basis, optionally from a cached eigensystem."""
 
-    bands = compute_taige_bandstructure(model, grid)
-    active = active_space_from_taige_bands(grid, model, bands, finite_q)
-    return active, bands
+    resolved_bands = bands if bands is not None else compute_taige_bandstructure(model, grid)
+    active = active_space_from_taige_bands(grid, model, resolved_bands, finite_q)
+    return active, resolved_bands
 
 
 def active_space_from_taige_bands(
@@ -1461,6 +1462,81 @@ def build_taige_density_vertices(
         q_vectors_nm_inv=q_vectors_nm_inv,
         q_norm_nm_inv=np.linalg.norm(q_vectors_nm_inv, axis=-1),
         v_q=v_q,
+    )
+
+
+def roll_taige_density_vertices(
+    q0_vertices: DensityVertices,
+    finite_q_active: ContinuumActiveSpace,
+) -> DensityVertices:
+    """Gather raw q=0 Taige vertices into a finite-Q active frame.
+
+    The active-frame valley shifts cancel from the intravalley transfer, so all
+    transfer and interaction metadata are unchanged. Only the source momentum
+    of each valley block is gathered. Returned arrays never alias the q=0
+    vertex arrays.
+    """
+
+    if not finite_q_active.finite_q_enabled:
+        raise ValueError("finite_q_active must use an enabled finite-Q frame")
+    source_index = finite_q_active.source_index
+    if source_index is None:
+        raise ValueError("finite-Q Taige active space requires source_index")
+    source = np.asarray(source_index, dtype=int)
+    n_k = int(finite_q_active.n_k)
+    n_active = int(finite_q_active.n_active)
+    if source.shape != (n_k, 2):
+        raise ValueError("source_index must have shape (n_k, 2)")
+    if np.any(source < 0) or np.any(source >= n_k):
+        raise ValueError("source_index contains an out-of-range momentum index")
+    if np.asarray(q0_vertices.target_minus_q).shape[1] != n_k:
+        raise ValueError("q=0 vertices and finite-Q active space use different grids")
+
+    layout = str(q0_vertices.vertex_layout)
+    if layout == "valley_compact":
+        if q0_vertices.lambda_compact is None:
+            raise ValueError("valley_compact DensityVertices require lambda_compact")
+        q0_compact = np.asarray(q0_vertices.lambda_compact)
+        if q0_compact.shape[2:] != (n_k, 2, n_active, n_active):
+            raise ValueError("q=0 compact vertices are incompatible with the active space")
+        rolled_compact = np.empty_like(q0_compact)
+        for valley in range(2):
+            rolled_compact[:, :, :, valley] = q0_compact[
+                :, :, source[:, valley], valley
+            ]
+        rolled_dense = np.asarray(q0_vertices.lambda_blocks).copy()
+        lambda_compact = rolled_compact
+    elif layout == "dense":
+        q0_dense = np.asarray(q0_vertices.lambda_blocks)
+        dim = 2 * n_active
+        if q0_dense.shape[2:] != (n_k, dim, dim):
+            raise ValueError("q=0 dense vertices are incompatible with the active space")
+        rolled_dense = np.zeros_like(q0_dense)
+        for valley in range(2):
+            block = slice(valley * n_active, (valley + 1) * n_active)
+            rolled_dense[:, :, :, block, block] = q0_dense[
+                :, :, source[:, valley], block, block
+            ]
+        lambda_compact = None
+    else:
+        raise ValueError(f"unknown density vertex layout {layout!r}")
+
+    def _copy_optional(array: np.ndarray | None) -> np.ndarray | None:
+        return None if array is None else np.asarray(array).copy()
+
+    return DensityVertices(
+        q_shifts=tuple(q0_vertices.q_shifts),
+        target_minus_q=np.asarray(q0_vertices.target_minus_q, dtype=int).copy(),
+        q_is_zero=np.asarray(q0_vertices.q_is_zero, dtype=bool).copy(),
+        lambda_blocks=rolled_dense,
+        v_over_a=np.asarray(q0_vertices.v_over_a, dtype=float).copy(),
+        g_channels=tuple(q0_vertices.g_channels),
+        vertex_layout=layout,
+        lambda_compact=lambda_compact,
+        channel_in_disk=_copy_optional(q0_vertices.channel_in_disk),
+        q_vectors_nm_inv=_copy_optional(q0_vertices.q_vectors_nm_inv),
+        q_norm_nm_inv=_copy_optional(q0_vertices.q_norm_nm_inv),
+        v_q=_copy_optional(q0_vertices.v_q),
     )
 
 
