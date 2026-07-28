@@ -41,6 +41,7 @@ from chiral_dw.continuum import (
     taige_model_params,
 )
 import chiral_dw.continuum.taige as taige_mod
+import chiral_dw.continuum.hf as hf_mod
 import chiral_dw.continuum.workflow as workflow_mod
 from chiral_dw.continuum.seeds import build_seed, mix_projector_seeds
 from chiral_dw.continuum.taige import (
@@ -739,6 +740,41 @@ def test_shared_taige_q_sector_builder_computes_bands_once(monkeypatch):
         q0_bundle.backend.dense_exchange_tve_for_debug(),
         standalone_q0.backend.dense_exchange_tve_for_debug(),
     )
+
+
+def test_single_finite_q_bundle_builds_only_finite_q_exchange_backend(monkeypatch):
+    calls = 0
+    original = hf_mod.ContinuumHFBackend
+
+    def counted(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(hf_mod, "ContinuumHFBackend", counted)
+    bundle = build_continuum_bundle(
+        model=taige_model_params(
+            theta_deg=3.5,
+            u_D=0.0,
+            plane_wave_shell=1,
+            n_bands=1,
+        ),
+        grid=ContinuumGridParams(n_k=6),
+        interaction=ContinuumInteractionParams(
+            coulomb_kind="dimensionless_screened",
+            v0=0.02,
+            q_shell=0,
+            local_field_cutoff=0,
+        ),
+        finite_q=ContinuumFiniteQParams(
+            enabled=True,
+            q_coord=taige_ivc_minus_q_coord(6),
+            half_shift_coord=taige_ivc_minus_half_shift_coord(6),
+        ),
+    )
+
+    assert calls == 1
+    assert bundle.active.finite_q_enabled is True
 
 
 @pytest.mark.parametrize("layout", ["valley_compact", "dense"])
