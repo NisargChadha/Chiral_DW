@@ -26,6 +26,7 @@ def test_finite_q_build_array_estimates_match_production_nk30():
     assert estimates.source_plus_rolled_vertices_gib == pytest.approx(
         15.642642974853516
     )
+    assert estimates.max_roll_gather_temporary_gib < 0.04
     assert estimates.valley_sector_exchange_gib == pytest.approx(
         0.7724761962890625
     )

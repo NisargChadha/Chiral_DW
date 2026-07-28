@@ -27,6 +27,7 @@ from chiral_dw.continuum.hf import (
 )
 from chiral_dw.continuum.models import MomentumGrid
 from chiral_dw.continuum.taige import (
+    _MAX_TAIGE_VERTEX_ROLL_Q_POINTS,
     build_taige_active_space,
     build_taige_density_vertices,
     compute_taige_bandstructure,
@@ -116,6 +117,7 @@ class FiniteQBuildArrayEstimate(BaseModel):
     n_g: int
     compact_vertices_gib: float
     source_plus_rolled_vertices_gib: float
+    max_roll_gather_temporary_gib: float
     valley_sector_exchange_gib: float
     max_worker_result_slab_gib: float
     target_minus_q_gib: float
@@ -192,6 +194,13 @@ def estimate_finite_q_build_arrays(
     n_active = int(params.n_active_bands_per_valley)
     complex_bytes = np.dtype(np.complex128).itemsize
     compact = n_q * n_g * n_blocks * 2 * n_active**2 * complex_bytes
+    roll_gather = (
+        min(_MAX_TAIGE_VERTEX_ROLL_Q_POINTS, n_q)
+        * n_g
+        * n_blocks
+        * n_active**2
+        * complex_bytes
+    )
     sector_dim = n_blocks * n_active**2
     exchange = 4 * sector_dim**2 * complex_bytes
     slab_q = min(_MAX_EXCHANGE_Q_POINTS_PER_SLAB, n_q)
@@ -209,6 +218,7 @@ def estimate_finite_q_build_arrays(
         n_g=n_g,
         compact_vertices_gib=_bytes_to_gib(compact),
         source_plus_rolled_vertices_gib=_bytes_to_gib(2 * compact),
+        max_roll_gather_temporary_gib=_bytes_to_gib(roll_gather),
         valley_sector_exchange_gib=_bytes_to_gib(exchange),
         max_worker_result_slab_gib=_bytes_to_gib(worker_result),
         target_minus_q_gib=_bytes_to_gib(n_q * n_blocks * np.dtype(np.int64).itemsize),
@@ -421,6 +431,9 @@ def write_finite_q_build_profile(
             "compact_vertices_gib": worker.estimates.compact_vertices_gib,
             "source_plus_rolled_vertices_gib": (
                 worker.estimates.source_plus_rolled_vertices_gib
+            ),
+            "max_roll_gather_temporary_gib": (
+                worker.estimates.max_roll_gather_temporary_gib
             ),
             "valley_sector_exchange_gib": (
                 worker.estimates.valley_sector_exchange_gib

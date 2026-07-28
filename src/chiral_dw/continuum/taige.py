@@ -27,6 +27,7 @@ from chiral_dw.continuum.models import (
 from chiral_dw.continuum.taige_sewing import reciprocal_shift_gather
 
 GridCoord = tuple[int, int]
+_MAX_TAIGE_VERTEX_ROLL_Q_POINTS = 8
 
 HBAR2_OVER_2ME_MEV_A2 = 3809.98212
 E2_MEV_NM = 1439.96454784255
@@ -1493,6 +1494,11 @@ def roll_taige_density_vertices(
         raise ValueError("q=0 vertices and finite-Q active space use different grids")
 
     layout = str(q0_vertices.vertex_layout)
+    n_q = len(q0_vertices.q_shifts)
+    q_slabs = tuple(
+        (start, min(start + _MAX_TAIGE_VERTEX_ROLL_Q_POINTS, n_q))
+        for start in range(0, n_q, _MAX_TAIGE_VERTEX_ROLL_Q_POINTS)
+    )
     if layout == "valley_compact":
         if q0_vertices.lambda_compact is None:
             raise ValueError("valley_compact DensityVertices require lambda_compact")
@@ -1500,10 +1506,11 @@ def roll_taige_density_vertices(
         if q0_compact.shape[2:] != (n_k, 2, n_active, n_active):
             raise ValueError("q=0 compact vertices are incompatible with the active space")
         rolled_compact = np.empty_like(q0_compact)
-        for valley in range(2):
-            rolled_compact[:, :, :, valley] = q0_compact[
-                :, :, source[:, valley], valley
-            ]
+        for q_start, q_stop in q_slabs:
+            for valley in range(2):
+                rolled_compact[q_start:q_stop, :, :, valley] = q0_compact[
+                    q_start:q_stop, :, source[:, valley], valley
+                ]
         rolled_dense = np.asarray(q0_vertices.lambda_blocks).copy()
         lambda_compact = rolled_compact
     elif layout == "dense":
@@ -1512,11 +1519,12 @@ def roll_taige_density_vertices(
         if q0_dense.shape[2:] != (n_k, dim, dim):
             raise ValueError("q=0 dense vertices are incompatible with the active space")
         rolled_dense = np.zeros_like(q0_dense)
-        for valley in range(2):
-            block = slice(valley * n_active, (valley + 1) * n_active)
-            rolled_dense[:, :, :, block, block] = q0_dense[
-                :, :, source[:, valley], block, block
-            ]
+        for q_start, q_stop in q_slabs:
+            for valley in range(2):
+                block = slice(valley * n_active, (valley + 1) * n_active)
+                rolled_dense[q_start:q_stop, :, :, block, block] = q0_dense[
+                    q_start:q_stop, :, source[:, valley], block, block
+                ]
         lambda_compact = None
     else:
         raise ValueError(f"unknown density vertex layout {layout!r}")
