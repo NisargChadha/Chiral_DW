@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+import weakref
 
 from chiral_dw.config import (
     ContinuumFiniteQParams,
@@ -774,6 +775,53 @@ def test_single_finite_q_bundle_builds_only_finite_q_exchange_backend(monkeypatc
     )
 
     assert calls == 1
+    assert bundle.active.finite_q_enabled is True
+
+
+def test_single_finite_q_bundle_releases_q0_vertices_before_backend(monkeypatch):
+    source_ref = None
+    original_vertex_builder = taige_mod.build_taige_density_vertices
+    original_backend = hf_mod.ContinuumHFBackend
+
+    def tracked_vertex_builder(active, interaction):
+        nonlocal source_ref
+        vertices = original_vertex_builder(active, interaction)
+        if not active.finite_q_enabled:
+            source_ref = weakref.ref(vertices)
+        return vertices
+
+    def checking_backend(*args, **kwargs):
+        assert source_ref is not None
+        assert source_ref() is None
+        return original_backend(*args, **kwargs)
+
+    monkeypatch.setattr(
+        taige_mod,
+        "build_taige_density_vertices",
+        tracked_vertex_builder,
+    )
+    monkeypatch.setattr(hf_mod, "ContinuumHFBackend", checking_backend)
+    bundle = build_continuum_bundle(
+        model=taige_model_params(
+            theta_deg=3.5,
+            u_D=0.0,
+            plane_wave_shell=1,
+            n_bands=1,
+        ),
+        grid=ContinuumGridParams(n_k=6),
+        interaction=ContinuumInteractionParams(
+            coulomb_kind="dimensionless_screened",
+            v0=0.02,
+            q_shell=0,
+            local_field_cutoff=0,
+        ),
+        finite_q=ContinuumFiniteQParams(
+            enabled=True,
+            q_coord=taige_ivc_minus_q_coord(6),
+            half_shift_coord=taige_ivc_minus_half_shift_coord(6),
+        ),
+    )
+
     assert bundle.active.finite_q_enabled is True
 
 

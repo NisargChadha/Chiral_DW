@@ -96,15 +96,14 @@ class ValleySectorExchange:
         return dense
 
 
+_MAX_EXCHANGE_Q_POINTS_PER_SLAB = 8
+
+
 def _exchange_q_slab_ranges(n_q: int, exchange_workers: int) -> tuple[tuple[int, int], ...]:
-    n_jobs = max(1, min(int(exchange_workers), int(n_q)))
-    n_slabs = max(1, min(int(n_q), 16 * n_jobs))
-    bounds = np.linspace(0, int(n_q), n_slabs + 1, dtype=int)
-    return tuple(
-        (int(start), int(stop))
-        for start, stop in zip(bounds[:-1], bounds[1:])
-        if int(start) < int(stop)
-    )
+    del exchange_workers
+    stop = max(0, int(n_q))
+    slab = _MAX_EXCHANGE_Q_POINTS_PER_SLAB
+    return tuple((start, min(start + slab, stop)) for start in range(0, stop, slab))
 
 
 def _exchange_tve_q_slab(
@@ -507,6 +506,8 @@ class ContinuumHFBackend:
             return_as="generator",
             mmap_mode="r",
             max_nbytes="32M",
+            batch_size=1,
+            pre_dispatch=n_jobs,
         )(tasks)
         for slab_rows in results:
             for q_index, forward, reverse in slab_rows:
@@ -613,6 +614,8 @@ class ContinuumHFBackend:
             return_as="generator",
             mmap_mode="r",
             max_nbytes="32M",
+            batch_size=1,
+            pre_dispatch=n_jobs,
         )(tasks)
         for slab_rows in results:
             for q_index, iv, jv, forward, reverse in slab_rows:

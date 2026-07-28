@@ -159,14 +159,11 @@ def build_continuum_bundle(
     finite_q_params = finite_q or ContinuumFiniteQParams()
     if model_params.active_model == "taige" and finite_q_params.enabled:
         (
-            _q0_params,
             resolved_interaction,
             bands,
-            _q0_active,
             finite_q_active,
-            _raw_q0_vertices,
             raw_finite_q_vertices,
-        ) = _build_taige_q_sector_inputs(
+        ) = _build_taige_finite_q_inputs(
             model_params,
             grid,
             interaction_params,
@@ -206,7 +203,7 @@ def build_continuum_bundle(
     )
 
 
-def _build_taige_q_sector_inputs(
+def _build_taige_q_sector_active_spaces(
     model: ContinuumModelParams,
     grid: ContinuumGridParams | None,
     interaction: ContinuumInteractionParams | None,
@@ -217,8 +214,6 @@ def _build_taige_q_sector_inputs(
     object,
     ContinuumActiveSpace,
     ContinuumActiveSpace,
-    DensityVertices,
-    DensityVertices,
 ]:
     if model.active_model != "taige":
         raise ValueError("shared Taige q-sector construction requires active_model='taige'")
@@ -227,9 +222,7 @@ def _build_taige_q_sector_inputs(
 
     from chiral_dw.continuum.taige import (
         build_taige_active_space,
-        build_taige_density_vertices,
         compute_taige_bandstructure,
-        roll_taige_density_vertices,
     )
 
     grid_params = grid or ContinuumGridParams()
@@ -248,6 +241,90 @@ def _build_taige_q_sector_inputs(
         model,
         finite_q,
         bands=bands,
+    )
+    return (
+        q0_params,
+        interaction_params,
+        bands,
+        q0_active,
+        finite_q_active,
+    )
+
+
+def _build_taige_finite_q_inputs(
+    model: ContinuumModelParams,
+    grid: ContinuumGridParams | None,
+    interaction: ContinuumInteractionParams | None,
+    finite_q: ContinuumFiniteQParams,
+) -> tuple[
+    ContinuumInteractionParams,
+    object,
+    ContinuumActiveSpace,
+    DensityVertices,
+]:
+    """Build only finite-Q inputs and release the raw q=0 source before return."""
+
+    from chiral_dw.continuum.taige import (
+        build_taige_density_vertices,
+        roll_taige_density_vertices,
+    )
+
+    (
+        _q0_params,
+        interaction_params,
+        bands,
+        q0_active,
+        finite_q_active,
+    ) = _build_taige_q_sector_active_spaces(
+        model,
+        grid,
+        interaction,
+        finite_q,
+    )
+    raw_q0_vertices = build_taige_density_vertices(q0_active, interaction_params)
+    raw_finite_q_vertices = roll_taige_density_vertices(
+        raw_q0_vertices,
+        finite_q_active,
+    )
+    del raw_q0_vertices
+    return (
+        interaction_params,
+        bands,
+        finite_q_active,
+        raw_finite_q_vertices,
+    )
+
+
+def _build_taige_q_sector_inputs(
+    model: ContinuumModelParams,
+    grid: ContinuumGridParams | None,
+    interaction: ContinuumInteractionParams | None,
+    finite_q: ContinuumFiniteQParams,
+) -> tuple[
+    ContinuumFiniteQParams,
+    ContinuumInteractionParams,
+    object,
+    ContinuumActiveSpace,
+    ContinuumActiveSpace,
+    DensityVertices,
+    DensityVertices,
+]:
+    from chiral_dw.continuum.taige import (
+        build_taige_density_vertices,
+        roll_taige_density_vertices,
+    )
+
+    (
+        q0_params,
+        interaction_params,
+        bands,
+        q0_active,
+        finite_q_active,
+    ) = _build_taige_q_sector_active_spaces(
+        model,
+        grid,
+        interaction,
+        finite_q,
     )
     raw_q0_vertices = build_taige_density_vertices(q0_active, interaction_params)
     raw_finite_q_vertices = roll_taige_density_vertices(
@@ -293,7 +370,13 @@ def build_taige_q_sector_bundles(
     interaction: ContinuumInteractionParams | None,
     finite_q: ContinuumFiniteQParams,
 ) -> tuple[ContinuumBundle, ContinuumBundle]:
-    """Build q=0 and finite-Q Taige bundles from shared bands and raw vertices."""
+    """Build both Taige q sectors, retaining both raw tables until backends exist.
+
+    Callers needing only the finite-Q sector should use
+    :func:`build_continuum_bundle`, whose dedicated path releases the raw q=0
+    table before exchange construction. This paired API necessarily has a
+    higher peak-memory requirement because both sectors are live together.
+    """
 
     from chiral_dw.continuum.hf import ContinuumHFBackend
 

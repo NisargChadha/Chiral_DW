@@ -40,7 +40,10 @@ from chiral_dw.continuum import (
 )
 from chiral_dw.continuum.models import SymmetricHFReferences, block_trace_product, hermitize
 from chiral_dw.continuum.models import dense_lambdas_from_compact
-from chiral_dw.continuum.hf import _hermitize_dense_in_place
+from chiral_dw.continuum.hf import (
+    _exchange_q_slab_ranges,
+    _hermitize_dense_in_place,
+)
 from chiral_dw.continuum.seeds import ivc_seed, valley_polarized_seed
 from chiral_dw.continuum.taige import build_taige_density_vertices
 from chiral_dw.response import compute_cG, k_theta_from_projectors_with_basis
@@ -144,6 +147,17 @@ def test_tiled_dense_hermitization_matches_full_expression():
     assert np.allclose(actual, expected)
 
 
+def test_parallel_exchange_q_slabs_are_bounded_for_production_mesh():
+    ranges = _exchange_q_slab_ranges(900, exchange_workers=4)
+
+    assert ranges[0] == (0, 8)
+    assert ranges[-1] == (896, 900)
+    assert max(stop - start for start, stop in ranges) <= 8
+    assert [iq for start, stop in ranges for iq in range(start, stop)] == list(
+        range(900)
+    )
+
+
 def test_optimized_backend_matches_slow_hartree_fock_reference():
     rng = np.random.default_rng(11)
     h0 = np.stack(
@@ -238,6 +252,12 @@ def test_finite_q_taige_backend_matches_slow_hartree_fock_reference():
         parallel_bundle.backend.hf_hamiltonian(Q),
         bundle.backend.hf_hamiltonian(Q),
     )
+    parallel_energy = parallel_bundle.backend.energy(Q)
+    serial_energy = bundle.backend.energy(Q)
+    assert parallel_energy.total == pytest.approx(serial_energy.total, abs=1e-12)
+    assert parallel_energy.one_body == pytest.approx(serial_energy.one_body, abs=1e-12)
+    assert parallel_energy.hartree == pytest.approx(serial_energy.hartree, abs=1e-12)
+    assert parallel_energy.fock == pytest.approx(serial_energy.fock, abs=1e-12)
     assert np.allclose(bundle.backend.hartree_hamiltonian(Q), _slow_hartree(bundle.backend, Q))
     assert np.allclose(bundle.backend.fock_hamiltonian(Q), _slow_fock(bundle.backend, Q))
 
