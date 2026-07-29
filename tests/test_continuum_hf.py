@@ -596,6 +596,26 @@ def test_tprime_constraint_is_involutive_and_final_aufbau_is_idempotent():
     assert constraint.symmetry_error(P) < 1e-12
 
 
+def test_tprime_global_aufbau_preserves_requested_integer_trace():
+    bundle = _small_bundle()
+    active = bundle.active
+    constraint = TPrimeConstraint(active)
+    rng = np.random.default_rng(31)
+    raw = rng.normal(size=(active.n_k, active.dim, active.dim)) + 1j * rng.normal(
+        size=(active.n_k, active.dim, active.dim)
+    )
+    projected = constraint.project_operator(hermitize(raw))
+
+    for target in (1, 5, active.n_k):
+        density, _evals, _direct, _indirect = constraint.update_density_global(
+            projected,
+            target,
+        )
+        assert np.isclose(np.trace(density, axis1=-2, axis2=-1).sum().real, target)
+        assert np.linalg.norm(density @ density - density) < 1e-12
+        assert constraint.symmetry_error(density) < 1e-12
+
+
 def test_hf_solver_reports_idempotent_final_projectors_for_reference_states():
     bundle = _small_bundle()
     params = ContinuumHFParams(max_iter=6, min_iter=1, mixing=0.6, tolerance=1e-9)

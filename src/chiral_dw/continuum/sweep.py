@@ -23,9 +23,10 @@ from chiral_dw.continuum.observables import ContinuumOrderDiagnostics, order_dia
 from chiral_dw.continuum.references import solve_reference_hf
 from chiral_dw.continuum.symmetry import TPrimeConstraint
 from chiral_dw.continuum.taige import (
+    TaigeFiniteQSector,
     TaigeFiniteQShiftPolicy,
     chern_number_table,
-    taige_ivc_minus_shift_choice,
+    taige_ivc_shift_choice,
 )
 
 
@@ -368,19 +369,22 @@ def trial_theta_rows(workflow_result: Any) -> list[dict[str, Any]]:
 def run_finite_q_ivc_diagnostic(
     workflow_result: Any,
     *,
+    sector: TaigeFiniteQSector = "minus",
     finite_q_shift_policy: TaigeFiniteQShiftPolicy = "exact",
 ) -> FiniteQIVCDiagnostic:
-    """Solve the Taige IVC- finite-Q branch for energy/topology diagnostics."""
+    """Solve one signed Taige finite-Q IVC branch."""
 
     n_k = int(workflow_result.params.grid.n_k)
     try:
-        choice = taige_ivc_minus_shift_choice(
+        choice = taige_ivc_shift_choice(
             n_k,
+            sector=sector,
             policy=finite_q_shift_policy,
         )
     except ValueError as exc:
         raise ValueError(
-            "finite-Q IVC diagnostics require an exact IVC- mesh unless "
+            "finite-Q IVC diagnostics require an exact signed kappa-difference "
+            "mesh unless "
             "finite_q_shift_policy='nearest_half' is requested; use "
             "--no-finite-q-ivc to skip this diagnostic"
         ) from exc
@@ -402,20 +406,41 @@ def run_finite_q_ivc_diagnostic(
         workflow_result.params.hf,
         constraint=constraint,
     )
+    metadata = {
+        **finite_q_shift_metadata(finite_q, bundle.grid),
+        "taige_ivc_sector": sector,
+        "taige_ivc_shift_choice": choice.model_dump(mode="json"),
+        "finite_q_shift_policy": choice.policy,
+        "finite_q_exact": choice.exact,
+        "q_error_grid_units": choice.q_error_grid_units,
+        "half_shift_error_grid_units": choice.half_shift_error_grid_units,
+        "q_error_fractional_norm": choice.q_error_fractional_norm,
+        "half_shift_error_fractional_norm": choice.half_shift_error_fractional_norm,
+    }
+    if sector == "minus":
+        metadata["taige_ivc_minus_shift_choice"] = choice.model_dump(mode="json")
     return FiniteQIVCDiagnostic(
         bundle=bundle,
         result=result,
-        metadata={
-            **finite_q_shift_metadata(finite_q, bundle.grid),
-            "taige_ivc_minus_shift_choice": choice.model_dump(mode="json"),
-            "finite_q_shift_policy": choice.policy,
-            "finite_q_exact": choice.exact,
-            "q_error_grid_units": choice.q_error_grid_units,
-            "half_shift_error_grid_units": choice.half_shift_error_grid_units,
-            "q_error_fractional_norm": choice.q_error_fractional_norm,
-            "half_shift_error_fractional_norm": choice.half_shift_error_fractional_norm,
-        },
+        metadata=metadata,
     )
+
+
+def run_finite_q_ivc_diagnostics(
+    workflow_result: Any,
+    *,
+    finite_q_shift_policy: TaigeFiniteQShiftPolicy = "exact",
+) -> dict[TaigeFiniteQSector, FiniteQIVCDiagnostic]:
+    """Solve and retain both opposite finite-Q IVC diagnostics."""
+
+    return {
+        sector: run_finite_q_ivc_diagnostic(
+            workflow_result,
+            sector=sector,
+            finite_q_shift_policy=finite_q_shift_policy,
+        )
+        for sector in ("plus", "minus")
+    }
 
 
 def reference_energy_rows(
@@ -758,7 +783,10 @@ def build_taige_sweep_diagnostics(
     )
     finite_q_energy_norm = None if finite_q is None else float(finite_q.bundle.backend.n_blocks)
     finite_q_metadata = {} if finite_q is None else dict(finite_q.metadata)
-    finite_q_choice = finite_q_metadata.get("taige_ivc_minus_shift_choice", {})
+    finite_q_choice = finite_q_metadata.get(
+        "taige_ivc_shift_choice",
+        finite_q_metadata.get("taige_ivc_minus_shift_choice", {}),
+    )
     selected_ivc_energy_per_cell = float(
         branch_selection.get(
             "selected_ivc_energy_per_cell",

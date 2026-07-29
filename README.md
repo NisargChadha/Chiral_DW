@@ -32,9 +32,9 @@ moving back to the nonideal conjugate AC/domain-wall calculation:
 - The native continuum/HF workflow builds self-contained VP+, VP-, and IVC
   reference Hamiltonians, reports final projector idempotency, and constructs a
   convex full-HF variational path.
-- The Taige notebook and cluster sweep can solve both Q=0 and finite-Q IVC
-  branches, then use the lower-energy IVC branch as the whole interpolation
-  frame for `K(theta)` and `c_G`.
+- The Taige notebook and cluster sweep can solve Q=0 and both signed
+  \(Q=\pm(\kappa_+-\kappa_-)\) IVC branches, then use the lower-energy branch
+  as the whole interpolation frame for `K(theta)` and `c_G`.
 - Taige cluster/HF builds now have opt-in multicore q-slab construction for
   density vertices and dense exchange kernels, keep only Hartree density
   vertices after `tVE` construction in sweep scripts, and use valley-compact
@@ -134,12 +134,26 @@ reference HF states:
 - VP- from a `Kprime`-polarized seed with the same constraint;
 - IVC from an intervalley-coherent seed with the non-Kramers `T'` constraint.
 
-For Taige-parameter notebooks and sweeps, the finite-Q IVC branch is available
-in the symmetric active frame `K: k-Q/2`, `Kprime: k+Q/2`. By default the code
-compares Q=0 and finite-Q IVC energies per moire cell and uses the lower-energy
-IVC branch for the whole convex `K(theta)` and `cG` response. If finite-Q wins,
-the response uses finite-Q VP+/VP-/IVC references and the finite-Q active basis;
-ties prefer Q=0.
+For Taige-parameter notebooks and sweeps, both physical finite-Q IVC sectors
+\(Q=\pm(\kappa_+-\kappa_-)\) are available in the symmetric active frame
+`K: k-Q/2`, `Kprime: k+Q/2`. By default the code retains both signed branches,
+selects the lower finite-Q energy, compares it with Q=0, and uses the overall
+winner for the whole convex `K(theta)` and `cG` response. If finite-Q wins, the
+response uses VP+/VP-/IVC references and the active basis from that same signed
+frame; ties prefer Q=0. Arbitrary mesh-compatible `q_coord` and
+`half_shift_coord` values remain supported by the lower-level builder.
+For the kappa sectors, the signed \(Q\) is exact on every mesh divisible by
+three. On odd meshes such as \(n_k=21\), the helper uses the torus-equivalent
+solution of \(2h=Q\pmod {n_k}\); this changes only the common active-frame
+representative and does not approximate \(Q\). For noncommensurate meshes, the
+`nearest_half` policy prioritizes the nearest physical \(Q\) before choosing
+among half-frame representatives.
+
+`ActiveSpaceGaugeAdapter` transports block matrices between active spaces with
+explicit momentum and flavor permutations, a momentum-dependent unitary, and
+an optional matrix-index transpose. It is NumPy-only so the component can be
+moved into a general library such as Vidyut without importing either HF
+backend.
 
 The variational Hamiltonian is a convex combination of the full raw HF
 Hamiltonians:
@@ -269,8 +283,8 @@ Monitor with `squeue -u "$USER"` and inspect `logs/taige_continuum_cG_*` for
 per-task output. By default each point records scalar-rich diagnostics:
 `c_G`, `K(theta)`, trial energy and gap versus theta, HF reference gaps and
 energies, selected/Q=0/finite-Q VP and IVC order-parameter magnitudes,
-noninteracting Chern numbers, HF Chern numbers, and the Taige IVC- finite-Q
-energy comparison. The Taige density-vertex default is
+noninteracting Chern numbers, HF Chern numbers, and both signed
+Taige finite-Q IVC energies. The Taige density-vertex default is
 `DENSITY_VERTEX_LAYOUT=auto`, which stores form factors in the valley-compact
 layout; set `DENSITY_VERTEX_LAYOUT=dense` only for dense form-factor debugging.
 The default `DENSITY_VERTEX_RETENTION=hartree_only` drops full density vertices

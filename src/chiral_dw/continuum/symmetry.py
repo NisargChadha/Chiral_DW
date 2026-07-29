@@ -381,24 +381,29 @@ class TPrimeConstraint:
             costs = [float(value) * float(weight) for value, weight, _blocks in records]
             weights = [int(round(weight)) for _value, weight, _blocks in records]
             inf = float("inf")
-            dp = [inf] * (target + 1)
-            parent: list[tuple[int, int] | None] = [None] * (target + 1)
-            dp[0] = 0.0
+            n_records = len(records)
+            dp = np.full((n_records + 1, target + 1), inf, dtype=float)
+            take = np.zeros((n_records + 1, target + 1), dtype=bool)
+            dp[0, 0] = 0.0
             for idx, (weight, cost) in enumerate(zip(weights, costs)):
+                dp[idx + 1] = dp[idx]
                 if weight <= 0:
                     continue
                 for count in range(target - weight, -1, -1):
-                    candidate = dp[count] + cost
-                    if candidate < dp[count + weight]:
-                        dp[count + weight] = candidate
-                        parent[count + weight] = (count, idx)
+                    candidate = dp[idx, count] + cost
+                    if candidate < dp[idx + 1, count + weight]:
+                        dp[idx + 1, count + weight] = candidate
+                        take[idx + 1, count + weight] = True
             selected: set[int] = set()
-            if np.isfinite(dp[target]):
+            if np.isfinite(dp[n_records, target]):
                 count = target
-                while count > 0 and parent[count] is not None:
-                    prev, idx = parent[count]
-                    selected.add(idx)
-                    count = prev
+                for stage in range(n_records, 0, -1):
+                    if take[stage, count]:
+                        idx = stage - 1
+                        selected.add(idx)
+                        count -= weights[idx]
+                if count != 0:
+                    selected = set()
             else:
                 selected = set()
             if selected:

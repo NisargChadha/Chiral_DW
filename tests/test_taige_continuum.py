@@ -39,6 +39,10 @@ from chiral_dw.continuum import (
     taige_ivc_minus_half_shift_coord,
     taige_ivc_minus_q_coord,
     taige_ivc_minus_shift_choice,
+    taige_ivc_plus_half_shift_coord,
+    taige_ivc_plus_q_coord,
+    taige_ivc_plus_shift_choice,
+    taige_ivc_shift_choices,
     taige_model_params,
 )
 import chiral_dw.continuum.taige as taige_mod
@@ -131,10 +135,12 @@ def test_taige_ivc_minus_finite_q_helpers_and_metadata():
     assert taige_ivc_minus_q_coord(18) == (6, 6)
     assert taige_ivc_minus_half_shift_coord(18) == (3, 12)
 
-    with pytest.raises(ValueError, match="divisible by 6"):
-        taige_ivc_minus_q_coord(15)
-    with pytest.raises(ValueError, match="divisible by 6"):
-        taige_ivc_minus_half_shift_coord(15)
+    assert taige_ivc_minus_q_coord(15) == (5, 5)
+    assert taige_ivc_minus_half_shift_coord(15) == (10, 10)
+    with pytest.raises(ValueError, match="divisible by 3"):
+        taige_ivc_minus_q_coord(13)
+    with pytest.raises(ValueError, match="divisible by 3"):
+        taige_ivc_minus_half_shift_coord(13)
 
     finite_q = ContinuumFiniteQParams(
         enabled=True,
@@ -162,12 +168,37 @@ def test_taige_ivc_minus_finite_q_helpers_and_metadata():
     assert np.allclose(metadata["half_shift_centered_fractional"], [1 / 6, -1 / 3])
 
 
+def test_taige_ivc_policy_keeps_both_opposite_q_sectors():
+    choices = taige_ivc_shift_choices(18)
+
+    assert choices["minus"] == taige_ivc_minus_shift_choice(18)
+    assert choices["plus"] == taige_ivc_plus_shift_choice(18)
+    assert taige_ivc_minus_q_coord(18) == (6, 6)
+    assert taige_ivc_plus_q_coord(18) == (12, 12)
+    assert taige_ivc_minus_half_shift_coord(18) == (3, 12)
+    assert taige_ivc_plus_half_shift_coord(18) == (15, 6)
+    assert tuple(
+        (choices["plus"].q_coord[axis] + choices["minus"].q_coord[axis]) % 18
+        for axis in range(2)
+    ) == (0, 0)
+    assert tuple(
+        (
+            choices["plus"].half_shift_coord[axis]
+            + choices["minus"].half_shift_coord[axis]
+        )
+        % 18
+        for axis in range(2)
+    ) == (0, 0)
+    assert choices["minus"].sector == "minus"
+    assert choices["plus"].sector == "plus"
+
+
 def test_taige_ivc_minus_nearest_half_shift_choices_for_finite_size_meshes():
     expected = {
         12: ((2, 8), (4, 4), True),
         13: ((2, 9), (4, 5), False),
         14: ((2, 9), (4, 4), False),
-        15: ((2, 10), (4, 5), False),
+        15: ((10, 10), (5, 5), True),
         16: ((2, 11), (4, 6), False),
         17: ((3, 11), (6, 5), False),
         18: ((3, 12), (6, 6), True),
@@ -186,7 +217,29 @@ def test_taige_ivc_minus_nearest_half_shift_choices_for_finite_size_meshes():
     assert exact_choice.q_coord == (6, 6)
     assert exact_choice.exact is True
 
-    with pytest.raises(ValueError, match="divisible by 6"):
+    exact_odd_choice = taige_ivc_minus_shift_choice(21, policy="exact")
+    assert exact_odd_choice.q_coord == (7, 7)
+    assert exact_odd_choice.half_shift_coord == (14, 14)
+    assert exact_odd_choice.exact is True
+    assert exact_odd_choice.half_shift_error_fractional_norm > 0.0
+    exact_odd_plus = taige_ivc_plus_shift_choice(21, policy="exact")
+    assert exact_odd_plus.q_coord == (14, 14)
+    assert exact_odd_plus.half_shift_coord == (7, 7)
+    assert exact_odd_plus.exact is True
+    assert tuple(
+        (exact_odd_choice.q_coord[axis] + exact_odd_plus.q_coord[axis]) % 21
+        for axis in range(2)
+    ) == (0, 0)
+    assert tuple(
+        (
+            exact_odd_choice.half_shift_coord[axis]
+            + exact_odd_plus.half_shift_coord[axis]
+        )
+        % 21
+        for axis in range(2)
+    ) == (0, 0)
+
+    with pytest.raises(ValueError, match="divisible by 3"):
         taige_ivc_minus_shift_choice(13, policy="exact")
 
 
@@ -372,6 +425,19 @@ def test_taige_branch_selected_workflow_uses_whole_finite_q_frame(monkeypatch):
     assert result.q0_branch.bundle.active.finite_q_enabled is False
     assert result.projectors.shape[-1] == result.bundle.active.dim
     assert result.branch_selection["finite_q_minus_q0_ivc_energy_per_cell"] < 0.0
+    assert set(result.branch_selection["finite_q_sector_energy_per_cell"]) == {
+        "plus",
+        "minus",
+    }
+    assert result.branch_selection["selected_finite_q_sector"] in {
+        "plus",
+        "minus",
+    }
+    assert set(result.finite_q_branches) == {"plus", "minus"}
+    assert (
+        result.finite_q_branch
+        is result.finite_q_branches[result.branch_selection["selected_finite_q_sector"]]
+    )
 
 
 def test_taige_branch_selected_workflow_can_force_q0(monkeypatch):
@@ -606,6 +672,7 @@ def test_taige_interaction_params_accept_screening_overrides():
         q_mesh="full",
         q_shell=0,
         local_field_cutoff=4,
+        momentum_transfer_cutoff_km=3.0,
         epsilon=12.5,
         gate_distance_nm=18.0,
         smear_length_nm=0.2,
@@ -625,6 +692,7 @@ def test_taige_interaction_params_accept_screening_overrides():
     assert interaction.q_mesh == "full"
     assert interaction.q_shell == 0
     assert interaction.local_field_cutoff == 4
+    assert interaction.momentum_transfer_cutoff_km == 3.0
     assert interaction.epsilon == 12.5
     assert interaction.gate_distance_nm == 18.0
     assert interaction.smear_length_nm == 0.2
@@ -637,6 +705,35 @@ def test_taige_interaction_params_accept_screening_overrides():
     assert interaction.density_vertex_layout == "dense"
     assert interaction.exchange_representation == "dense"
     assert interaction.form_factor_backend == "cached_gather"
+
+
+def test_taige_explicit_momentum_disk_matches_strict_three_gm_policy():
+    model = taige_model_params(
+        theta_deg=3.9,
+        u_D=0.0,
+        plane_wave_shell=1,
+        n_bands=1,
+        n_active_bands_per_valley=1,
+    )
+    grid = MomentumGrid(6)
+    active, _bands = build_taige_active_space(
+        grid,
+        model,
+        ContinuumFiniteQParams(),
+    )
+    interaction = taige_interaction_params(
+        q_mesh="full",
+        local_field_cutoff=4,
+        momentum_transfer_cutoff_km=3.0,
+        smear_length_nm=0.0,
+    )
+
+    vertices = build_taige_density_vertices(active, interaction)
+    expected = np.asarray(vertices.q_norm_nm_inv) < 3.0 * active.geometry.kM_inv_nm
+
+    assert np.array_equal(vertices.channel_in_disk, expected)
+    assert np.any(expected)
+    assert np.any(~expected)
 
 
 def test_taige_finite_q_density_vertices_use_shifted_physical_sources():

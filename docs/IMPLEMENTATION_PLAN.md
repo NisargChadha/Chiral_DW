@@ -12,10 +12,15 @@ The continuum workflow uses symmetry-constrained HF references:
 - VP+ from a K-valley seed with continuous valley-U(1) projection.
 - VP- from a Kprime-valley seed with continuous valley-U(1) projection.
 - IVC from a Q=0 coherent seed with non-Kramers T-prime projection.
-- For Taige sweeps, a finite-Q IVC active-frame branch can also be solved using
-  the symmetric convention `K: k-Q/2`, `Kprime: k+Q/2`. When branch selection is
-  enabled, the lower-energy IVC branch supplies the whole VP+/VP-/IVC
-  interpolation frame; exact ties prefer Q=0.
+- For Taige sweeps, the two opposite finite-Q IVC active-frame branches
+  \(Q=\pm(\kappa_+-\kappa_-)\) can also be solved using the symmetric
+  convention `K: k-Q/2`, `Kprime: k+Q/2`. When branch selection is enabled,
+  both signed sectors are retained, the lower-energy finite-Q sector is
+  compared with Q=0, and the winning active frame supplies the whole
+  VP+/VP-/IVC interpolation; exact ties prefer Q=0. Preserve an exact physical
+  kappa-difference \(Q\) on meshes divisible by three, including odd meshes
+  whose symmetric half shift is represented by the torus solution
+  \(2h=Q\pmod {n_k}\).
 
 The variational path is a convex interpolation of full raw reference HF
 Hamiltonians:

@@ -25,8 +25,9 @@ from chiral_dw.continuum.references import (
 )
 from chiral_dw.continuum.sweep import trial_theta_rows
 from chiral_dw.continuum.taige import (
+    TaigeFiniteQSector,
     TaigeFiniteQShiftPolicy,
-    taige_ivc_minus_shift_choice,
+    taige_ivc_shift_choice,
 )
 from chiral_dw.domain_wall import DomainWallChargeProfile, charge_density_radial
 from chiral_dw.response import KThetaResult, k_theta_from_projectors_with_basis, projector_errors
@@ -63,6 +64,9 @@ class ContinuumSymmetricHFWorkflowResult:
     ivc_branch_policy: IVCBranchPolicy = "q0"
     q0_branch: ContinuumSymmetricHFBranch | None = None
     finite_q_branch: ContinuumSymmetricHFBranch | None = None
+    finite_q_branches: dict[TaigeFiniteQSector, ContinuumSymmetricHFBranch] = field(
+        default_factory=dict
+    )
     branch_selection: dict = field(default_factory=dict)
     manifest: RunManifest | None = None
 
@@ -125,6 +129,7 @@ def _build_suppressed_texture_result(
     ivc_branch_policy: IVCBranchPolicy,
     q0_branch: ContinuumSymmetricHFBranch | None,
     finite_q_branch: ContinuumSymmetricHFBranch | None,
+    finite_q_branches: dict[TaigeFiniteQSector, ContinuumSymmetricHFBranch] | None = None,
     branch_selection: dict,
 ) -> ContinuumSymmetricHFWorkflowResult:
     theta = continuum_theta_nodes(controls)
@@ -174,6 +179,7 @@ def _build_suppressed_texture_result(
         ivc_branch_policy=ivc_branch_policy,
         q0_branch=q0_branch,
         finite_q_branch=finite_q_branch,
+        finite_q_branches={} if finite_q_branches is None else finite_q_branches,
         branch_selection=branch_selection,
     )
 
@@ -187,6 +193,7 @@ def _build_response_result(
     ivc_branch_policy: IVCBranchPolicy,
     q0_branch: ContinuumSymmetricHFBranch | None,
     finite_q_branch: ContinuumSymmetricHFBranch | None,
+    finite_q_branches: dict[TaigeFiniteQSector, ContinuumSymmetricHFBranch] | None = None,
     branch_selection: dict,
 ) -> ContinuumSymmetricHFWorkflowResult:
     theta = continuum_theta_nodes(controls)
@@ -239,6 +246,7 @@ def _build_response_result(
         ivc_branch_policy=ivc_branch_policy,
         q0_branch=q0_branch,
         finite_q_branch=finite_q_branch,
+        finite_q_branches={} if finite_q_branches is None else finite_q_branches,
         branch_selection=branch_selection,
     )
 
@@ -279,6 +287,7 @@ def run_continuum_symmetric_hf_workflow(
         ivc_branch_policy="q0",
         q0_branch=q0_branch,
         finite_q_branch=None,
+        finite_q_branches=None,
         branch_selection=branch_selection,
     )
     if write_outputs:
@@ -287,15 +296,17 @@ def run_continuum_symmetric_hf_workflow(
     return result
 
 
-def taige_ivc_minus_finite_q_params(
+def taige_ivc_finite_q_params(
     n_k: int,
     *,
+    sector: TaigeFiniteQSector,
     finite_q_shift_policy: TaigeFiniteQShiftPolicy = "exact",
 ) -> ContinuumFiniteQParams:
-    """Return the default Taige IVC- finite-Q active-frame controls."""
+    """Return one signed Taige finite-Q IVC active-frame control set."""
 
-    choice = taige_ivc_minus_shift_choice(
+    choice = taige_ivc_shift_choice(
         int(n_k),
+        sector=sector,
         policy=finite_q_shift_policy,
     )
     return ContinuumFiniteQParams(
@@ -305,19 +316,67 @@ def taige_ivc_minus_finite_q_params(
     )
 
 
+def taige_ivc_minus_finite_q_params(
+    n_k: int,
+    *,
+    finite_q_shift_policy: TaigeFiniteQShiftPolicy = "exact",
+) -> ContinuumFiniteQParams:
+    """Return the Taige IVC- finite-Q active-frame controls."""
+
+    return taige_ivc_finite_q_params(
+        n_k,
+        sector="minus",
+        finite_q_shift_policy=finite_q_shift_policy,
+    )
+
+
+def taige_ivc_plus_finite_q_params(
+    n_k: int,
+    *,
+    finite_q_shift_policy: TaigeFiniteQShiftPolicy = "exact",
+) -> ContinuumFiniteQParams:
+    """Return the Taige IVC+ finite-Q active-frame controls."""
+
+    return taige_ivc_finite_q_params(
+        n_k,
+        sector="plus",
+        finite_q_shift_policy=finite_q_shift_policy,
+    )
+
+
+def taige_ivc_finite_q_params_by_sector(
+    n_k: int,
+    *,
+    finite_q_shift_policy: TaigeFiniteQShiftPolicy = "exact",
+) -> dict[TaigeFiniteQSector, ContinuumFiniteQParams]:
+    """Return explicit active frames for both opposite IVC sectors."""
+
+    return {
+        sector: taige_ivc_finite_q_params(
+            n_k,
+            sector=sector,
+            finite_q_shift_policy=finite_q_shift_policy,
+        )
+        for sector in ("plus", "minus")
+    }
+
+
 def _taige_finite_q_metadata(
     finite_q: ContinuumFiniteQParams,
     grid,
     *,
+    sector: TaigeFiniteQSector = "minus",
     finite_q_shift_policy: TaigeFiniteQShiftPolicy,
 ) -> dict:
-    choice = taige_ivc_minus_shift_choice(
+    choice = taige_ivc_shift_choice(
         grid.n_k,
+        sector=sector,
         policy=finite_q_shift_policy,
     )
-    return {
+    metadata = {
         **finite_q_shift_metadata(finite_q, grid),
-        "taige_ivc_minus_shift_choice": choice.model_dump(mode="json"),
+        "taige_ivc_sector": sector,
+        "taige_ivc_shift_choice": choice.model_dump(mode="json"),
         "finite_q_shift_policy": choice.policy,
         "finite_q_exact": choice.exact,
         "q_error_grid_units": choice.q_error_grid_units,
@@ -325,6 +384,9 @@ def _taige_finite_q_metadata(
         "q_error_fractional_norm": choice.q_error_fractional_norm,
         "half_shift_error_fractional_norm": choice.half_shift_error_fractional_norm,
     }
+    if sector == "minus":
+        metadata["taige_ivc_minus_shift_choice"] = choice.model_dump(mode="json")
+    return metadata
 
 
 def select_ivc_branch_by_energy(
@@ -404,26 +466,35 @@ def run_taige_branch_selected_symmetric_hf_workflow(
     )
 
     finite_q_branch: ContinuumSymmetricHFBranch | None = None
+    finite_q_branches: dict[TaigeFiniteQSector, ContinuumSymmetricHFBranch] = {}
     if finite_q_enabled:
-        finite_q = taige_ivc_minus_finite_q_params(
+        finite_q_params = taige_ivc_finite_q_params_by_sector(
             controls.grid.n_k,
             finite_q_shift_policy=finite_q_shift_policy,
         )
-        finite_bundle = build_continuum_bundle(
-            model=controls.model,
-            grid=controls.grid,
-            interaction=controls.interaction,
-            finite_q=finite_q,
-        )
-        finite_refs = build_symmetric_hf_references(finite_bundle, controls.hf)
-        finite_q_branch = ContinuumSymmetricHFBranch(
-            name="finite_q",
-            bundle=finite_bundle,
-            references=finite_refs,
-            metadata=_taige_finite_q_metadata(
-                finite_q,
-                finite_bundle.grid,
-                finite_q_shift_policy=finite_q_shift_policy,
+        for sector, finite_q in finite_q_params.items():
+            finite_bundle = build_continuum_bundle(
+                model=controls.model,
+                grid=controls.grid,
+                interaction=controls.interaction,
+                finite_q=finite_q,
+            )
+            finite_refs = build_symmetric_hf_references(finite_bundle, controls.hf)
+            finite_q_branches[sector] = ContinuumSymmetricHFBranch(
+                name="finite_q",
+                bundle=finite_bundle,
+                references=finite_refs,
+                metadata=_taige_finite_q_metadata(
+                    finite_q,
+                    finite_bundle.grid,
+                    sector=sector,
+                    finite_q_shift_policy=finite_q_shift_policy,
+                ),
+            )
+        finite_q_branch = min(
+            finite_q_branches.values(),
+            key=lambda branch: (
+                branch.references.ivc.energy / branch.bundle.backend.n_blocks
             ),
         )
 
@@ -433,6 +504,22 @@ def run_taige_branch_selected_symmetric_hf_workflow(
         ivc_branch_policy=policy,  # type: ignore[arg-type]
         tie_atol=tie_atol,
     )
+    sector_energies = {
+        sector: float(
+            branch.references.ivc.energy / branch.bundle.backend.n_blocks
+        )
+        for sector, branch in finite_q_branches.items()
+    }
+    selected_finite_q_sector = (
+        None
+        if finite_q_branch is None
+        else str(finite_q_branch.metadata["taige_ivc_sector"])
+    )
+    branch_selection = {
+        **branch_selection,
+        "finite_q_sector_energy_per_cell": sector_energies,
+        "selected_finite_q_sector": selected_finite_q_sector,
+    }
     selected_branch = q0_branch if selected_name == "q0" else finite_q_branch
     if selected_branch is None:
         raise RuntimeError("finite-Q branch was selected but no finite-Q branch was solved")
@@ -448,7 +535,11 @@ def run_taige_branch_selected_symmetric_hf_workflow(
         "hf_ground_state": (
             "VP"
             if texture_valid
-            else ("IVC_0" if selected_name == "q0" else "IVC_-")
+            else (
+                "IVC_0"
+                if selected_name == "q0"
+                else ("IVC_+" if selected_finite_q_sector == "plus" else "IVC_-")
+            )
         ),
         "texture_valid": bool(texture_valid),
         "texture_invalid_reason": (
@@ -468,6 +559,7 @@ def run_taige_branch_selected_symmetric_hf_workflow(
             ivc_branch_policy=policy,  # type: ignore[arg-type]
             q0_branch=q0_branch,
             finite_q_branch=finite_q_branch,
+            finite_q_branches=finite_q_branches,
             branch_selection=branch_selection,
         )
         if write_outputs:
@@ -484,6 +576,7 @@ def run_taige_branch_selected_symmetric_hf_workflow(
         ivc_branch_policy=policy,  # type: ignore[arg-type]
         q0_branch=q0_branch,
         finite_q_branch=finite_q_branch,
+        finite_q_branches=finite_q_branches,
         branch_selection=branch_selection,
     )
     if write_outputs:
@@ -625,6 +718,9 @@ __all__ = [
     "run_continuum_symmetric_hf_workflow",
     "run_taige_branch_selected_symmetric_hf_workflow",
     "select_ivc_branch_by_energy",
+    "taige_ivc_finite_q_params",
+    "taige_ivc_finite_q_params_by_sector",
     "taige_ivc_minus_finite_q_params",
+    "taige_ivc_plus_finite_q_params",
     "write_continuum_symmetric_hf_outputs",
 ]

@@ -259,6 +259,7 @@ class ContinuumInteractionParams(BaseModel):
     q_shell: int = Field(default=1, ge=0)
     q_mesh: Literal["shell", "full"] = "shell"
     local_field_cutoff: int = Field(default=0, ge=0)
+    momentum_transfer_cutoff_km: float | None = Field(default=None, gt=0.0)
     coulomb_kind: Literal[
         "dimensionless_dual_gate",
         "dimensionless_screened",

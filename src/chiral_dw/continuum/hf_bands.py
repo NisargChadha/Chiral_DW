@@ -389,12 +389,17 @@ def _channel_allowed(
     q_frac: np.ndarray,
 ) -> np.ndarray:
     q = np.asarray(q_frac, dtype=float)
-    if int(interaction.local_field_cutoff) <= 0:
+    physical_cutoff = interaction.momentum_transfer_cutoff_km
+    if int(interaction.local_field_cutoff) <= 0 and physical_cutoff is None:
         return np.ones(q.shape[:-1], dtype=bool)
     geometry = active.geometry
     if not isinstance(geometry, MoireGeometry):
         geometry = MoireGeometry(active.model)
-    cutoff = float(interaction.local_field_cutoff) * np.sqrt(3.0) / 2.0
+    cutoff = (
+        float(interaction.local_field_cutoff) * np.sqrt(3.0) / 2.0
+        if physical_cutoff is None
+        else float(physical_cutoff)
+    )
     return np.linalg.norm(_q_dimless_vectors(geometry, q), axis=-1) < cutoff
 
 

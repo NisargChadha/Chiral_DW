@@ -44,36 +44,55 @@ def c3_radial_channel_mask(
     q_list: Sequence[GridCoord],
     g_channels: Sequence[GridCoord],
     local_field_cutoff: int,
+    momentum_transfer_cutoff_km: float | None = None,
 ) -> np.ndarray:
     """Select a radial, C3-invariant domain in the combined momentum ``q+G``.
 
     For a triangular reciprocal basis with unit vectors separated by 60 degrees,
     ``|u b1 + v b2|^2 = u^2 + v^2 + u v``.  A positive integer cutoff ``L``
-    retains channels inside radius ``L*sqrt(3)/2``.  On square momentum meshes
-    the comparison is performed with integers so symmetry-related boundary
-    points cannot be separated by floating-point roundoff.
+    retains channels inside radius ``L*sqrt(3)/2`` unless an explicit physical
+    radius ``momentum_transfer_cutoff_km`` is supplied in units of ``|g_M|``.
+    On square momentum meshes the comparison uses the integer quadratic form,
+    so symmetry-related boundary points cannot be split by floating-point
+    roundoff. The inequality is strict in either convention.
 
-    ``L=0`` preserves the historical single-G-channel behavior.
+    ``L=0`` with no explicit radius preserves the historical single-G-channel
+    behavior. ``local_field_cutoff`` still controls the candidate reciprocal
+    box; callers must choose it large enough to contain the requested disk.
     """
 
     cutoff = int(local_field_cutoff)
     mask = np.ones((len(q_list), len(g_channels)), dtype=bool)
-    if cutoff <= 0:
+    physical_cutoff = (
+        None
+        if momentum_transfer_cutoff_km is None
+        else float(momentum_transfer_cutoff_km)
+    )
+    if cutoff <= 0 and physical_cutoff is None:
         return mask
 
     n1 = int(grid.n1)
     n2 = int(grid.n2)
     if n1 == n2:
         n = n1
-        cutoff_rhs = 3 * (cutoff * n) ** 2
+        if physical_cutoff is None:
+            cutoff_rhs = 3 * (cutoff * n) ** 2
+            lhs_scale = 4
+        else:
+            cutoff_rhs = (physical_cutoff * n) ** 2
+            lhs_scale = 1
         for iq, (qi, qj) in enumerate(q_list):
             for ig, (g1, g2) in enumerate(g_channels):
                 a = int(qi) + n * int(g1)
                 b = int(qj) + n * int(g2)
-                mask[iq, ig] = 4 * (a * a + b * b + a * b) < cutoff_rhs
+                mask[iq, ig] = lhs_scale * (a * a + b * b + a * b) < cutoff_rhs
         return mask
 
-    cutoff_squared = 0.75 * float(cutoff**2)
+    cutoff_squared = (
+        0.75 * float(cutoff**2)
+        if physical_cutoff is None
+        else physical_cutoff**2
+    )
     for iq, (qi, qj) in enumerate(q_list):
         for ig, (g1, g2) in enumerate(g_channels):
             u = float(qi) / n1 + int(g1)
