@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from chiral_dw.config import ContinuumGridParams, ContinuumInteractionParams
 from chiral_dw.continuum.builder import build_continuum_bundle
@@ -18,7 +19,13 @@ from chiral_dw.continuum.memory_benchmark import (
     run_taige_memory_benchmark_worker,
 )
 from chiral_dw.continuum.models import MomentumGrid, hermitize
-from chiral_dw.continuum.taige import q_transfers, reciprocal_box, taige_model_params
+from chiral_dw.continuum.taige import (
+    MoireGeometry,
+    _channel_mask,
+    q_transfers,
+    reciprocal_box,
+    taige_model_params,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "benchmark_taige_memory_backends.py"
@@ -74,8 +81,63 @@ def test_taige_memory_byte_estimator_matches_shapes():
     assert estimates.n_q == n_q
     assert estimates.n_g == n_g
     assert estimates.lambda_blocks_mb == expected_lambda / 1024**2
+    assert estimates.physical_compact_lambda_blocks_mb <= (
+        estimates.compact_lambda_blocks_mb
+    )
     assert estimates.dense_tve_mb == expected_tve / 1024**2
     assert estimates.sector_tve_mb == expected_sector_tve / 1024**2
+
+
+def test_nk24_three_gm_disk_flat_compact_form_factors_are_about_1p29_gib():
+    n_k = 24
+    n_active = 2
+    grid = MomentumGrid(n_k)
+    interaction = ContinuumInteractionParams(
+        q_mesh="full",
+        local_field_cutoff=3,
+        momentum_transfer_cutoff_km=3.0,
+    )
+    model = taige_model_params(
+        theta_deg=3.5,
+        u_D=0.0,
+        plane_wave_shell=1,
+        n_bands=2,
+        n_active_bands_per_valley=n_active,
+    )
+    geometry = MoireGeometry(model)
+    q_list = q_transfers(grid, interaction)
+    g_channels = reciprocal_box(interaction.local_field_cutoff)
+    accepted = _channel_mask(
+        geometry,
+        grid,
+        q_list,
+        g_channels,
+        interaction.local_field_cutoff,
+        interaction.momentum_transfer_cutoff_km,
+    )
+    n_physical = int(np.count_nonzero(accepted))
+    compact_form_factor_bytes = (
+        n_physical
+        * grid.size
+        * 2
+        * n_active
+        * n_active
+        * np.dtype(np.complex128).itemsize
+    )
+    rectangular_bytes = (
+        len(q_list)
+        * len(g_channels)
+        * grid.size
+        * 2
+        * n_active
+        * n_active
+        * np.dtype(np.complex128).itemsize
+    )
+
+    assert compact_form_factor_bytes / 1024**3 == pytest.approx(
+        1.2895889282226562
+    )
+    assert compact_form_factor_bytes < 0.7 * rectangular_bytes
 
 
 def test_compact_lambdas_round_trip_valley_diagonal_blocks():

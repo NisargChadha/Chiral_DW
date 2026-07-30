@@ -710,6 +710,62 @@ def test_taige_hartree_only_retention_preserves_backend_physics():
     assert np.allclose(retained_spectrum.energies, full_spectrum.energies)
 
 
+def test_taige_hartree_only_streams_slabs_without_full_vertex_table(monkeypatch):
+    import chiral_dw.continuum.taige as taige_module
+
+    model = taige_model_params(
+        theta_deg=3.5,
+        u_D=0.0,
+        plane_wave_shell=1,
+        n_bands=1,
+    )
+    full_bundle = build_continuum_bundle(
+        model=model,
+        grid=ContinuumGridParams(n_k=3),
+        interaction=ContinuumInteractionParams(
+            coulomb_kind="dual_gate",
+            v0=0.04,
+            q_mesh="full",
+            q_shell=0,
+            local_field_cutoff=1,
+            density_vertex_retention="full",
+        ),
+    )
+
+    def forbid_full_array_builder(**_kwargs):
+        raise AssertionError("streamed retention must not build the full vertex array")
+
+    monkeypatch.setattr(
+        taige_module,
+        "_build_taige_density_vertex_arrays_serial",
+        forbid_full_array_builder,
+    )
+    interaction = full_bundle.interaction.model_copy(
+        update={"density_vertex_retention": "hartree_only"}
+    )
+    vertices = build_taige_density_vertices(full_bundle.active, interaction)
+
+    assert vertices.prebuilt_exchange_sectors is not None
+    assert vertices.prebuilt_exchange_sectors.shape[:2] == (2, 2)
+    assert vertices.lambda_compact is not None
+    assert vertices.lambda_compact.shape[:2] == (0, 0)
+    assert vertices.physical_channels is not None
+    assert full_bundle.vertices.physical_channels is not None
+    assert vertices.physical_channels.n_channels < (
+        full_bundle.vertices.physical_channels.n_channels
+    )
+    assert np.all(
+        vertices.physical_channels.hartree
+        | (
+            np.linalg.norm(
+                vertices.physical_channels.physical_transfer_nm_inv,
+                axis=1,
+            )
+            < 1e-12
+        )
+    )
+
+
 def test_valley_u1_constraint_projects_intervalley_blocks_and_preserves_vp_seed():
     bundle = _small_bundle()
     active = bundle.active

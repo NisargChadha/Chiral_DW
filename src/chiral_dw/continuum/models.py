@@ -250,6 +250,7 @@ class PhysicalDensityChannels:
     compact_form_factor: np.ndarray
     hartree: np.ndarray
     mesh_transfer: np.ndarray
+    candidate_index: np.ndarray
 
     def __post_init__(self) -> None:
         transfer = np.asarray(self.physical_transfer_nm_inv, dtype=float)
@@ -258,6 +259,7 @@ class PhysicalDensityChannels:
         form_factor = np.asarray(self.compact_form_factor, dtype=complex)
         hartree = np.asarray(self.hartree, dtype=bool)
         mesh_transfer = np.asarray(self.mesh_transfer, dtype=int)
+        candidate_index = np.asarray(self.candidate_index, dtype=int)
         if transfer.ndim != 2 or transfer.shape[1] != 2:
             raise ValueError("physical transfers must have shape (n_channels, 2)")
         n_channels = int(transfer.shape[0])
@@ -271,6 +273,8 @@ class PhysicalDensityChannels:
             raise ValueError("Hartree flags must have shape (n_channels,)")
         if mesh_transfer.shape != (n_channels, 2):
             raise ValueError("mesh transfers must have shape (n_channels, 2)")
+        if candidate_index.shape != (n_channels, 2):
+            raise ValueError("candidate indices must have shape (n_channels, 2)")
         if form_factor.ndim != 5 or form_factor.shape[:2] != (
             n_channels,
             permutation.shape[1],
@@ -289,6 +293,7 @@ class PhysicalDensityChannels:
         object.__setattr__(self, "compact_form_factor", form_factor)
         object.__setattr__(self, "hartree", hartree)
         object.__setattr__(self, "mesh_transfer", mesh_transfer)
+        object.__setattr__(self, "candidate_index", candidate_index)
 
     @property
     def n_channels(self) -> int:
@@ -311,6 +316,7 @@ class PhysicalDensityChannels:
             + self.compact_form_factor.nbytes
             + self.hartree.nbytes
             + self.mesh_transfer.nbytes
+            + self.candidate_index.nbytes
         )
 
 
@@ -370,6 +376,21 @@ def density_vertices_dense_lambdas(vertices: DensityVertices) -> np.ndarray:
     if vertices.vertex_layout == "dense":
         return np.asarray(vertices.lambda_blocks)
     if vertices.vertex_layout == "valley_compact":
+        if vertices.physical_channels is not None:
+            channels = vertices.physical_channels
+            n_q = len(vertices.q_shifts)
+            n_g = len(vertices.g_channels)
+            n_blocks = channels.n_blocks
+            n_active = channels.n_active
+            dense = np.zeros(
+                (n_q, n_g, n_blocks, 2 * n_active, 2 * n_active),
+                dtype=complex,
+            )
+            indices = channels.candidate_index
+            dense[indices[:, 0], indices[:, 1]] = dense_lambdas_from_compact(
+                channels.compact_form_factor
+            )
+            return dense
         if vertices.lambda_compact is None:
             raise ValueError("valley_compact DensityVertices require lambda_compact")
         return dense_lambdas_from_compact(vertices.lambda_compact)

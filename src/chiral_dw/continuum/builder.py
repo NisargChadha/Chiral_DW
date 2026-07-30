@@ -281,12 +281,18 @@ def _build_taige_finite_q_inputs(
         interaction,
         finite_q,
     )
-    raw_q0_vertices = build_taige_density_vertices(q0_active, interaction_params)
-    raw_finite_q_vertices = roll_taige_density_vertices(
-        raw_q0_vertices,
-        finite_q_active,
-    )
-    del raw_q0_vertices
+    if interaction_params.density_vertex_retention == "hartree_only":
+        raw_finite_q_vertices = build_taige_density_vertices(
+            finite_q_active,
+            interaction_params,
+        )
+    else:
+        raw_q0_vertices = build_taige_density_vertices(q0_active, interaction_params)
+        raw_finite_q_vertices = roll_taige_density_vertices(
+            raw_q0_vertices,
+            finite_q_active,
+        )
+        del raw_q0_vertices
     return (
         interaction_params,
         bands,
@@ -327,9 +333,13 @@ def _build_taige_q_sector_inputs(
         finite_q,
     )
     raw_q0_vertices = build_taige_density_vertices(q0_active, interaction_params)
-    raw_finite_q_vertices = roll_taige_density_vertices(
-        raw_q0_vertices,
-        finite_q_active,
+    raw_finite_q_vertices = (
+        build_taige_density_vertices(finite_q_active, interaction_params)
+        if interaction_params.density_vertex_retention == "hartree_only"
+        else roll_taige_density_vertices(
+            raw_q0_vertices,
+            finite_q_active,
+        )
     )
     return (
         q0_params,

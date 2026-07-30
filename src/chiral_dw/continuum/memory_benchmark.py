@@ -51,6 +51,7 @@ from chiral_dw.continuum.models import (
 from chiral_dw.continuum.references import build_symmetric_hf_references
 from chiral_dw.continuum.symmetry import _fixed_per_k_aufbau
 from chiral_dw.continuum.taige import (
+    MoireGeometry,
     _channel_mask,
     _dimensionless_v_over_a,
     _physical_v_over_a,
@@ -185,8 +186,10 @@ class TaigeArrayByteEstimate(BaseModel):
     n_g: int
     dim: int
     n_active: int
+    n_physical_channels: int
     lambda_blocks_mb: float
     compact_lambda_blocks_mb: float
+    physical_compact_lambda_blocks_mb: float
     target_minus_q_mb: float
     v_over_a_mb: float
     dense_tve_mb: float
@@ -511,21 +514,21 @@ def variant_spec(name: BackendVariant) -> TaigeBackendVariantSpec:
         ),
         "sector_exchange": TaigeBackendVariantSpec(
             name="sector_exchange",
-            description="Production compact Taige vertices with scalar form factors and valley-sector exchange.",
+            description="Streamed scalar Taige vertices accumulated into valley-sector exchange.",
             keeps_full_lambda_blocks=False,
             keeps_dense_tve=False,
             uses_sector_tve=True,
         ),
         "sector_cached_gather": TaigeBackendVariantSpec(
             name="sector_cached_gather",
-            description="Production compact Taige vertices with cached gathers and valley-sector exchange.",
+            description="Streamed cached-gather Taige vertices accumulated into valley-sector exchange.",
             keeps_full_lambda_blocks=False,
             keeps_dense_tve=False,
             uses_sector_tve=True,
         ),
         "sector_vectorized": TaigeBackendVariantSpec(
             name="sector_vectorized",
-            description="Production compact Taige vertices with vectorized form factors and valley-sector exchange.",
+            description="Streamed vectorized Taige vertices accumulated into valley-sector exchange.",
             keeps_full_lambda_blocks=False,
             keeps_dense_tve=False,
             uses_sector_tve=True,
@@ -608,8 +611,10 @@ def _measure_stage(
 def estimate_taige_array_bytes(params: TaigeMemoryBenchmarkInput) -> TaigeArrayByteEstimate:
     grid = MomentumGrid(params.n_k)
     interaction = params.interaction_params()
-    n_q = len(q_transfers(grid, interaction))
-    n_g = len(reciprocal_box(params.local_field_cutoff))
+    q_list = q_transfers(grid, interaction)
+    g_channels = reciprocal_box(params.local_field_cutoff)
+    n_q = len(q_list)
+    n_g = len(g_channels)
     n_blocks = grid.size
     n_active = int(params.n_active_bands_per_valley)
     dim = 2 * n_active
@@ -618,6 +623,23 @@ def estimate_taige_array_bytes(params: TaigeMemoryBenchmarkInput) -> TaigeArrayB
     float_bytes = np.dtype(float).itemsize
     lambda_bytes = n_q * n_g * n_blocks * dim * dim * complex128_bytes
     compact_bytes = n_q * n_g * n_blocks * 2 * n_active * n_active * complex128_bytes
+    channel_mask = _channel_mask(
+        MoireGeometry(params.model_params()),
+        grid,
+        q_list,
+        g_channels,
+        interaction.local_field_cutoff,
+        interaction.momentum_transfer_cutoff_km,
+    )
+    n_physical_channels = int(np.count_nonzero(channel_mask))
+    physical_compact_bytes = (
+        n_physical_channels
+        * n_blocks
+        * 2
+        * n_active
+        * n_active
+        * complex128_bytes
+    )
     block_dim = dim * dim
     tve_bytes = (n_blocks * block_dim) ** 2 * complex128_bytes
     sector_block_dim = n_active * n_active
@@ -631,8 +653,12 @@ def estimate_taige_array_bytes(params: TaigeMemoryBenchmarkInput) -> TaigeArrayB
         n_g=int(n_g),
         dim=int(dim),
         n_active=int(n_active),
+        n_physical_channels=n_physical_channels,
         lambda_blocks_mb=_bytes_to_mb(lambda_bytes),
         compact_lambda_blocks_mb=_bytes_to_mb(compact_bytes),
+        physical_compact_lambda_blocks_mb=_bytes_to_mb(
+            physical_compact_bytes
+        ),
         target_minus_q_mb=_bytes_to_mb(n_q * n_blocks * int_bytes),
         v_over_a_mb=_bytes_to_mb(n_q * n_g * float_bytes),
         dense_tve_mb=_bytes_to_mb(tve_bytes),
@@ -1199,7 +1225,7 @@ def _variant_estimated_peak_mb(
     if variant == "compact_dense_exchange":
         return compact + dense_tve
     if variant in {"sector_exchange", "sector_cached_gather", "sector_vectorized"}:
-        return compact + sector_tve
+        return one_q_compact + sector_tve
     if variant == "packed":
         return full + dense_tve + packed
     if variant == "matrix_free":
@@ -1747,6 +1773,9 @@ def write_taige_memory_benchmark_outputs(
                 **_model_dump(result.summary),
                 "estimated_lambda_blocks_mb": result.estimates.lambda_blocks_mb,
                 "estimated_compact_lambda_blocks_mb": result.estimates.compact_lambda_blocks_mb,
+                "estimated_physical_compact_lambda_blocks_mb": (
+                    result.estimates.physical_compact_lambda_blocks_mb
+                ),
                 "estimated_dense_tve_mb": result.estimates.dense_tve_mb,
                 "estimated_sector_tve_mb": result.estimates.sector_tve_mb,
                 "estimated_packed_tve_mb": result.estimates.packed_tve_mb,

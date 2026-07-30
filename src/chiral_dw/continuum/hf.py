@@ -359,7 +359,15 @@ class ContinuumHFBackend:
         self.tVE: np.ndarray | None = None
         self.valley_sector_exchange: ValleySectorExchange | None = None
         if self.exchange_representation == "valley_sector":
-            self.valley_sector_exchange = self._build_valley_sector_exchange()
+            prebuilt_sectors = getattr(vertices, "prebuilt_exchange_sectors", None)
+            if prebuilt_sectors is None:
+                self.valley_sector_exchange = self._build_valley_sector_exchange()
+            else:
+                self.valley_sector_exchange = ValleySectorExchange(
+                    sectors=np.asarray(prebuilt_sectors, dtype=complex),
+                    n_blocks=self.n_blocks,
+                    n_active=self.n_active,
+                )
         else:
             self.tVE = self._build_exchange_tve()
         self._apply_density_vertex_retention()
@@ -777,6 +785,7 @@ class ContinuumHFBackend:
                     ),
                     hartree=np.zeros(0, dtype=bool),
                     mesh_transfer=np.zeros((0, 2), dtype=int),
+                    candidate_index=np.zeros((0, 2), dtype=int),
                 )
                 self.physical_channels = retained_physical
             self.vertices = self._vertices_without_lambda_blocks(
@@ -850,6 +859,9 @@ class ContinuumHFBackend:
                 compact_form_factor=np.asarray(retained_compact[:, 0]).copy(),
                 hartree=np.ones(retained_count, dtype=bool),
                 mesh_transfer=self.physical_channels.mesh_transfer[
+                    old_indices
+                ].copy(),
+                candidate_index=self.physical_channels.candidate_index[
                     old_indices
                 ].copy(),
             )

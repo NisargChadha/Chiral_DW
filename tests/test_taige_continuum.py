@@ -539,7 +539,9 @@ def test_taige_density_vertices_have_q0_identity_and_smeared_dual_gate_weights()
 
     assert vertices.vertex_layout == "valley_compact"
     assert vertices.lambda_blocks.shape[:3] == (0, 0, 4)
-    assert vertices.lambda_compact.shape[:4] == (7, 1, 4, 2)
+    assert vertices.lambda_compact.shape[:3] == (0, 0, 4)
+    assert vertices.physical_channels is not None
+    assert vertices.physical_channels.compact_form_factor.shape[1:] == (4, 2, 1, 1)
     dense_lambdas = density_vertices_dense_lambdas(vertices)
     assert dense_lambdas.shape[:3] == (7, 1, 4)
     assert np.allclose(dense_lambdas[iq0, 0], np.eye(bundle.active.dim), atol=1e-10)
@@ -567,7 +569,17 @@ def _assert_matching_density_vertices(serial, parallel):
         atol=1e-12,
     )
     if serial.vertex_layout == "valley_compact":
-        assert np.allclose(serial.lambda_compact, parallel.lambda_compact, atol=1e-12)
+        assert serial.physical_channels is not None
+        assert parallel.physical_channels is not None
+        assert np.array_equal(
+            serial.physical_channels.candidate_index,
+            parallel.physical_channels.candidate_index,
+        )
+        assert np.allclose(
+            serial.physical_channels.compact_form_factor,
+            parallel.physical_channels.compact_form_factor,
+            atol=1e-12,
+        )
         assert serial.lambda_blocks.shape[:2] == (0, 0)
     else:
         assert np.allclose(serial.lambda_blocks, parallel.lambda_blocks, atol=1e-12)
@@ -986,31 +998,47 @@ def test_taige_rolled_vertices_exhaustively_match_direct_reconstruction(layout):
             _assert_matching_density_vertices(baseline_direct, direct_serial)
 
         if layout == "valley_compact":
-            q0_lambda = q0_serial.lambda_compact
-            rolled_lambda = rolled_serial.lambda_compact
+            assert q0_serial.physical_channels is not None
+            assert rolled_serial.physical_channels is not None
+            q0_lambda = q0_serial.physical_channels.compact_form_factor
+            rolled_lambda = rolled_serial.physical_channels.compact_form_factor
         else:
             q0_lambda = q0_serial.lambda_blocks
             rolled_lambda = rolled_serial.lambda_blocks
         assert q0_lambda is not None
         assert rolled_lambda is not None
-        for iq in range(len(q0_serial.q_shifts)):
-            for ig in range(len(q0_serial.g_channels)):
-                for ik in range(finite_active.n_k):
-                    for valley in range(2):
-                        source = int(finite_active.source_index[ik, valley])
-                        if layout == "valley_compact":
-                            expected = q0_lambda[iq, ig, source, valley]
-                            actual = rolled_lambda[iq, ig, ik, valley]
-                        else:
-                            start = valley * finite_active.n_active
-                            stop = start + finite_active.n_active
-                            expected = q0_lambda[
-                                iq, ig, source, start:stop, start:stop
-                            ]
-                            actual = rolled_lambda[
-                                iq, ig, ik, start:stop, start:stop
-                            ]
-                        assert np.allclose(actual, expected, atol=1e-12)
+        if layout == "valley_compact":
+            channel_indices = range(q0_lambda.shape[0])
+        else:
+            channel_indices = (
+                (iq, ig)
+                for iq in range(len(q0_serial.q_shifts))
+                for ig in range(len(q0_serial.g_channels))
+            )
+        for channel_index in channel_indices:
+            if layout == "valley_compact":
+                q0_channel = q0_lambda[int(channel_index)]
+                rolled_channel = rolled_lambda[int(channel_index)]
+            else:
+                iq, ig = channel_index
+                q0_channel = q0_lambda[iq, ig]
+                rolled_channel = rolled_lambda[iq, ig]
+            for ik in range(finite_active.n_k):
+                for valley in range(2):
+                    source = int(finite_active.source_index[ik, valley])
+                    if layout == "valley_compact":
+                        expected = q0_channel[source, valley]
+                        actual = rolled_channel[ik, valley]
+                    else:
+                        start = valley * finite_active.n_active
+                        stop = start + finite_active.n_active
+                        expected = q0_channel[
+                            source, start:stop, start:stop
+                        ]
+                        actual = rolled_channel[
+                            ik, start:stop, start:stop
+                        ]
+                    assert np.allclose(actual, expected, atol=1e-12)
 
 
 def test_projector_like_seed_mix_preserves_trace_and_hf_snapshots_are_recorded():

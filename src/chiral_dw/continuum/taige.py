@@ -29,6 +29,7 @@ from chiral_dw.continuum.taige_sewing import reciprocal_shift_gather
 
 GridCoord = tuple[int, int]
 _MAX_TAIGE_VERTEX_ROLL_Q_POINTS = 8
+_MAX_TAIGE_VERTEX_BUILD_Q_POINTS = 8
 
 HBAR2_OVER_2ME_MEV_A2 = 3809.98212
 E2_MEV_NM = 1439.96454784255
@@ -1491,6 +1492,125 @@ def _build_taige_density_vertex_arrays_parallel(
     return target_minus_q, q_is_zero, lambdas
 
 
+def _iter_taige_density_vertex_slabs(
+    *,
+    q_list: tuple[GridCoord, ...],
+    g_channels: tuple[GridCoord, ...],
+    channel_in_disk: np.ndarray,
+    grid: MomentumGrid,
+    active: ContinuumActiveSpace,
+    shell_index: dict[GridCoord, int],
+    gather_cache: GatherCache | None,
+    electron_vectors: np.ndarray,
+    compact: bool,
+    form_factor_backend: str,
+    vertex_workers: int,
+):
+    """Yield bounded vectorized vertex slabs in increasing q order."""
+
+    if compact:
+        slab_builder = (
+            _taige_density_vertex_q_slab_compact_vectorized
+            if form_factor_backend == "vectorized"
+            else _taige_density_vertex_q_slab_compact
+        )
+    else:
+        slab_builder = _taige_density_vertex_q_slab
+    ranges = tuple(
+        (
+            start,
+            min(start + _MAX_TAIGE_VERTEX_BUILD_Q_POINTS, len(q_list)),
+        )
+        for start in range(0, len(q_list), _MAX_TAIGE_VERTEX_BUILD_Q_POINTS)
+    )
+
+    def _task(start: int, stop: int):
+        kwargs = {
+            "q_start": start,
+            "q_stop": stop,
+            "q_list": q_list,
+            "g_channels": g_channels,
+            "channel_in_disk": channel_in_disk,
+            "n_k": grid.n_k,
+            "n_active": active.n_active,
+            "shell": active.shell,
+            "shell_index": shell_index,
+            "gather_cache": gather_cache,
+            "electron_vectors": electron_vectors,
+            "source_index": active.source_index,
+        }
+        if not compact:
+            kwargs["dim"] = active.dim
+            kwargs["form_factor_backend"] = form_factor_backend
+        return slab_builder(**kwargs)
+
+    n_jobs = max(1, min(int(vertex_workers), len(ranges)))
+    if n_jobs == 1:
+        for start, stop in ranges:
+            yield _task(start, stop)
+        return
+
+    from joblib import Parallel, delayed
+
+    tasks = (delayed(_task)(start, stop) for start, stop in ranges)
+    yield from Parallel(
+        n_jobs=n_jobs,
+        backend="loky",
+        return_as="generator",
+        mmap_mode="r",
+        max_nbytes="32M",
+        batch_size=1,
+        pre_dispatch=n_jobs,
+    )(tasks)
+
+
+def _accumulate_valley_sector_exchange_slab(
+    sectors: np.ndarray,
+    *,
+    target_slab: np.ndarray,
+    lambda_slab: np.ndarray,
+    v_over_a_slab: np.ndarray,
+    exchange_scale: float,
+) -> None:
+    """Accumulate one rectangular q slab into four valley-sector operators."""
+
+    from chiral_dw.continuum.hf import _exchange_sector_tve_q_slab_compact
+
+    n_blocks = int(target_slab.shape[1])
+    n_active = int(lambda_slab.shape[-1])
+    block_dim = n_active * n_active
+    local = np.arange(block_dim)
+    block_rows = np.arange(n_blocks)[:, None] * block_dim + local[None, :]
+    rows = _exchange_sector_tve_q_slab_compact(
+        q_start=0,
+        q_stop=int(lambda_slab.shape[0]),
+        lambda_compact=lambda_slab,
+        v_over_a=v_over_a_slab,
+        exchange_scale=exchange_scale,
+    )
+    for local_iq, iv, jv, forward, reverse in rows:
+        target_rows = (
+            target_slab[int(local_iq), :, None] * block_dim + local[None, :]
+        )
+        sectors[int(iv), int(jv)][
+            block_rows[:, :, None],
+            target_rows[:, None, :],
+        ] += forward.reshape(n_blocks, block_dim, block_dim)
+        sectors[int(iv), int(jv)][
+            target_rows[:, :, None],
+            block_rows[:, None, :],
+        ] += reverse.reshape(n_blocks, block_dim, block_dim)
+
+
+def _finish_valley_sector_exchange(sectors: np.ndarray) -> np.ndarray:
+    from chiral_dw.continuum.hf import _hermitize_dense_in_place
+
+    for iv in range(2):
+        for jv in range(2):
+            _hermitize_dense_in_place(sectors[iv, jv])
+    return sectors
+
+
 def build_taige_density_vertices(
     active: ContinuumActiveSpace,
     interaction: ContinuumInteractionParams,
@@ -1532,34 +1652,6 @@ def build_taige_density_vertices(
         shell=shell,
         shell_index=shell_index,
     )
-    if interaction.vertex_workers <= 1:
-        target_minus_q, q_is_zero, lambdas = _build_taige_density_vertex_arrays_serial(
-            q_list=q_list,
-            g_channels=g_channels,
-            channel_in_disk=channel_in_disk,
-            grid=grid,
-            active=active,
-            shell_index=shell_index,
-            gather_cache=gather_cache,
-            electron_vectors=electron_vectors,
-            compact=compact,
-            form_factor_backend=form_factor_backend,
-        )
-    else:
-        target_minus_q, q_is_zero, lambdas = _build_taige_density_vertex_arrays_parallel(
-            q_list=q_list,
-            g_channels=g_channels,
-            channel_in_disk=channel_in_disk,
-            grid=grid,
-            active=active,
-            shell_index=shell_index,
-            gather_cache=gather_cache,
-            electron_vectors=electron_vectors,
-            vertex_workers=interaction.vertex_workers,
-            compact=compact,
-            form_factor_backend=form_factor_backend,
-        )
-
     q_vectors_nm_inv = geometry.mesh_q_vectors_nm_inv(grid, q_list, g_channels)
     if interaction.coulomb_kind == "dual_gate":
         v_q, v_over_a, q_zero_channels = _physical_v_over_a(
@@ -1574,32 +1666,111 @@ def build_taige_density_vertices(
         v_over_a = np.where(channel_in_disk, v_over_a, 0.0)
         v_q = np.where(channel_in_disk, v_q, 0.0)
 
-    q_is_zero = np.logical_or(q_is_zero, np.any(q_zero_channels, axis=-1))
+    q_is_zero = np.logical_or(
+        np.asarray([q == (0, 0) for q in q_list], dtype=bool),
+        np.any(q_zero_channels, axis=-1),
+    )
+    channel_q, channel_g = np.nonzero(
+        np.asarray(channel_in_disk, dtype=bool)
+        & (np.asarray(v_over_a, dtype=float) != 0.0)
+    )
+    channel_q = np.asarray(channel_q, dtype=int)
+    channel_g = np.asarray(channel_g, dtype=int)
+    physical_transfer = np.asarray(
+        q_vectors_nm_inv[channel_q, channel_g],
+        dtype=float,
+    )
+    uniform = np.linalg.norm(physical_transfer, axis=1) < 1e-12
+    hartree = np.asarray(q_is_zero[channel_q], dtype=bool)
+    if interaction.q0_hartree == "omit_uniform":
+        hartree = np.logical_and(hartree, np.logical_not(uniform))
+    if float(interaction.hartree_scale) == 0.0:
+        hartree = np.zeros_like(hartree)
+
+    requested_exchange = str(interaction.exchange_representation)
+    stream_exchange = (
+        compact
+        and interaction.density_vertex_retention == "hartree_only"
+        and requested_exchange in {"auto", "valley_sector"}
+    )
+    prebuilt_exchange_sectors = None
     physical_channels = None
-    if compact:
-        channel_q, channel_g = np.nonzero(
-            np.asarray(channel_in_disk, dtype=bool)
-            & (np.asarray(v_over_a, dtype=float) != 0.0)
+    if stream_exchange:
+        n_blocks = int(grid.size)
+        sector_dim = n_blocks * active.n_active * active.n_active
+        sectors = np.zeros(
+            (2, 2, sector_dim, sector_dim),
+            dtype=complex,
         )
-        channel_q = np.asarray(channel_q, dtype=int)
-        channel_g = np.asarray(channel_g, dtype=int)
-        physical_transfer = np.asarray(
-            q_vectors_nm_inv[channel_q, channel_g],
-            dtype=float,
+        target_minus_q = np.empty((len(q_list), n_blocks), dtype=int)
+        retain = np.logical_or(hartree, uniform)
+        retained_q = channel_q[retain]
+        retained_g = channel_g[retain]
+        retained_positions = np.full(channel_in_disk.shape, -1, dtype=int)
+        retained_positions[retained_q, retained_g] = np.arange(
+            retained_q.size,
+            dtype=int,
         )
-        uniform = np.linalg.norm(physical_transfer, axis=1) < 1e-12
-        hartree = np.asarray(q_is_zero[channel_q], dtype=bool)
-        if interaction.q0_hartree == "omit_uniform":
-            hartree = np.logical_and(hartree, np.logical_not(uniform))
-        if float(interaction.hartree_scale) == 0.0:
-            hartree = np.zeros_like(hartree)
+        retained_permutation = np.empty(
+            (retained_q.size, n_blocks),
+            dtype=int,
+        )
+        retained_form_factor = np.empty(
+            (
+                retained_q.size,
+                n_blocks,
+                2,
+                active.n_active,
+                active.n_active,
+            ),
+            dtype=complex,
+        )
+        for q_start, target_slab, _q_zero_slab, lambda_slab in (
+            _iter_taige_density_vertex_slabs(
+                q_list=q_list,
+                g_channels=g_channels,
+                channel_in_disk=channel_in_disk,
+                grid=grid,
+                active=active,
+                shell_index=shell_index,
+                gather_cache=gather_cache,
+                electron_vectors=electron_vectors,
+                compact=True,
+                form_factor_backend=form_factor_backend,
+                vertex_workers=interaction.vertex_workers,
+            )
+        ):
+            q_stop = int(q_start) + int(target_slab.shape[0])
+            target_minus_q[int(q_start) : q_stop] = target_slab
+            _accumulate_valley_sector_exchange_slab(
+                sectors,
+                target_slab=target_slab,
+                lambda_slab=lambda_slab,
+                v_over_a_slab=v_over_a[int(q_start) : q_stop],
+                exchange_scale=interaction.exchange_scale,
+            )
+            local_q, local_g = np.nonzero(
+                retained_positions[int(q_start) : q_stop] >= 0
+            )
+            if local_q.size:
+                positions = retained_positions[
+                    int(q_start) + local_q,
+                    local_g,
+                ]
+                retained_permutation[positions] = target_slab[local_q]
+                retained_form_factor[positions] = lambda_slab[local_q, local_g]
+        prebuilt_exchange_sectors = _finish_valley_sector_exchange(sectors)
         physical_channels = PhysicalDensityChannels(
-            physical_transfer_nm_inv=physical_transfer,
-            momentum_permutation=np.asarray(target_minus_q[channel_q], dtype=int),
-            weight=np.asarray(v_over_a[channel_q, channel_g], dtype=float),
-            compact_form_factor=np.asarray(lambdas[channel_q, channel_g], dtype=complex),
-            hartree=hartree,
-            mesh_transfer=np.asarray([q_list[int(iq)] for iq in channel_q], dtype=int),
+            physical_transfer_nm_inv=physical_transfer[retain],
+            momentum_permutation=retained_permutation,
+            weight=np.asarray(v_over_a[retained_q, retained_g], dtype=float),
+            compact_form_factor=retained_form_factor,
+            hartree=hartree[retain],
+            mesh_transfer=np.asarray(
+                [q_list[int(iq)] for iq in retained_q],
+                dtype=int,
+            ).reshape(-1, 2),
+            candidate_index=np.column_stack((retained_q, retained_g)),
         )
         lambda_blocks = np.zeros(
             (0, 0, grid.size, active.dim, active.dim),
@@ -1610,8 +1781,67 @@ def build_taige_density_vertices(
             dtype=complex,
         )
     else:
-        lambda_blocks = lambdas
-        lambda_compact = None
+        if interaction.vertex_workers <= 1:
+            target_minus_q, _built_q_is_zero, lambdas = (
+                _build_taige_density_vertex_arrays_serial(
+                    q_list=q_list,
+                    g_channels=g_channels,
+                    channel_in_disk=channel_in_disk,
+                    grid=grid,
+                    active=active,
+                    shell_index=shell_index,
+                    gather_cache=gather_cache,
+                    electron_vectors=electron_vectors,
+                    compact=compact,
+                    form_factor_backend=form_factor_backend,
+                )
+            )
+        else:
+            target_minus_q, _built_q_is_zero, lambdas = (
+                _build_taige_density_vertex_arrays_parallel(
+                    q_list=q_list,
+                    g_channels=g_channels,
+                    channel_in_disk=channel_in_disk,
+                    grid=grid,
+                    active=active,
+                    shell_index=shell_index,
+                    gather_cache=gather_cache,
+                    electron_vectors=electron_vectors,
+                    vertex_workers=interaction.vertex_workers,
+                    compact=compact,
+                    form_factor_backend=form_factor_backend,
+                )
+            )
+        if compact:
+            physical_channels = PhysicalDensityChannels(
+                physical_transfer_nm_inv=physical_transfer,
+                momentum_permutation=np.asarray(
+                    target_minus_q[channel_q],
+                    dtype=int,
+                ),
+                weight=np.asarray(v_over_a[channel_q, channel_g], dtype=float),
+                compact_form_factor=np.asarray(
+                    lambdas[channel_q, channel_g],
+                    dtype=complex,
+                ),
+                hartree=hartree,
+                mesh_transfer=np.asarray(
+                    [q_list[int(iq)] for iq in channel_q],
+                    dtype=int,
+                ).reshape(-1, 2),
+                candidate_index=np.column_stack((channel_q, channel_g)),
+            )
+            lambda_blocks = np.zeros(
+                (0, 0, grid.size, active.dim, active.dim),
+                dtype=complex,
+            )
+            lambda_compact = np.zeros(
+                (0, 0, grid.size, 2, active.n_active, active.n_active),
+                dtype=complex,
+            )
+        else:
+            lambda_blocks = lambdas
+            lambda_compact = None
 
     return DensityVertices(
         q_shifts=q_list,
@@ -1627,6 +1857,7 @@ def build_taige_density_vertices(
         q_norm_nm_inv=np.linalg.norm(q_vectors_nm_inv, axis=-1),
         v_q=v_q,
         physical_channels=physical_channels,
+        prebuilt_exchange_sectors=prebuilt_exchange_sectors,
     )
 
 
@@ -1683,6 +1914,7 @@ def roll_taige_density_vertices(
             compact_form_factor=rolled_compact,
             hartree=physical_channels.hartree.copy(),
             mesh_transfer=physical_channels.mesh_transfer.copy(),
+            candidate_index=physical_channels.candidate_index.copy(),
         )
         rolled_dense = np.asarray(q0_vertices.lambda_blocks).copy()
         lambda_compact = np.asarray(q0_vertices.lambda_compact).copy()

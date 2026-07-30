@@ -70,6 +70,7 @@ physics while reducing retained backend memory.
 | 1 | Valley-sector exchange | Implemented | `n_k=4,6`, compact dense exchange vs sector exchange, fock/HF/energy errors `<1e-14` | Final exchange storage is reduced by `4x`; for two active bands per valley, `n_k=24` dense `tVE` is about `1.27 GiB` and sector exchange is about `0.32 GiB`. |
 | 2 | Cached form-factor gather maps | Implemented | `n_k=4,6`, scalar sector exchange vs cached-gather sector exchange, fock/HF/energy errors `<1e-14` | No meaningful retained-memory change; compact vertex stage improved from `0.017s` to `0.0089s` at `n_k=4` and from `0.048s` to `0.043s` at `n_k=6` in the local smoke run. |
 | 3 | Vectorized form-factor construction | Implemented | `n_k=4,6`, cached-gather sector exchange vs vectorized sector exchange, fock/HF/energy errors `<1e-13` | Compact vertex stage improved from `0.0086s` to `0.0073s` at `n_k=4` and from `0.042s` to `0.022s` at `n_k=6`; temporary RSS can rise slightly from batched contractions. |
+| 4 | Flat physical channels and streamed sector assembly | Implemented | `n_k=12`, streamed vectorized sector backend vs dense baseline: fock/HF errors `1.44e-14`, energy error `9.1e-13`; build-plus-smoke time `4.15s` vs `7.76s`, peak RSS `164.8 MiB` vs `449.3 MiB` | The strict `3|g_M|` disk at `n_k=24` stores `1.2896 GiB` of compact form factors instead of a zero-padded rectangular candidate table. With `density_vertex_retention="hartree_only"`, exchange vertices are consumed in bounded q slabs and never retained. |
 
 ## Setup
 
