@@ -41,6 +41,7 @@ from chiral_dw.continuum import (
 from chiral_dw.continuum.models import SymmetricHFReferences, block_trace_product, hermitize
 from chiral_dw.continuum.models import dense_lambdas_from_compact
 from chiral_dw.continuum.hf import (
+    _choose_oda_lambda,
     _exchange_q_slab_ranges,
     _hermitize_dense_in_place,
 )
@@ -204,6 +205,153 @@ def test_optimized_backend_matches_slow_hartree_fock_reference():
 
     P, _evals, _direct, _indirect = backend.update_density(backend.h0, 3)
     assert np.real(np.trace(P, axis1=-2, axis2=-1).sum()) == pytest.approx(3.0)
+
+
+def test_working_field_oda_linearity_matches_direct_recomputation():
+    bundle = _small_bundle()
+    backend = bundle.backend
+    P_vp = valley_polarized_seed(bundle.active, "K")
+    P_ivc = ivc_seed(bundle.active, n_occ_per_k=1)
+    P = hermitize(0.63 * P_vp + 0.37 * P_ivc)
+    relative_density = P - backend.p_ref
+    hartree = backend.hartree_hamiltonian(relative_density)
+    fock = backend.fock_hamiltonian(relative_density)
+    H = hermitize(backend.h0 + hartree + fock)
+    P_aufbau, _evals, _direct, _indirect = backend.update_density_per_k(H, 1)
+    delta = hermitize(P_aufbau - P)
+    trial_relative_density = P_aufbau - backend.p_ref
+    trial_hartree = backend.hartree_hamiltonian(trial_relative_density)
+    trial_fock = backend.fock_hamiltonian(trial_relative_density)
+    delta_hartree = hermitize(trial_hartree - hartree)
+    delta_fock = hermitize(trial_fock - fock)
+
+    slope = block_trace_product(H, delta)
+    curvature_from_linearity = (
+        2.0 * backend.hartree_energy(delta)
+        + block_trace_product(delta_fock, delta)
+    )
+    curvature_direct = 2.0 * backend.interaction_energy(delta)
+    lambda_linear, reason_linear = _choose_oda_lambda(
+        slope,
+        curvature_from_linearity,
+        1e-4,
+    )
+    lambda_direct, reason_direct = _choose_oda_lambda(
+        slope,
+        curvature_direct,
+        1e-4,
+    )
+
+    assert curvature_from_linearity == pytest.approx(curvature_direct, abs=1e-12)
+    assert lambda_linear == pytest.approx(lambda_direct, abs=1e-12)
+    assert reason_linear == reason_direct
+
+    P_mixed = hermitize(P + lambda_linear * delta)
+    hartree_mixed = hermitize(hartree + lambda_linear * delta_hartree)
+    fock_mixed = hermitize(fock + lambda_linear * delta_fock)
+    assert np.allclose(
+        hartree_mixed,
+        backend.hartree_hamiltonian(P_mixed - backend.p_ref),
+        atol=1e-12,
+    )
+    assert np.allclose(
+        fock_mixed,
+        backend.fock_hamiltonian(P_mixed - backend.p_ref),
+        atol=1e-12,
+    )
+    assert backend.total_energy_from_fields(
+        P_mixed,
+        hartree_mixed,
+        fock_mixed,
+    ) == pytest.approx(backend.energy(P_mixed).total, abs=1e-12)
+
+
+def test_hf_oda_applies_one_trial_fock_field_per_iteration(monkeypatch):
+    bundle = _small_bundle()
+    backend = bundle.backend
+    original_fock_hamiltonian = backend.fock_hamiltonian
+    calls = 0
+
+    def counted_fock_hamiltonian(Q):
+        nonlocal calls
+        calls += 1
+        return original_fock_hamiltonian(Q)
+
+    monkeypatch.setattr(backend, "fock_hamiltonian", counted_fock_hamiltonian)
+    result = solve_hf(
+        backend,
+        ivc_seed(bundle.active, n_occ_per_k=1),
+        ContinuumHFParams(
+            max_iter=4,
+            min_iter=4,
+            mixing_method="oda",
+            tolerance=1e-30,
+            energy_tolerance=1e-30,
+        ),
+    )
+
+    # One initial field, one trial field per iteration, and one final
+    # idempotent-projector field.
+    assert calls == result.n_iter + 2
+
+
+def test_working_field_oda_matches_direct_recomputation_trajectory():
+    bundle = _small_bundle()
+    backend = bundle.backend
+    controls = ContinuumHFParams(
+        max_iter=4,
+        min_iter=4,
+        mixing_method="oda",
+        tolerance=1e-30,
+        energy_tolerance=1e-30,
+    )
+    P_direct = hermitize(
+        0.57 * valley_polarized_seed(bundle.active, "K")
+        + 0.43 * ivc_seed(bundle.active, n_occ_per_k=1)
+    )
+    direct_lambdas = []
+    direct_energies = []
+    for _iteration in range(1, controls.max_iter + 1):
+        H_direct = backend.hf_hamiltonian(P_direct)
+        P_aufbau, _evals, _direct, _indirect = backend.update_density_per_k(
+            H_direct,
+            controls.n_occ_per_k,
+        )
+        delta = hermitize(P_aufbau - P_direct)
+        slope = block_trace_product(H_direct, delta)
+        curvature = 2.0 * backend.interaction_energy(delta)
+        lambda_value, _reason = _choose_oda_lambda(
+            slope,
+            curvature,
+            controls.oda_lambda_min,
+        )
+        P_direct = hermitize(P_direct + lambda_value * delta)
+        direct_lambdas.append(lambda_value)
+        direct_energies.append(backend.energy(P_direct).total)
+    H_direct = backend.hf_hamiltonian(P_direct)
+    P_final_direct, _evals, _direct, _indirect = backend.update_density_per_k(
+        H_direct,
+        controls.n_occ_per_k,
+    )
+
+    result = solve_hf(
+        backend,
+        hermitize(
+            0.57 * valley_polarized_seed(bundle.active, "K")
+            + 0.43 * ivc_seed(bundle.active, n_occ_per_k=1)
+        ),
+        controls,
+    )
+
+    assert [row.lambda_value for row in result.history] == pytest.approx(
+        direct_lambdas,
+        abs=1e-12,
+    )
+    assert [row.energy for row in result.history] == pytest.approx(
+        direct_energies,
+        abs=1e-12,
+    )
+    assert np.allclose(result.P, P_final_direct, atol=1e-12)
 
 
 def test_finite_q_taige_backend_matches_slow_hartree_fock_reference():

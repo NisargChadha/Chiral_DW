@@ -28,6 +28,7 @@ from chiral_dw.continuum.models import (
     ContinuumBundle,
     DensityVertices,
     MomentumGrid,
+    block_trace_product,
     hermitize,
 )
 from chiral_dw.continuum.symmetry import mesh_inversion_map
@@ -80,10 +81,48 @@ class C3SymmetrizedACBackend:
     def fock_hamiltonian(self, density: np.ndarray) -> np.ndarray:
         return self._average_hamiltonian_map("fock_hamiltonian", density)
 
+    def self_energy(self, Q: np.ndarray) -> np.ndarray:
+        """Return the C3-averaged linear Hartree-plus-Fock field."""
+
+        density = self.as_block_density(Q)
+        return hermitize(
+            self.hartree_hamiltonian(density) + self.fock_hamiltonian(density)
+        )
+
     def hf_hamiltonian(self, P: np.ndarray) -> np.ndarray:
         density = self.as_block_density(P)
         Q = density - self.p_ref
-        return hermitize(self.h0 + self.hartree_hamiltonian(Q) + self.fock_hamiltonian(Q))
+        return hermitize(self.h0 + self.self_energy(Q))
+
+    def hartree_energy(self, Q: np.ndarray) -> float:
+        density = self.as_block_density(Q)
+        return float(
+            np.mean(
+                [
+                    self.base.hartree_energy(self._rotate_blocks(density, turn))
+                    for turn in range(3)
+                ]
+            )
+        )
+
+    def total_energy_from_fields(
+        self,
+        P: np.ndarray,
+        hartree_field: np.ndarray,
+        fock_field: np.ndarray,
+    ) -> float:
+        density = self.as_block_density(P)
+        direct_field = hermitize(np.asarray(hartree_field, dtype=complex))
+        exchange_field = hermitize(np.asarray(fock_field, dtype=complex))
+        if direct_field.shape != self.h0.shape:
+            raise ValueError("hartree_field has the wrong shape")
+        if exchange_field.shape != self.h0.shape:
+            raise ValueError("fock_field has the wrong shape")
+        relative_density = density - self.p_ref
+        one_body = block_trace_product(self.h0, density)
+        hartree = self.hartree_energy(relative_density)
+        fock = 0.5 * block_trace_product(exchange_field, relative_density)
+        return float(one_body + hartree + fock)
 
     def interaction_components(self, Q: np.ndarray) -> tuple[float, float]:
         density = self.as_block_density(Q)

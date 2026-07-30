@@ -846,12 +846,22 @@ class ContinuumHFBackend:
             out = -np.reshape(self.tVE @ np.reshape(density, (-1,)), density.shape)
         return hermitize(out)
 
+    def self_energy(self, Q: np.ndarray) -> np.ndarray:
+        """Return the linear Hartree-plus-Fock map evaluated on ``Q``."""
+
+        density = self.as_block_density(Q)
+        return hermitize(
+            self.hartree_hamiltonian(density) + self.fock_hamiltonian(density)
+        )
+
     def hf_hamiltonian(self, P: np.ndarray) -> np.ndarray:
         density = self.as_block_density(P)
         Q = density - self.p_ref
-        return hermitize(self.h0 + self.hartree_hamiltonian(Q) + self.fock_hamiltonian(Q))
+        return hermitize(self.h0 + self.self_energy(Q))
 
-    def interaction_components(self, Q: np.ndarray) -> tuple[float, float]:
+    def hartree_energy(self, Q: np.ndarray) -> float:
+        """Evaluate the direct-channel quadratic form without rebuilding Fock."""
+
         density = self.as_block_density(Q)
         hartree = 0.0
         for iq, ig, v in self.hartree_channels:
@@ -862,6 +872,39 @@ class ContinuumHFBackend:
                 lam = self.lambda_blocks[iq, ig]
                 rho = np.einsum("kab,kba->", lam, density, optimize=True)
             hartree += 0.5 * v * float(np.real(rho * np.conj(rho)))
+        return float(hartree)
+
+    def total_energy_from_fields(
+        self,
+        P: np.ndarray,
+        hartree_field: np.ndarray,
+        fock_field: np.ndarray,
+    ) -> float:
+        """Evaluate the HF energy using fields already matched to ``P``.
+
+        The direct-channel energy is evaluated from the same explicit channel
+        amplitudes as the full functional. The Fock quadratic form satisfies
+        ``E_F=Tr(H_F Q)/2``. Keeping the cached fields separate therefore
+        avoids a second expensive Fock application without depending on an
+        additional Hartree trace identity.
+        """
+
+        density = self.as_block_density(P)
+        direct_field = hermitize(np.asarray(hartree_field, dtype=complex))
+        exchange_field = hermitize(np.asarray(fock_field, dtype=complex))
+        if direct_field.shape != self.h0.shape:
+            raise ValueError("hartree_field has the wrong shape")
+        if exchange_field.shape != self.h0.shape:
+            raise ValueError("fock_field has the wrong shape")
+        relative_density = density - self.p_ref
+        one_body = block_trace_product(self.h0, density)
+        hartree = self.hartree_energy(relative_density)
+        fock = 0.5 * block_trace_product(exchange_field, relative_density)
+        return float(one_body + hartree + fock)
+
+    def interaction_components(self, Q: np.ndarray) -> tuple[float, float]:
+        density = self.as_block_density(Q)
+        hartree = self.hartree_energy(density)
         fock = 0.5 * block_trace_product(self.fock_hamiltonian(density), density)
         return hartree, fock
 
@@ -969,11 +1012,19 @@ def compute_hf_diagnostics(
     density_kind: Literal["mixed", "final_idempotent"] = "mixed",
     lambda_value: float | None = None,
     fallback_reason: str | None = None,
+    working_hamiltonian: np.ndarray | None = None,
+    working_energy: float | None = None,
 ) -> ContinuumHFDiagnostics:
     """Compute scalar diagnostics for one density."""
 
     density = backend.as_block_density(P)
-    H = backend.hf_hamiltonian(density)
+    H = (
+        backend.hf_hamiltonian(density)
+        if working_hamiltonian is None
+        else hermitize(np.asarray(working_hamiltonian, dtype=complex))
+    )
+    if H.shape != backend.h0.shape:
+        raise ValueError("working_hamiltonian has the wrong shape")
     H_projected = constraint.project_operator(H) if constraint is not None else H
     expected_trace = _expected_trace(backend, params)
     P_aufbau, _evals, direct, indirect = backend.update_density_per_k(
@@ -981,7 +1032,11 @@ def compute_hf_diagnostics(
         params.n_occ_per_k,
         constraint,
     )
-    energy = backend.energy(density).total
+    energy = (
+        backend.energy(density).total
+        if working_energy is None
+        else float(working_energy)
+    )
     idem_fro, idem_max = projector_idempotency_errors(density)
     trace = np.trace(density, axis1=-2, axis2=-1)
     residual = float(np.linalg.norm(density - P_aufbau))
@@ -1024,18 +1079,30 @@ def compute_global_hf_diagnostics(
     density_kind: Literal["mixed", "final_idempotent"] = "mixed",
     lambda_value: float | None = None,
     fallback_reason: str | None = None,
+    working_hamiltonian: np.ndarray | None = None,
+    working_energy: float | None = None,
 ) -> ContinuumHFDiagnostics:
     """Compute diagnostics for a globally filled zero-temperature density."""
 
     density = backend.as_block_density(P)
-    H = backend.hf_hamiltonian(density)
+    H = (
+        backend.hf_hamiltonian(density)
+        if working_hamiltonian is None
+        else hermitize(np.asarray(working_hamiltonian, dtype=complex))
+    )
+    if H.shape != backend.h0.shape:
+        raise ValueError("working_hamiltonian has the wrong shape")
     H_projected = constraint.project_operator(H) if constraint is not None else H
     P_aufbau, _evals, direct, indirect = backend.update_density(
         H_projected,
         n_particles,
         constraint,
     )
-    energy = backend.energy(density).total
+    energy = (
+        backend.energy(density).total
+        if working_energy is None
+        else float(working_energy)
+    )
     idem_fro, idem_max = projector_idempotency_errors(density)
     trace = np.trace(density, axis1=-2, axis2=-1)
     residual = float(np.linalg.norm(density - P_aufbau))
@@ -1085,6 +1152,25 @@ def retarget_global_density(
     return P
 
 
+def _working_hf_state(
+    backend: ContinuumHFBackend,
+    P: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, float]:
+    """Return a density and its matched Hartree/Fock fields, Hamiltonian, and energy."""
+
+    density = backend.as_block_density(P)
+    relative_density = density - backend.p_ref
+    hartree_field = backend.hartree_hamiltonian(relative_density)
+    fock_field = backend.fock_hamiltonian(relative_density)
+    hamiltonian = hermitize(backend.h0 + hartree_field + fock_field)
+    energy = backend.total_energy_from_fields(
+        density,
+        hartree_field,
+        fock_field,
+    )
+    return density, hartree_field, fock_field, hamiltonian, energy
+
+
 def solve_hf(
     backend: ContinuumHFBackend,
     P_init: np.ndarray,
@@ -1101,6 +1187,16 @@ def solve_hf(
     P = backend.as_block_density(P_init)
     if constraint is not None:
         P = constraint.project_density(P)
+    (
+        P,
+        working_hartree,
+        working_fock,
+        working_hamiltonian,
+        energy,
+    ) = _working_hf_state(
+        backend,
+        P,
+    )
     history: list[ContinuumHFDiagnostics] = []
     snapshots: list[ContinuumHFIterationSnapshot] = []
     converged = False
@@ -1110,14 +1206,17 @@ def solve_hf(
         controls,
         constraint=constraint,
         iteration=0,
+        working_hamiltonian=working_hamiltonian,
+        working_energy=energy,
     )
-    energy = diagnostics.energy
     n_iter = 0
     for iteration in range(1, controls.max_iter + 1):
         n_iter = iteration
         P_prev = P
+        hartree_prev = working_hartree
+        fock_prev = working_fock
         energy_prev = energy
-        H_prev = backend.hf_hamiltonian(P_prev)
+        H_prev = working_hamiltonian
         H_projected = constraint.project_operator(H_prev) if constraint is not None else H_prev
         P_aufbau, _evals, _direct, _indirect = backend.update_density_per_k(
             H_projected,
@@ -1125,17 +1224,34 @@ def solve_hf(
             constraint,
         )
         delta = hermitize(P_aufbau - P_prev)
+        trial_relative_density = P_aufbau - backend.p_ref
+        trial_hartree = backend.hartree_hamiltonian(trial_relative_density)
+        trial_fock = backend.fock_hamiltonian(trial_relative_density)
+        delta_hartree = hermitize(trial_hartree - hartree_prev)
+        delta_fock = hermitize(trial_fock - fock_prev)
         fallback_reason = None
         if controls.mixing_method == "oda":
             s = block_trace_product(H_projected, delta)
-            c = 2.0 * backend.interaction_energy(delta)
+            c = (
+                2.0 * backend.hartree_energy(delta)
+                + block_trace_product(delta_fock, delta)
+            )
             mix, fallback_reason = _choose_oda_lambda(s, c, controls.oda_lambda_min)
         else:
             mix = float(controls.mixing)
         P = hermitize(P_prev + mix * delta)
+        working_hartree = hermitize(hartree_prev + mix * delta_hartree)
+        working_fock = hermitize(fock_prev + mix * delta_fock)
         if constraint is not None:
             P = constraint.project_density(P)
-        energy = backend.energy(P).total
+        working_hamiltonian = hermitize(
+            backend.h0 + working_hartree + working_fock
+        )
+        energy = backend.total_energy_from_fields(
+            P,
+            working_hartree,
+            working_fock,
+        )
         diagnostics = compute_hf_diagnostics(
             backend,
             P,
@@ -1146,6 +1262,8 @@ def solve_hf(
             iteration=iteration,
             lambda_value=float(mix),
             fallback_reason=fallback_reason,
+            working_hamiltonian=working_hamiltonian,
+            working_energy=energy,
         )
         history.append(diagnostics)
         should_snapshot = controls.store_projector_snapshots and (
@@ -1180,14 +1298,20 @@ def solve_hf(
             converged = True
             break
 
-    H_mixed = backend.hf_hamiltonian(P)
+    H_mixed = working_hamiltonian
     H_projected = constraint.project_operator(H_mixed) if constraint is not None else H_mixed
     P_final, _evals, _direct, _indirect = backend.update_density_per_k(
         H_projected,
         controls.n_occ_per_k,
         constraint,
     )
-    final_H_raw = backend.hf_hamiltonian(P_final)
+    (
+        P_final,
+        _final_hartree,
+        _final_fock,
+        final_H_raw,
+        final_energy,
+    ) = _working_hf_state(backend, P_final)
     final_H = constraint.project_operator(final_H_raw) if constraint is not None else final_H_raw
     final_diagnostics = compute_hf_diagnostics(
         backend,
@@ -1198,13 +1322,15 @@ def solve_hf(
         energy_prev=diagnostics.energy,
         iteration=n_iter,
         density_kind="final_idempotent",
+        working_hamiltonian=final_H_raw,
+        working_energy=final_energy,
     )
     if final_diagnostics.self_consistency_warning:
         converged = False
     return ContinuumHFResult(
         P=P_final,
         H_hf=final_H,
-        energy=backend.energy(P_final).total,
+        energy=final_energy,
         converged=converged,
         n_iter=n_iter,
         diagnostics=final_diagnostics,
@@ -1243,6 +1369,16 @@ def solve_global_hf(
             target,
             constraint=constraint,
         )
+    (
+        P,
+        working_hartree,
+        working_fock,
+        working_hamiltonian,
+        energy,
+    ) = _working_hf_state(
+        backend,
+        P,
+    )
     history: list[ContinuumHFDiagnostics] = []
     snapshots: list[ContinuumHFIterationSnapshot] = []
     converged = False
@@ -1253,14 +1389,17 @@ def solve_global_hf(
         controls,
         constraint=constraint,
         iteration=0,
+        working_hamiltonian=working_hamiltonian,
+        working_energy=energy,
     )
-    energy = diagnostics.energy
     n_iter = 0
     for iteration in range(1, controls.max_iter + 1):
         n_iter = iteration
         P_prev = P
+        hartree_prev = working_hartree
+        fock_prev = working_fock
         energy_prev = energy
-        H_prev = backend.hf_hamiltonian(P_prev)
+        H_prev = working_hamiltonian
         H_projected = constraint.project_operator(H_prev) if constraint is not None else H_prev
         P_aufbau, _evals, _direct, _indirect = backend.update_density(
             H_projected,
@@ -1268,17 +1407,34 @@ def solve_global_hf(
             constraint,
         )
         delta = hermitize(P_aufbau - P_prev)
+        trial_relative_density = P_aufbau - backend.p_ref
+        trial_hartree = backend.hartree_hamiltonian(trial_relative_density)
+        trial_fock = backend.fock_hamiltonian(trial_relative_density)
+        delta_hartree = hermitize(trial_hartree - hartree_prev)
+        delta_fock = hermitize(trial_fock - fock_prev)
         fallback_reason = None
         if controls.mixing_method == "oda":
             s = block_trace_product(H_projected, delta)
-            c = 2.0 * backend.interaction_energy(delta)
+            c = (
+                2.0 * backend.hartree_energy(delta)
+                + block_trace_product(delta_fock, delta)
+            )
             mix, fallback_reason = _choose_oda_lambda(s, c, controls.oda_lambda_min)
         else:
             mix = float(controls.mixing)
         P = hermitize(P_prev + mix * delta)
+        working_hartree = hermitize(hartree_prev + mix * delta_hartree)
+        working_fock = hermitize(fock_prev + mix * delta_fock)
         if constraint is not None:
             P = constraint.project_density(P)
-        energy = backend.energy(P).total
+        working_hamiltonian = hermitize(
+            backend.h0 + working_hartree + working_fock
+        )
+        energy = backend.total_energy_from_fields(
+            P,
+            working_hartree,
+            working_fock,
+        )
         diagnostics = compute_global_hf_diagnostics(
             backend,
             P,
@@ -1290,6 +1446,8 @@ def solve_global_hf(
             iteration=iteration,
             lambda_value=float(mix),
             fallback_reason=fallback_reason,
+            working_hamiltonian=working_hamiltonian,
+            working_energy=energy,
         )
         history.append(diagnostics)
         should_snapshot = controls.store_projector_snapshots and (
@@ -1324,14 +1482,20 @@ def solve_global_hf(
             converged = True
             break
 
-    H_mixed = backend.hf_hamiltonian(P)
+    H_mixed = working_hamiltonian
     H_projected = constraint.project_operator(H_mixed) if constraint is not None else H_mixed
     P_final, _evals, _direct, _indirect = backend.update_density(
         H_projected,
         target,
         constraint,
     )
-    final_H_raw = backend.hf_hamiltonian(P_final)
+    (
+        P_final,
+        _final_hartree,
+        _final_fock,
+        final_H_raw,
+        final_energy,
+    ) = _working_hf_state(backend, P_final)
     final_H = constraint.project_operator(final_H_raw) if constraint is not None else final_H_raw
     final_diagnostics = compute_global_hf_diagnostics(
         backend,
@@ -1343,13 +1507,15 @@ def solve_global_hf(
         energy_prev=diagnostics.energy,
         iteration=n_iter,
         density_kind="final_idempotent",
+        working_hamiltonian=final_H_raw,
+        working_energy=final_energy,
     )
     if final_diagnostics.self_consistency_warning:
         converged = False
     return ContinuumHFResult(
         P=P_final,
         H_hf=final_H,
-        energy=backend.energy(P_final).total,
+        energy=final_energy,
         converged=converged,
         n_iter=n_iter,
         diagnostics=final_diagnostics,

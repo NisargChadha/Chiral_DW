@@ -82,6 +82,34 @@ def test_global_hf_fills_lowest_states_and_reports_global_diagnostics():
     assert result.diagnostics.trace_error < 1e-12
 
 
+def test_global_hf_oda_applies_one_trial_fock_field_per_iteration(monkeypatch):
+    backend = _noninteracting_backend()
+    P0, _evals, _direct, _indirect = backend.update_density(backend.h0, 2)
+    original_fock_hamiltonian = backend.fock_hamiltonian
+    calls = 0
+
+    def counted_fock_hamiltonian(Q):
+        nonlocal calls
+        calls += 1
+        return original_fock_hamiltonian(Q)
+
+    monkeypatch.setattr(backend, "fock_hamiltonian", counted_fock_hamiltonian)
+    result = solve_global_hf(
+        backend,
+        P0,
+        2,
+        ContinuumHFParams(
+            max_iter=3,
+            min_iter=3,
+            mixing_method="oda",
+            tolerance=1e-30,
+            energy_tolerance=1e-30,
+        ),
+    )
+
+    assert calls == result.n_iter + 2
+
+
 def test_zero_interaction_set_gap_matches_global_single_particle_gap():
     rows = [_energy_row(1, 0.0), _energy_row(2, 1.0), _energy_row(3, 4.0)]
 

@@ -625,6 +625,26 @@ def test_ideal_lll_hf_reference_cherns_use_ac_overlaps():
     assert abs(ac_projector_chern(provider, bundle.grid, refs.ivc.P)) < 5e-3
 
 
+def test_c3_backend_composes_averaged_self_energy_and_cached_energy():
+    bundle = build_ac_projected_bundle(_small_params())
+    backend = bundle.backend
+    rng = np.random.default_rng(17)
+    raw = rng.normal(size=backend.h0.shape) + 1j * rng.normal(size=backend.h0.shape)
+    Q = 0.5 * (raw + np.swapaxes(raw.conj(), -1, -2))
+    P = Q + backend.p_ref
+    hartree_field = backend.hartree_hamiltonian(Q)
+    fock_field = backend.fock_hamiltonian(Q)
+    cached_energy = backend.total_energy_from_fields(
+        P,
+        hartree_field,
+        fock_field,
+    )
+
+    assert np.allclose(backend.self_energy(Q), hartree_field + fock_field)
+    assert not np.allclose(backend.self_energy(Q), backend.base.self_energy(Q))
+    assert np.isclose(cached_energy, backend.energy(P).total, atol=1e-12)
+
+
 def test_ideal_lll_ac_response_is_nonzero_and_coefficient_response_is_zero():
     params = _ideal_lll_params(n_k=5, n_theta=20)
     bundle = build_ac_projected_bundle(params)

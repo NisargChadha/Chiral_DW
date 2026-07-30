@@ -225,3 +225,13 @@ pass:
 The last two backend comparisons are stronger than comparing converged native
 seeds: they isolate the functional from seed, constraint, and local-minimum
 selection policies.
+
+## Working-field ODA optimization
+
+The Chiral_DW solver now carries the Hartree and Fock fields matched to the
+current density and uses linearity to update them during ODA. Curvature, mixed
+energy, and iteration diagnostics no longer independently rebuild the
+expensive Fock field.
+The algebra, Vidyut implementation pseudocode, constraint requirements, DIIS
+integration, and regression checklist are documented in
+`docs/VIDYUT_WORKING_FIELD_ODA.md`.
