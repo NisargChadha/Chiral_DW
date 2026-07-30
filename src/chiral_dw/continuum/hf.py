@@ -14,6 +14,7 @@ from chiral_dw.continuum.models import (
     ContinuumHFIterationSnapshot,
     ContinuumHFResult,
     DensityVertices,
+    PhysicalDensityChannels,
     ReferenceHamiltonianDiagnostics,
     block_trace_product,
     dense_lambdas_from_compact,
@@ -266,7 +267,26 @@ class ContinuumHFBackend:
         self.vertices = vertices
         self.interaction = interaction or ContinuumInteractionParams()
         self.vertex_layout = str(getattr(vertices, "vertex_layout", "dense"))
-        if self.vertex_layout == "valley_compact":
+        self.physical_channels = getattr(vertices, "physical_channels", None)
+        if self.physical_channels is not None:
+            channels = self.physical_channels
+            if self.vertex_layout != "valley_compact":
+                raise ValueError(
+                    "flat physical channels require valley_compact vertex layout"
+                )
+            if channels.n_blocks != self.n_blocks:
+                raise ValueError(
+                    "physical channels and h0 have incompatible block counts"
+                )
+            self.n_active = int(channels.n_active)
+            if 2 * self.n_active != self.dim:
+                raise ValueError(
+                    "physical-channel active dimension is incompatible with h0"
+                )
+            self.lambda_compact = channels.compact_form_factor[:, None]
+            self.lambda_blocks = np.asarray(vertices.lambda_blocks, dtype=complex)
+            self.n_q, self.n_g = channels.n_channels, 1
+        elif self.vertex_layout == "valley_compact":
             if vertices.lambda_compact is None:
                 raise ValueError("valley_compact DensityVertices require lambda_compact")
             self.lambda_compact = np.asarray(vertices.lambda_compact, dtype=complex)
@@ -298,13 +318,34 @@ class ContinuumHFBackend:
         else:
             raise ValueError("density vertex layout must be 'dense' or 'valley_compact'")
         self.exchange_representation = self._resolve_exchange_representation()
-        self.target_minus_q = np.asarray(vertices.target_minus_q, dtype=int)
+        self.target_minus_q = np.asarray(
+            (
+                self.physical_channels.momentum_permutation
+                if self.physical_channels is not None
+                else vertices.target_minus_q
+            ),
+            dtype=int,
+        )
         if self.target_minus_q.shape != (self.n_q, self.n_blocks):
             raise ValueError("target_minus_q must have shape (n_q, n_blocks)")
-        self.q_is_zero = np.asarray(vertices.q_is_zero, dtype=bool)
+        self.q_is_zero = np.asarray(
+            (
+                np.all(self.physical_channels.mesh_transfer == 0, axis=1)
+                if self.physical_channels is not None
+                else vertices.q_is_zero
+            ),
+            dtype=bool,
+        )
         if self.q_is_zero.shape != (self.n_q,):
             raise ValueError("q_is_zero must have shape (n_q,)")
-        self.v_over_a = np.asarray(vertices.v_over_a, dtype=float)
+        self.v_over_a = np.asarray(
+            (
+                self.physical_channels.weight[:, None]
+                if self.physical_channels is not None
+                else vertices.v_over_a
+            ),
+            dtype=float,
+        )
         if self.v_over_a.shape != (self.n_q, self.n_g):
             raise ValueError("v_over_a must have shape (n_q, n_g)")
         self.p_ref = np.zeros_like(self.h0, dtype=complex)
@@ -355,6 +396,11 @@ class ContinuumHFBackend:
         scale = float(self.interaction.hartree_scale)
         if scale == 0.0:
             return channels
+        if self.physical_channels is not None:
+            return [
+                (int(index), 0, scale * float(self.v_over_a[int(index), 0]))
+                for index in np.flatnonzero(self.physical_channels.hartree)
+            ]
         for iq in range(self.n_q):
             if not bool(self.q_is_zero[iq]):
                 continue
@@ -390,6 +436,9 @@ class ContinuumHFBackend:
         return tuple(records)
 
     def _is_uniform_channel(self, iq: int, ig: int) -> bool:
+        if self.physical_channels is not None:
+            transfer = self.physical_channels.physical_transfer_nm_inv[int(iq)]
+            return bool(float(np.linalg.norm(transfer)) < 1e-12)
         if self.vertices.q_norm_nm_inv is not None:
             return bool(float(self.vertices.q_norm_nm_inv[int(iq), int(ig)]) < 1e-12)
         q = self.vertices.q_shifts[int(iq)]
@@ -650,7 +699,11 @@ class ContinuumHFBackend:
             dtype=complex,
         )
 
-    def _vertices_without_lambda_blocks(self) -> DensityVertices:
+    def _vertices_without_lambda_blocks(
+        self,
+        *,
+        physical_channels=None,
+    ) -> DensityVertices:
         return DensityVertices(
             q_shifts=self.vertices.q_shifts,
             target_minus_q=np.asarray(self.vertices.target_minus_q, dtype=int).copy(),
@@ -684,6 +737,7 @@ class ContinuumHFBackend:
                 if self.vertices.v_q is None
                 else np.asarray(self.vertices.v_q, dtype=float).copy()
             ),
+            physical_channels=physical_channels,
         )
 
     def _apply_density_vertex_retention(self) -> None:
@@ -708,7 +762,26 @@ class ContinuumHFBackend:
             self.hartree_channels = []
             self._hartree_channel_lookup = {}
             self.n_q, self.n_g = 0, 0
-            self.vertices = self._vertices_without_lambda_blocks()
+            retained_physical = None
+            if self.physical_channels is not None:
+                retained_physical = PhysicalDensityChannels(
+                    physical_transfer_nm_inv=np.zeros((0, 2), dtype=float),
+                    momentum_permutation=np.zeros(
+                        (0, self.n_blocks),
+                        dtype=int,
+                    ),
+                    weight=np.zeros(0, dtype=float),
+                    compact_form_factor=np.zeros(
+                        (0, self.n_blocks, 2, self.n_active, self.n_active),
+                        dtype=complex,
+                    ),
+                    hartree=np.zeros(0, dtype=bool),
+                    mesh_transfer=np.zeros((0, 2), dtype=int),
+                )
+                self.physical_channels = retained_physical
+            self.vertices = self._vertices_without_lambda_blocks(
+                physical_channels=retained_physical,
+            )
             return
 
         retained_lambdas = (
@@ -762,7 +835,28 @@ class ContinuumHFBackend:
             self.n_q, self.n_g = self.lambda_compact.shape[:2]
         else:
             self.n_q, self.n_g = self.lambda_blocks.shape[:2]
-        self.vertices = self._vertices_without_lambda_blocks()
+        retained_physical = None
+        if self.physical_channels is not None:
+            old_indices = np.asarray(
+                [old_iq for old_iq, _old_ig, _v in self.full_hartree_channels],
+                dtype=int,
+            )
+            retained_physical = PhysicalDensityChannels(
+                physical_transfer_nm_inv=self.physical_channels.physical_transfer_nm_inv[
+                    old_indices
+                ].copy(),
+                momentum_permutation=retained_targets.copy(),
+                weight=retained_v_over_a[:, 0].copy(),
+                compact_form_factor=np.asarray(retained_compact[:, 0]).copy(),
+                hartree=np.ones(retained_count, dtype=bool),
+                mesh_transfer=self.physical_channels.mesh_transfer[
+                    old_indices
+                ].copy(),
+            )
+            self.physical_channels = retained_physical
+        self.vertices = self._vertices_without_lambda_blocks(
+            physical_channels=retained_physical,
+        )
 
     def hartree_lambda_for_channel(self, iq: int, ig: int) -> np.ndarray | None:
         retained = self._hartree_channel_lookup.get((int(iq), int(ig)))

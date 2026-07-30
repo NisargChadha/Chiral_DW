@@ -589,12 +589,28 @@ def test_taige_hartree_only_retention_preserves_backend_physics():
     assert retained_bundle.vertices.vertex_layout == "valley_compact"
     assert dense_bundle.vertices.lambda_blocks.shape[:2] == (9, 9)
     assert compact_bundle.vertices.lambda_blocks.shape[:2] == (0, 0)
-    assert compact_bundle.vertices.lambda_compact.shape[:3] == (9, 9, 9)
+    assert compact_bundle.vertices.lambda_compact.shape[:2] == (0, 0)
+    physical_channels = compact_bundle.vertices.physical_channels
+    assert physical_channels is not None
+    channel_q, channel_g = np.nonzero(
+        np.asarray(dense_bundle.vertices.channel_in_disk, dtype=bool)
+        & (np.asarray(dense_bundle.vertices.v_over_a, dtype=float) != 0.0)
+    )
+    assert physical_channels.n_channels == len(channel_q)
     assert np.allclose(
-        dense_lambdas_from_compact(compact_bundle.vertices.lambda_compact),
-        dense_bundle.vertices.lambda_blocks,
+        dense_lambdas_from_compact(physical_channels.compact_form_factor),
+        dense_bundle.vertices.lambda_blocks[channel_q, channel_g],
+    )
+    assert np.array_equal(
+        physical_channels.momentum_permutation,
+        dense_bundle.vertices.target_minus_q[channel_q],
+    )
+    assert np.allclose(
+        physical_channels.weight,
+        dense_bundle.vertices.v_over_a[channel_q, channel_g],
     )
     assert retained_bundle.vertices.lambda_blocks.shape[:2] == (0, 0)
+    assert retained_bundle.vertices.physical_channels is not None
     assert retained_bundle.vertices.q_shifts == dense_bundle.vertices.q_shifts
     assert retained_bundle.vertices.g_channels == dense_bundle.vertices.g_channels
     assert np.array_equal(

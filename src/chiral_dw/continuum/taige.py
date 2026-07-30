@@ -18,6 +18,7 @@ from chiral_dw.continuum.models import (
     ContinuumActiveSpace,
     DensityVertices,
     MomentumGrid,
+    PhysicalDensityChannels,
     VALLEY_K,
     VALLEY_KPRIME,
     VALLEY_ORDER,
@@ -1573,17 +1574,49 @@ def build_taige_density_vertices(
         v_over_a = np.where(channel_in_disk, v_over_a, 0.0)
         v_q = np.where(channel_in_disk, v_q, 0.0)
 
-    lambda_blocks = (
-        np.zeros((0, 0, grid.size, active.dim, active.dim), dtype=complex)
-        if compact
-        else lambdas
-    )
-    lambda_compact = lambdas if compact else None
+    q_is_zero = np.logical_or(q_is_zero, np.any(q_zero_channels, axis=-1))
+    physical_channels = None
+    if compact:
+        channel_q, channel_g = np.nonzero(
+            np.asarray(channel_in_disk, dtype=bool)
+            & (np.asarray(v_over_a, dtype=float) != 0.0)
+        )
+        channel_q = np.asarray(channel_q, dtype=int)
+        channel_g = np.asarray(channel_g, dtype=int)
+        physical_transfer = np.asarray(
+            q_vectors_nm_inv[channel_q, channel_g],
+            dtype=float,
+        )
+        uniform = np.linalg.norm(physical_transfer, axis=1) < 1e-12
+        hartree = np.asarray(q_is_zero[channel_q], dtype=bool)
+        if interaction.q0_hartree == "omit_uniform":
+            hartree = np.logical_and(hartree, np.logical_not(uniform))
+        if float(interaction.hartree_scale) == 0.0:
+            hartree = np.zeros_like(hartree)
+        physical_channels = PhysicalDensityChannels(
+            physical_transfer_nm_inv=physical_transfer,
+            momentum_permutation=np.asarray(target_minus_q[channel_q], dtype=int),
+            weight=np.asarray(v_over_a[channel_q, channel_g], dtype=float),
+            compact_form_factor=np.asarray(lambdas[channel_q, channel_g], dtype=complex),
+            hartree=hartree,
+            mesh_transfer=np.asarray([q_list[int(iq)] for iq in channel_q], dtype=int),
+        )
+        lambda_blocks = np.zeros(
+            (0, 0, grid.size, active.dim, active.dim),
+            dtype=complex,
+        )
+        lambda_compact = np.zeros(
+            (0, 0, grid.size, 2, active.n_active, active.n_active),
+            dtype=complex,
+        )
+    else:
+        lambda_blocks = lambdas
+        lambda_compact = None
 
     return DensityVertices(
         q_shifts=q_list,
         target_minus_q=target_minus_q,
-        q_is_zero=np.logical_or(q_is_zero, np.any(q_zero_channels, axis=-1)),
+        q_is_zero=q_is_zero,
         lambda_blocks=lambda_blocks,
         v_over_a=v_over_a,
         g_channels=g_channels,
@@ -1593,6 +1626,7 @@ def build_taige_density_vertices(
         q_vectors_nm_inv=q_vectors_nm_inv,
         q_norm_nm_inv=np.linalg.norm(q_vectors_nm_inv, axis=-1),
         v_q=v_q,
+        physical_channels=physical_channels,
     )
 
 
@@ -1629,7 +1663,30 @@ def roll_taige_density_vertices(
         (start, min(start + _MAX_TAIGE_VERTEX_ROLL_Q_POINTS, n_q))
         for start in range(0, n_q, _MAX_TAIGE_VERTEX_ROLL_Q_POINTS)
     )
-    if layout == "valley_compact":
+    physical_channels = q0_vertices.physical_channels
+    rolled_physical_channels = None
+    if physical_channels is not None:
+        q0_compact = np.asarray(physical_channels.compact_form_factor)
+        if q0_compact.shape[1:] != (n_k, 2, n_active, n_active):
+            raise ValueError(
+                "q=0 physical channels are incompatible with the active space"
+            )
+        rolled_compact = np.empty_like(q0_compact)
+        for valley in range(2):
+            rolled_compact[:, :, valley] = q0_compact[
+                :, source[:, valley], valley
+            ]
+        rolled_physical_channels = PhysicalDensityChannels(
+            physical_transfer_nm_inv=physical_channels.physical_transfer_nm_inv.copy(),
+            momentum_permutation=physical_channels.momentum_permutation.copy(),
+            weight=physical_channels.weight.copy(),
+            compact_form_factor=rolled_compact,
+            hartree=physical_channels.hartree.copy(),
+            mesh_transfer=physical_channels.mesh_transfer.copy(),
+        )
+        rolled_dense = np.asarray(q0_vertices.lambda_blocks).copy()
+        lambda_compact = np.asarray(q0_vertices.lambda_compact).copy()
+    elif layout == "valley_compact":
         if q0_vertices.lambda_compact is None:
             raise ValueError("valley_compact DensityVertices require lambda_compact")
         q0_compact = np.asarray(q0_vertices.lambda_compact)
@@ -1675,6 +1732,7 @@ def roll_taige_density_vertices(
         q_vectors_nm_inv=_copy_optional(q0_vertices.q_vectors_nm_inv),
         q_norm_nm_inv=_copy_optional(q0_vertices.q_norm_nm_inv),
         v_q=_copy_optional(q0_vertices.v_q),
+        physical_channels=rolled_physical_channels,
     )
 
 

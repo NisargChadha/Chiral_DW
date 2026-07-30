@@ -236,6 +236,85 @@ class ContinuumActiveSpace:
 
 
 @dataclass(frozen=True)
+class PhysicalDensityChannels:
+    """Flat table of nonzero physical interaction channels.
+
+    Every row represents one accepted physical ``q+G`` transfer and owns the
+    corresponding momentum permutation, interaction weight, compact
+    valley-diagonal form factor, and Hartree eligibility flag.
+    """
+
+    physical_transfer_nm_inv: np.ndarray
+    momentum_permutation: np.ndarray
+    weight: np.ndarray
+    compact_form_factor: np.ndarray
+    hartree: np.ndarray
+    mesh_transfer: np.ndarray
+
+    def __post_init__(self) -> None:
+        transfer = np.asarray(self.physical_transfer_nm_inv, dtype=float)
+        permutation = np.asarray(self.momentum_permutation, dtype=int)
+        weight = np.asarray(self.weight, dtype=float)
+        form_factor = np.asarray(self.compact_form_factor, dtype=complex)
+        hartree = np.asarray(self.hartree, dtype=bool)
+        mesh_transfer = np.asarray(self.mesh_transfer, dtype=int)
+        if transfer.ndim != 2 or transfer.shape[1] != 2:
+            raise ValueError("physical transfers must have shape (n_channels, 2)")
+        n_channels = int(transfer.shape[0])
+        if permutation.ndim != 2 or permutation.shape[0] != n_channels:
+            raise ValueError(
+                "momentum permutations must have shape (n_channels, n_blocks)"
+            )
+        if weight.shape != (n_channels,):
+            raise ValueError("physical-channel weights must have shape (n_channels,)")
+        if hartree.shape != (n_channels,):
+            raise ValueError("Hartree flags must have shape (n_channels,)")
+        if mesh_transfer.shape != (n_channels, 2):
+            raise ValueError("mesh transfers must have shape (n_channels, 2)")
+        if form_factor.ndim != 5 or form_factor.shape[:2] != (
+            n_channels,
+            permutation.shape[1],
+        ):
+            raise ValueError(
+                "compact form factors must have shape "
+                "(n_channels, n_blocks, 2, n_active, n_active)"
+            )
+        if form_factor.shape[2] != 2 or form_factor.shape[-1] != form_factor.shape[-2]:
+            raise ValueError(
+                "compact form factors must end in (2, n_active, n_active)"
+            )
+        object.__setattr__(self, "physical_transfer_nm_inv", transfer)
+        object.__setattr__(self, "momentum_permutation", permutation)
+        object.__setattr__(self, "weight", weight)
+        object.__setattr__(self, "compact_form_factor", form_factor)
+        object.__setattr__(self, "hartree", hartree)
+        object.__setattr__(self, "mesh_transfer", mesh_transfer)
+
+    @property
+    def n_channels(self) -> int:
+        return int(self.weight.size)
+
+    @property
+    def n_blocks(self) -> int:
+        return int(self.momentum_permutation.shape[1])
+
+    @property
+    def n_active(self) -> int:
+        return int(self.compact_form_factor.shape[-1])
+
+    @property
+    def storage_bytes(self) -> int:
+        return int(
+            self.physical_transfer_nm_inv.nbytes
+            + self.momentum_permutation.nbytes
+            + self.weight.nbytes
+            + self.compact_form_factor.nbytes
+            + self.hartree.nbytes
+            + self.mesh_transfer.nbytes
+        )
+
+
+@dataclass(frozen=True)
 class DensityVertices:
     """Projected density vertices for the native block HF backend."""
 
@@ -251,6 +330,8 @@ class DensityVertices:
     q_vectors_nm_inv: np.ndarray | None = None
     q_norm_nm_inv: np.ndarray | None = None
     v_q: np.ndarray | None = None
+    physical_channels: PhysicalDensityChannels | None = None
+    prebuilt_exchange_sectors: np.ndarray | None = None
 
 
 def compact_lambdas_from_dense(lambdas: np.ndarray, n_active: int) -> np.ndarray:
