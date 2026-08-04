@@ -22,6 +22,7 @@ INPUT_CSV = RESULT_BUNDLE / "analysis_plots" / "grid41_linear_interaction_best5_
 HF_SWEEP_CSV = RESULT_BUNDLE / "nk_024" / "hysteresis_sweep.csv"
 FIGURE_DIR = REPO_ROOT / "Plots" / "figures"
 PHASE_OUTPUT_STEM = "grid41_tmote2_linear_interaction_all7_hf_phase_diagram"
+PHASE_D_OUTPUT_STEM = "grid41_tmote2_linear_interaction_all7_hf_phase_diagram_D_axis"
 CG_OUTPUT_STEM = "grid41_tmote2_linear_interaction_all7_cG_ground_state_boundaries"
 OUTPUT_STEM = CG_OUTPUT_STEM
 
@@ -67,6 +68,7 @@ COLORS = {
 LABELS = {
     "x": r"$\theta_M$ ($^\circ$)",
     "y": r"$u_D$ (meV)",
+    "y_D": r"$D$ (meV)",
     "cbar": r"$c_G$",
     "vp_c0": r"VP, $C=0$",
     "vp_c1": r"VP, $C=1$",
@@ -96,6 +98,12 @@ PHASE_LABELS = (
     {"text": "VP\n$C=0$", "theta_deg": 2.50, "u_D_meV": 10.0},
     {"text": "VP\n$C=1$", "theta_deg": 3.50, "u_D_meV": 2.5},
     {"text": "IVC", "theta_deg": 3.62, "u_D_meV": 18.2},
+)
+
+PHASE_D_LABELS = (
+    {"text": "VP\n$C=0$", "theta_deg": 2.50, "u_D_meV": 10.0},
+    {"text": "VP\n$C=1$", "theta_deg": 3.50, "u_D_meV": 2.5},
+    {"text": "IVC", "theta_deg": 3.72, "u_D_meV": 18.7},
 )
 
 
@@ -269,6 +277,10 @@ def _plot_phase_diagram(
     u_vals: np.ndarray,
     hf_ivc: np.ndarray,
     vp_topo: np.ndarray,
+    *,
+    phase_labels: tuple[dict[str, object], ...] = PHASE_LABELS,
+    ylabel: str = LABELS["y"],
+    output_stem: str = PHASE_OUTPUT_STEM,
 ) -> list[Path]:
     theta_edges = _edges(theta_vals)
     u_edges = _edges(u_vals)
@@ -300,7 +312,7 @@ def _plot_phase_diagram(
         boundary.set_joinstyle("miter")
         ax.add_collection(boundary)
 
-    for phase_label in PHASE_LABELS:
+    for phase_label in phase_labels:
         ax.text(
             phase_label["theta_deg"],
             phase_label["u_D_meV"],
@@ -312,8 +324,8 @@ def _plot_phase_diagram(
             linespacing=0.9,
             zorder=9,
         )
-    _setup_axes(ax, theta_vals, u_vals)
-    return _save(fig, PHASE_OUTPUT_STEM)
+    _setup_axes(ax, theta_vals, u_vals, ylabel=ylabel)
+    return _save(fig, output_stem)
 
 
 def _plot_cg_diagram(
@@ -396,13 +408,19 @@ def _plot_cg_diagram(
     return _save(fig, CG_OUTPUT_STEM)
 
 
-def _setup_axes(ax: plt.Axes, theta_vals: np.ndarray, u_vals: np.ndarray) -> None:
+def _setup_axes(
+    ax: plt.Axes,
+    theta_vals: np.ndarray,
+    u_vals: np.ndarray,
+    *,
+    ylabel: str = LABELS["y"],
+) -> None:
     ax.set_xlim(theta_vals.min(), theta_vals.max())
     ax.set_ylim(u_vals.min(), u_vals.max())
     ax.set_xticks(AXES["xticks"])
     ax.set_yticks(AXES["yticks"])
     ax.set_xlabel(LABELS["x"])
-    ax.set_ylabel(LABELS["y"])
+    ax.set_ylabel(ylabel)
     ax.set_box_aspect(AXES["box_aspect"])
     _box_axes(ax)
 
@@ -426,6 +444,15 @@ def plot() -> list[Path]:
 
     return [
         *_plot_phase_diagram(theta_vals, u_vals, hf_ivc, vp_topo),
+        *_plot_phase_diagram(
+            theta_vals,
+            u_vals,
+            hf_ivc,
+            vp_topo,
+            phase_labels=PHASE_D_LABELS,
+            ylabel=LABELS["y_D"],
+            output_stem=PHASE_D_OUTPUT_STEM,
+        ),
         *_plot_cg_diagram(heat, theta_vals, u_vals, fit_grey, hf_ivc, vp_topo),
     ]
 

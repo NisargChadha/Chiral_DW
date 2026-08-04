@@ -54,6 +54,18 @@ def test_hf_phase_labels_match_previous_tmote2_placement():
     )
 
 
+def test_hf_D_axis_variant_moves_ivc_label_northeast():
+    module = _load_plot_module()
+
+    original_ivc = module.PHASE_LABELS[-1]
+    variant_ivc = module.PHASE_D_LABELS[-1]
+    assert variant_ivc["theta_deg"] > original_ivc["theta_deg"]
+    assert variant_ivc["u_D_meV"] > original_ivc["u_D_meV"]
+    assert variant_ivc == {"text": "IVC", "theta_deg": 3.72, "u_D_meV": 18.7}
+    assert module.LABELS["y_D"] == r"$D$ (meV)"
+    assert module.PHASE_D_OUTPUT_STEM != module.PHASE_OUTPUT_STEM
+
+
 def test_phase_codes_prioritize_ivc_over_vp_topology():
     module = _load_plot_module()
 
