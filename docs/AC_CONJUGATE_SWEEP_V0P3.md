@@ -48,10 +48,11 @@ python scripts/scan_ac_projected_hf_b1_u1.py \
   --merge-only
 ```
 
-The merged `sweep.csv` must have 441 unique parameter rows with finite `cG`
-for converged/topologically valid points, while `sweep_path_theta_edges.csv`
-stores the interpolated-path gaps.  Once the one-mesh audit passes, submit the
-full restartable array:
+The merged `sweep.csv` must have 441 unique parameter rows.  HF convergence
+controls whether `cG` and the path gaps are computed; Chern admissibility is a
+separate diagnostic and never gates the response.  The file
+`sweep_path_theta_edges.csv` stores the interpolated-path gaps.  Once the
+one-mesh audit passes, submit the full restartable array:
 
 ```bash
 sbatch --array=0-2204%12 jobs/scan_ac_projected_hf_b1_u1_array.sh
@@ -59,6 +60,38 @@ sbatch --array=0-2204%12 jobs/scan_ac_projected_hf_b1_u1_array.sh
 
 The already-completed `n_k=18` points are skipped automatically.  Merge each
 `nk*` directory independently after the array finishes.
+
+## Magnetic-Bloch sewing correction and stored-point repair
+
+The AC active band is a magnetic Bloch bundle.  Reciprocal-boundary links must
+therefore include the exact Landau-level transport phase and cocycle parity.
+The current overlap provider folds both endpoints into the archived active
+frame, constructs the `Kprime` overlap by applying `Tprime` to the already-sewn
+`K` frame, and uses the resulting sewn overlaps for both lattice-Chern and
+mixed-curvature `cG` calculations.
+
+The topology artifact records the minimum occupied-link magnitude, number of
+links below tolerance, integer residual, plaquette branch margin, and
+translated-edge closure.  A positive Hamiltonian gap does not guarantee that
+this particular link discretization is admissible: a projector can remain
+gapped while a neighboring occupied-state overlap is zero or nearly zero.
+Such a point is labeled `numerically_unresolved`, but its sewn `cG` and path
+gaps are still computed when HF converged.
+
+Completed points can be repaired directly from `reference_states.npz` without
+rerunning HF.  The command below writes a new `sewn_response_v1/` sidecar and
+refuses to overwrite either the archived point or an existing sidecar:
+
+```bash
+python scripts/recompute_ac_sewn_response.py \
+  results/ac_b1_u1_cg_dual_gate_omega_v0p3_nll8_grid21_nk18_24/nk18/points/b_009_u_015
+```
+
+The sidecar contains `summary.json`, `chern_diagnostics.csv`,
+`path_theta_edges.csv`, `response_K_theta.csv`, and `response.npz`.  Before any
+cluster repair array is launched, run this exact command on one archived point
+and verify all five outputs.  Then select only the points requiring repair and
+scale gradually; do not rerun the HF sweep.
 
 ## Finite-size analysis note
 

@@ -9,6 +9,7 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "scan_ac_projected_hf_b1_u1.py"
+RECOMPUTE = ROOT / "scripts" / "recompute_ac_sewn_response.py"
 JOB = ROOT / "jobs" / "scan_ac_projected_hf_b1_u1_array.sh"
 RUNBOOK = ROOT / "docs" / "AC_CONJUGATE_SWEEP_V0P3.md"
 
@@ -326,6 +327,26 @@ def test_ac_b1_u1_sweep_tiny_point_runs_overlap_response(tmp_path):
     assert {item["numerically_resolved"] for item in chern_rows} == {"False", "True"}
     assert all("min_link_magnitude" in item for item in chern_rows)
     assert (output_root / "sweep.csv").exists()
+
+    original_summary = (point_dir / "point_summary.json").read_bytes()
+    subprocess.run([sys.executable, str(RECOMPUTE), str(point_dir)], check=True)
+    sidecar = point_dir / "sewn_response_v1"
+    repaired = json.loads((sidecar / "summary.json").read_text())
+    assert repaired["method"] == "ac_magnetic_bloch_sewn_overlap_v1"
+    assert repaired["reference_topology_status"] == "numerically_unresolved"
+    assert np.isclose(repaired["cG"], row["cG"], atol=1e-12)
+    assert np.isclose(
+        repaired["path_indirect_gap_min"],
+        row["path_indirect_gap_min_over_omega_c"],
+        atol=1e-12,
+    )
+    assert (sidecar / "response.npz").exists()
+    assert (sidecar / "chern_diagnostics.csv").exists()
+    assert (point_dir / "point_summary.json").read_bytes() == original_summary
+    subprocess.run(
+        [sys.executable, str(RECOMPUTE), str(point_dir), "--skip-existing"],
+        check=True,
+    )
 
 
 def test_ac_b1_u1_sweep_job_maps_five_meshes_and_uses_multicore_physical_dual_gate():
