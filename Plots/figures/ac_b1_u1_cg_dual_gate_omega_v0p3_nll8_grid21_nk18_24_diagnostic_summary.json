@@ -1,0 +1,79 @@
+{
+  "input_root": "/Users/nisargchadha/Documents/Chiral_DW/results/ac_b1_u1_cg_dual_gate_omega_v0p3_nll8_grid21_nk18_24",
+  "chern_tolerance": 0.005,
+  "direct_gap_overlap_definition": "invalid reference Chern and any of VP+, VP-, or IVC self-consistent direct gaps is nonfinite or <= 0 meV",
+  "meshes": [
+    {
+      "n_k": 18,
+      "n_points": 441,
+      "n_cg": 416,
+      "n_negative_path_indirect_gap": 7,
+      "n_path_gap_not_evaluated": 25,
+      "n_hf_nonconverged": 22,
+      "n_invalid_reference_chern": 4,
+      "n_invalid_chern_with_nonpositive_reference_direct_gap": 0,
+      "minimum_reference_direct_gap_mev_at_invalid_chern": 1.07242092715131,
+      "minimum_ivc_direct_gap_mev_at_invalid_chern": 1.07242092715131
+    },
+    {
+      "n_k": 20,
+      "n_points": 441,
+      "n_cg": 354,
+      "n_negative_path_indirect_gap": 10,
+      "n_path_gap_not_evaluated": 87,
+      "n_hf_nonconverged": 62,
+      "n_invalid_reference_chern": 42,
+      "n_invalid_chern_with_nonpositive_reference_direct_gap": 0,
+      "minimum_reference_direct_gap_mev_at_invalid_chern": 0.8073540661308236,
+      "minimum_ivc_direct_gap_mev_at_invalid_chern": 0.8073540661308236
+    },
+    {
+      "n_k": 21,
+      "n_points": 441,
+      "n_cg": 219,
+      "n_negative_path_indirect_gap": 3,
+      "n_path_gap_not_evaluated": 222,
+      "n_hf_nonconverged": 52,
+      "n_invalid_reference_chern": 188,
+      "n_invalid_chern_with_nonpositive_reference_direct_gap": 0,
+      "minimum_reference_direct_gap_mev_at_invalid_chern": 0.5885745696563034,
+      "minimum_ivc_direct_gap_mev_at_invalid_chern": 0.5885745696563034
+    },
+    {
+      "n_k": 22,
+      "n_points": 441,
+      "n_cg": 117,
+      "n_negative_path_indirect_gap": 5,
+      "n_path_gap_not_evaluated": 324,
+      "n_hf_nonconverged": 59,
+      "n_invalid_reference_chern": 294,
+      "n_invalid_chern_with_nonpositive_reference_direct_gap": 0,
+      "minimum_reference_direct_gap_mev_at_invalid_chern": 0.5614807520454983,
+      "minimum_ivc_direct_gap_mev_at_invalid_chern": 0.5614807520454983
+    },
+    {
+      "n_k": 24,
+      "n_points": 441,
+      "n_cg": 66,
+      "n_negative_path_indirect_gap": 8,
+      "n_path_gap_not_evaluated": 375,
+      "n_hf_nonconverged": 20,
+      "n_invalid_reference_chern": 358,
+      "n_invalid_chern_with_nonpositive_reference_direct_gap": 0,
+      "minimum_reference_direct_gap_mev_at_invalid_chern": 0.17894442593306356,
+      "minimum_ivc_direct_gap_mev_at_invalid_chern": 0.17894442593306356
+    }
+  ],
+  "outputs": {
+    "cg_png": "/Users/nisargchadha/Documents/Chiral_DW/Plots/figures/ac_b1_u1_cg_dual_gate_omega_v0p3_nll8_grid21_nk18_24_cg_phase_diagrams.png",
+    "cg_pdf": "/Users/nisargchadha/Documents/Chiral_DW/Plots/figures/ac_b1_u1_cg_dual_gate_omega_v0p3_nll8_grid21_nk18_24_cg_phase_diagrams.pdf",
+    "negative_indirect_gap_png": "/Users/nisargchadha/Documents/Chiral_DW/Plots/figures/ac_b1_u1_cg_dual_gate_omega_v0p3_nll8_grid21_nk18_24_negative_indirect_gap_phase_diagrams.png",
+    "negative_indirect_gap_pdf": "/Users/nisargchadha/Documents/Chiral_DW/Plots/figures/ac_b1_u1_cg_dual_gate_omega_v0p3_nll8_grid21_nk18_24_negative_indirect_gap_phase_diagrams.pdf",
+    "hf_nonconverged_png": "/Users/nisargchadha/Documents/Chiral_DW/Plots/figures/ac_b1_u1_cg_dual_gate_omega_v0p3_nll8_grid21_nk18_24_hf_nonconverged_phase_diagrams.png",
+    "hf_nonconverged_pdf": "/Users/nisargchadha/Documents/Chiral_DW/Plots/figures/ac_b1_u1_cg_dual_gate_omega_v0p3_nll8_grid21_nk18_24_hf_nonconverged_phase_diagrams.pdf",
+    "invalid_chern_png": "/Users/nisargchadha/Documents/Chiral_DW/Plots/figures/ac_b1_u1_cg_dual_gate_omega_v0p3_nll8_grid21_nk18_24_invalid_chern_phase_diagrams.png",
+    "invalid_chern_pdf": "/Users/nisargchadha/Documents/Chiral_DW/Plots/figures/ac_b1_u1_cg_dual_gate_omega_v0p3_nll8_grid21_nk18_24_invalid_chern_phase_diagrams.pdf",
+    "plot_data_csv": "/Users/nisargchadha/Documents/Chiral_DW/Plots/figures/ac_b1_u1_cg_dual_gate_omega_v0p3_nll8_grid21_nk18_24_diagnostic_plot_data.csv",
+    "summary_json": "/Users/nisargchadha/Documents/Chiral_DW/Plots/figures/ac_b1_u1_cg_dual_gate_omega_v0p3_nll8_grid21_nk18_24_diagnostic_summary.json"
+  }
+}
