@@ -456,7 +456,7 @@ def k_theta_from_ac_projectors(
         cached = overlap_cache.get(key)
         if cached is not None:
             return cached
-        overlap = provider.active_overlap_fractional(
+        overlap = provider.sewn_active_overlap_fractional(
             _coord_fractional(coord_a, n_k),
             _coord_fractional(coord_b, n_k),
         )

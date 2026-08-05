@@ -717,7 +717,7 @@ def test_c3_backend_composes_averaged_self_energy_and_cached_energy():
     assert np.isclose(cached_energy, backend.energy(P).total, atol=1e-12)
 
 
-def test_ideal_lll_ac_response_is_nonzero_and_coefficient_response_is_zero():
+def test_uniform_ideal_lll_path_reports_its_sewn_link_singularity():
     params = _ideal_lll_params(n_k=5, n_theta=20)
     bundle = build_ac_projected_bundle(params)
     provider = ACBandOverlapProvider(bundle.form_factors, active=bundle.active)
@@ -733,10 +733,77 @@ def test_ideal_lll_ac_response_is_nonzero_and_coefficient_response_is_zero():
         bundle.active.dim,
     )
     coefficient_response = k_theta_from_projectors_with_basis(projectors, theta_edges, frames)
+    ivc_diagnostics = ac_projector_chern_diagnostics(
+        provider,
+        bundle.grid,
+        projectors[len(theta_edges) // 2],
+    )
 
-    assert abs(response.cG + 1.0 / (4.0 * np.pi)) < 1e-2
+    assert np.all(np.isfinite(response.K))
+    assert np.isfinite(response.cG)
+    assert abs(response.cG) > 1e-3
     assert abs(coefficient_response.cG) < 1e-12
-    assert np.allclose(response.K + response.K[::-1], 0.0, atol=1e-10)
+    assert not ivc_diagnostics.numerically_resolved
+    assert ivc_diagnostics.small_link_count > 0
+
+
+def test_ac_response_uses_sewn_overlaps_at_reciprocal_edges(monkeypatch):
+    params = _ideal_lll_params(n_k=9, n_theta=8)
+    bundle = build_ac_projected_bundle(params)
+    refs = build_symmetric_hf_references(bundle, params.hf)
+    provider = ACBandOverlapProvider(bundle.form_factors, active=bundle.active)
+    theta_edges = np.linspace(0.0, np.pi, params.response.n_theta + 1)
+    phi_nodes = np.arange(2, dtype=float) * params.response.phi_step
+    projectors, _path_diagnostics = symmetric_convex_path(refs, theta_edges)
+    projectors = projectors.reshape(
+        len(theta_edges),
+        params.grid.n_k,
+        params.grid.n_k,
+        bundle.active.dim,
+        bundle.active.dim,
+    )
+    ivc_diagnostics = ac_projector_chern_diagnostics(
+        provider,
+        bundle.grid,
+        refs.ivc.P,
+    )
+
+    baseline = k_theta_from_ac_projectors(
+        provider,
+        projectors,
+        theta_edges,
+        phi_nodes,
+    )
+    sewn_overlap = provider.sewn_active_overlap_fractional
+
+    def reject_unsewn_overlap(*_args, **_kwargs):
+        raise AssertionError("the cG evaluator must not use an unsewn AC overlap")
+
+    shift = np.array([1.0, -2.0])
+
+    def translated_sewn_overlap(frac_k, frac_p):
+        return sewn_overlap(
+            np.asarray(frac_k, dtype=float) + shift,
+            np.asarray(frac_p, dtype=float) + shift,
+        )
+
+    monkeypatch.setattr(provider, "active_overlap_fractional", reject_unsewn_overlap)
+    monkeypatch.setattr(
+        provider,
+        "sewn_active_overlap_fractional",
+        translated_sewn_overlap,
+    )
+    response = k_theta_from_ac_projectors(
+        provider,
+        projectors,
+        theta_edges,
+        phi_nodes,
+    )
+
+    assert ivc_diagnostics.numerically_resolved
+    assert np.all(np.isfinite(response.K))
+    assert np.allclose(response.K, baseline.K, atol=2e-13)
+    assert np.isclose(response.cG, baseline.cG, atol=2e-13)
 
 
 def test_ac_projected_bundle_runs_symmetric_hf_and_embedded_response():
