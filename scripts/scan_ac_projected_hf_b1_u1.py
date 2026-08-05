@@ -51,7 +51,6 @@ from chiral_dw.continuum.momentum_channels import (  # noqa: E402
     c3_spectrum_residual,
 )
 
-COULOMB_MEV_NM = 1439.96454784255
 HBAR2_OVER_2ME_MEV_NM2 = 38.0998212
 
 
@@ -84,10 +83,9 @@ class ACContinuumMatch(BaseModel):
     a0_angstrom: float = Field(gt=0.0)
     m_eff: float = Field(gt=0.0)
     interaction_normalization: Literal[
-        "physical_e2_over_epsilon",
+        "dimensionless_model",
         "omega_c_ratio",
     ]
-    epsilon: float | None = Field(default=None, gt=0.0)
     gate_distance_nm: float = Field(gt=0.0)
     interaction_multiplier: float = Field(ge=0.0)
     moire_length_nm: float = Field(gt=0.0)
@@ -114,22 +112,15 @@ def _continuum_match(args: argparse.Namespace) -> ACContinuumMatch:
         * HBAR2_OVER_2ME_MEV_NM2
         / (float(args.continuum_m_eff) * l2_nm2)
     )
-    omega_c_normalized = args.coulomb_kind == "dual_gate_omega_c"
-    if omega_c_normalized:
-        characteristic_coulomb_mev = float(args.v0) * omega_c_mev
-        normalization = "omega_c_ratio"
-        epsilon = None
-    else:
-        characteristic_coulomb_mev = float(
-            float(args.v0)
-            * COULOMB_MEV_NM
-            / (float(args.epsilon) * a_m_nm)
-        )
-        normalization = "physical_e2_over_epsilon"
-        epsilon = float(args.epsilon)
+    characteristic_coulomb_mev = float(args.v0) * omega_c_mev
+    normalization = (
+        "omega_c_ratio"
+        if args.coulomb_kind == "dual_gate_omega_c"
+        else "dimensionless_model"
+    )
     ratio = characteristic_coulomb_mev / omega_c_mev
     maximum_ratio = float(args.max_coulomb_to_ll_ratio)
-    if args.coulomb_kind in {"dual_gate", "dual_gate_omega_c"} and ratio >= maximum_ratio:
+    if args.coulomb_kind == "dual_gate_omega_c" and ratio >= maximum_ratio:
         raise ValueError(
             "physical dual-gate interaction is too strong for the finite-LL projection: "
             f"E_C/(hbar*omega_c)={ratio:.6g} must be below {maximum_ratio:.6g}; "
@@ -139,7 +130,7 @@ def _continuum_match(args: argparse.Namespace) -> ACContinuumMatch:
     derived_moire_length = a_m_nm
     derived_energy_unit = omega_c_mev
     if args.moire_length_nm is not None:
-        if args.coulomb_kind in {"dual_gate", "dual_gate_omega_c"} and not np.isclose(
+        if args.coulomb_kind == "dual_gate_omega_c" and not np.isclose(
             float(args.moire_length_nm), derived_moire_length, rtol=1e-8, atol=1e-10
         ):
             raise ValueError(
@@ -148,7 +139,7 @@ def _continuum_match(args: argparse.Namespace) -> ACContinuumMatch:
             )
         derived_moire_length = float(args.moire_length_nm)
     if args.energy_unit_mev is not None:
-        if args.coulomb_kind in {"dual_gate", "dual_gate_omega_c"} and not np.isclose(
+        if args.coulomb_kind == "dual_gate_omega_c" and not np.isclose(
             float(args.energy_unit_mev), derived_energy_unit, rtol=1e-8, atol=1e-10
         ):
             raise ValueError(
@@ -162,7 +153,6 @@ def _continuum_match(args: argparse.Namespace) -> ACContinuumMatch:
         a0_angstrom=float(args.continuum_a0_angstrom),
         m_eff=float(args.continuum_m_eff),
         interaction_normalization=normalization,
-        epsilon=epsilon,
         gate_distance_nm=float(args.gate_distance_nm),
         interaction_multiplier=float(args.v0),
         moire_length_nm=derived_moire_length,
@@ -236,22 +226,15 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=[
             "dimensionless_dual_gate",
             "dimensionless_screened",
-            "dual_gate",
             "dual_gate_omega_c",
         ],
-        default="dimensionless_dual_gate",
+        default="dual_gate_omega_c",
     )
     parser.add_argument("--interaction-strength-scale", "--v0", dest="v0", type=float, default=0.2)
     parser.add_argument("--dimensionless-gate-distance", "--gate-distance", dest="gate_distance", type=float, default=2.0)
     parser.add_argument("--q-mesh", choices=["shell", "full"], default="shell")
     parser.add_argument("--q-shell", type=int, default=1)
     parser.add_argument("--local-field-cutoff", type=int, default=1)
-    parser.add_argument(
-        "--epsilon",
-        type=float,
-        default=16.7,
-        help="Dielectric constant for legacy physical dual_gate only; ignored by dual_gate_omega_c.",
-    )
     parser.add_argument("--gate-distance-nm", type=float, default=30.0)
     parser.add_argument("--smear-length-nm", type=float, default=0.347)
     parser.add_argument("--omit-q0", action="store_true")
@@ -268,7 +251,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--max-coulomb-to-ll-ratio",
         type=float,
         default=0.25,
-        help="Require v0*e^2/(epsilon*a_M)/(hbar*omega_c) to stay below this value.",
+        help="Require v0=E_C/(hbar*omega_c) to stay below this value.",
     )
 
     parser.add_argument("--n-occ-per-k", type=int, default=1)
@@ -369,7 +352,10 @@ def _params_for_point(
         q_mesh=args.q_mesh,
         q_shell=int(args.q_shell),
         local_field_cutoff=int(args.local_field_cutoff),
-        epsilon=(1.0 if args.coulomb_kind == "dual_gate_omega_c" else float(args.epsilon)),
+        # The shared continuum schema retains epsilon for its physical-e^2
+        # interaction.  AC sweep modes use v0 alone, so keep this inert field
+        # fixed rather than exposing a second amplitude knob.
+        epsilon=1.0,
         gate_distance_nm=float(args.gate_distance_nm),
         include_q0=not bool(args.omit_q0),
         smear_length_nm=float(args.smear_length_nm),
@@ -859,7 +845,6 @@ def run_point(args: argparse.Namespace, output_root: Path, point: ACSweepPoint) 
         "interaction_multiplier": float(params.interaction.v0),
         "gate_distance": float(params.interaction.gate_distance),
         "gate_distance_nm": float(params.interaction.gate_distance_nm),
-        "epsilon": continuum_match.epsilon,
         "q_shell": int(params.interaction.q_shell),
         "local_field_cutoff": int(params.interaction.local_field_cutoff),
         "density_vertex_scheme": params.density_vertex_scheme,

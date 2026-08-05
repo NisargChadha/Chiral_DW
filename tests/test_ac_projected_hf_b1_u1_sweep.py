@@ -41,7 +41,7 @@ def test_ac_b1_u1_sweep_dry_run_writes_selected_plan(tmp_path):
 
     plan = json.loads((output_root / "sweep_plan.json").read_text())
     assert plan["n_points"] == 1
-    assert plan["args"]["coulomb_kind"] == "dimensionless_dual_gate"
+    assert plan["args"]["coulomb_kind"] == "dual_gate_omega_c"
     assert np.isclose(plan["continuum_match"]["moire_length_nm"], 5.681350588613268)
     assert np.isclose(
         plan["continuum_match"]["landau_level_spacing_mev"], 27.625318938039467
@@ -55,40 +55,7 @@ def test_ac_b1_u1_sweep_dry_run_writes_selected_plan(tmp_path):
     assert "points/b_001_u_001" in point["point_dir"]
 
 
-def test_ac_b1_u1_physical_dual_gate_plan_records_safe_continuum_match(tmp_path):
-    output_root = tmp_path / "physical"
-    subprocess.run(
-        [
-            sys.executable,
-            str(SCRIPT),
-            "--output-root",
-            str(output_root),
-            "--b1",
-            "0.0",
-            "--u1",
-            "0.0",
-            "--coulomb-kind",
-            "dual_gate",
-            "--q-mesh",
-            "full",
-            "--v0",
-            "0.1",
-            "--dry-run",
-        ],
-        check=True,
-    )
-
-    plan = json.loads((output_root / "sweep_plan.json").read_text())
-    match = plan["continuum_match"]
-    assert plan["args"]["q_mesh"] == "full"
-    assert np.isclose(match["theta_deg"], 3.5)
-    assert np.isclose(match["a0_angstrom"], 3.47)
-    assert np.isclose(match["m_eff"], 0.62)
-    assert match["characteristic_coulomb_to_ll_ratio"] < 0.25
-    assert np.isclose(match["characteristic_coulomb_to_ll_ratio"], 0.0549384545)
-
-
-def test_ac_b1_u1_physical_dual_gate_rejects_interaction_above_ll_guard(tmp_path):
+def test_ac_b1_u1_omega_c_dual_gate_rejects_interaction_above_ll_guard(tmp_path):
     result = subprocess.run(
         [
             sys.executable,
@@ -100,9 +67,9 @@ def test_ac_b1_u1_physical_dual_gate_rejects_interaction_above_ll_guard(tmp_path
             "--u1",
             "0.0",
             "--coulomb-kind",
-            "dual_gate",
+            "dual_gate_omega_c",
             "--v0",
-            "1.0",
+            "0.25",
             "--dry-run",
         ],
         text=True,
@@ -129,8 +96,6 @@ def test_ac_b1_u1_omega_c_normalized_dual_gate_uses_v0_as_ll_ratio(tmp_path):
             "dual_gate_omega_c",
             "--v0",
             "0.1",
-            "--epsilon",
-            "83.0",
             "--dry-run",
         ],
         check=True,
@@ -138,12 +103,22 @@ def test_ac_b1_u1_omega_c_normalized_dual_gate_uses_v0_as_ll_ratio(tmp_path):
 
     match = json.loads((output_root / "sweep_plan.json").read_text())["continuum_match"]
     assert match["interaction_normalization"] == "omega_c_ratio"
-    assert match["epsilon"] is None
+    assert "epsilon" not in match
     assert np.isclose(match["characteristic_coulomb_to_ll_ratio"], 0.1)
     assert np.isclose(
         match["characteristic_coulomb_mev"],
         0.1 * match["landau_level_spacing_mev"],
     )
+
+
+def test_ac_b1_u1_cli_has_no_dielectric_amplitude():
+    result = subprocess.run(
+        [sys.executable, str(SCRIPT), "--help"],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert "--epsilon" not in result.stdout
 
 
 def test_ac_b1_u1_sweep_canonicalizes_linspace_roundoff(tmp_path):
