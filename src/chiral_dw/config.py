@@ -264,6 +264,7 @@ class ContinuumInteractionParams(BaseModel):
         "dimensionless_dual_gate",
         "dimensionless_screened",
         "dual_gate",
+        "dual_gate_omega_c",
     ] = "dimensionless_screened"
     epsilon: float = Field(default=16.7, gt=0.0)
     gate_distance_nm: float = Field(default=30.0, gt=0.0)

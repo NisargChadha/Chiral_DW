@@ -75,6 +75,9 @@ optional physical conversion divides charge density by `a_M^2`.
    - On the finite magnetic-Bloch torus, C3-orbit-average the AC HF functional
      in the coefficient gauge. Do not C3-average the iterated projector, so
      spontaneous nematic reference states remain allowed.
+   - Normalize the physical-length AC dual-gate interaction directly by
+     `v0 = E_C/(hbar*omega_c)`. Keep the gate and smearing lengths in nm, and
+     do not introduce a second dielectric-amplitude parameter in this AC path.
 
 4. **Native Continuum HF**
    - Implement Chiral_DW-native active-space construction, density vertices,

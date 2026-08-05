@@ -11,7 +11,7 @@ import time
 from dataclasses import dataclass
 from math import pi
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
@@ -83,7 +83,11 @@ class ACContinuumMatch(BaseModel):
     theta_deg: float = Field(gt=0.0)
     a0_angstrom: float = Field(gt=0.0)
     m_eff: float = Field(gt=0.0)
-    epsilon: float = Field(gt=0.0)
+    interaction_normalization: Literal[
+        "physical_e2_over_epsilon",
+        "omega_c_ratio",
+    ]
+    epsilon: float | None = Field(default=None, gt=0.0)
     gate_distance_nm: float = Field(gt=0.0)
     interaction_multiplier: float = Field(ge=0.0)
     moire_length_nm: float = Field(gt=0.0)
@@ -110,14 +114,22 @@ def _continuum_match(args: argparse.Namespace) -> ACContinuumMatch:
         * HBAR2_OVER_2ME_MEV_NM2
         / (float(args.continuum_m_eff) * l2_nm2)
     )
-    characteristic_coulomb_mev = float(
-        float(args.v0)
-        * COULOMB_MEV_NM
-        / (float(args.epsilon) * a_m_nm)
-    )
+    omega_c_normalized = args.coulomb_kind == "dual_gate_omega_c"
+    if omega_c_normalized:
+        characteristic_coulomb_mev = float(args.v0) * omega_c_mev
+        normalization = "omega_c_ratio"
+        epsilon = None
+    else:
+        characteristic_coulomb_mev = float(
+            float(args.v0)
+            * COULOMB_MEV_NM
+            / (float(args.epsilon) * a_m_nm)
+        )
+        normalization = "physical_e2_over_epsilon"
+        epsilon = float(args.epsilon)
     ratio = characteristic_coulomb_mev / omega_c_mev
     maximum_ratio = float(args.max_coulomb_to_ll_ratio)
-    if args.coulomb_kind == "dual_gate" and ratio >= maximum_ratio:
+    if args.coulomb_kind in {"dual_gate", "dual_gate_omega_c"} and ratio >= maximum_ratio:
         raise ValueError(
             "physical dual-gate interaction is too strong for the finite-LL projection: "
             f"E_C/(hbar*omega_c)={ratio:.6g} must be below {maximum_ratio:.6g}; "
@@ -127,7 +139,7 @@ def _continuum_match(args: argparse.Namespace) -> ACContinuumMatch:
     derived_moire_length = a_m_nm
     derived_energy_unit = omega_c_mev
     if args.moire_length_nm is not None:
-        if args.coulomb_kind == "dual_gate" and not np.isclose(
+        if args.coulomb_kind in {"dual_gate", "dual_gate_omega_c"} and not np.isclose(
             float(args.moire_length_nm), derived_moire_length, rtol=1e-8, atol=1e-10
         ):
             raise ValueError(
@@ -136,7 +148,7 @@ def _continuum_match(args: argparse.Namespace) -> ACContinuumMatch:
             )
         derived_moire_length = float(args.moire_length_nm)
     if args.energy_unit_mev is not None:
-        if args.coulomb_kind == "dual_gate" and not np.isclose(
+        if args.coulomb_kind in {"dual_gate", "dual_gate_omega_c"} and not np.isclose(
             float(args.energy_unit_mev), derived_energy_unit, rtol=1e-8, atol=1e-10
         ):
             raise ValueError(
@@ -149,7 +161,8 @@ def _continuum_match(args: argparse.Namespace) -> ACContinuumMatch:
         theta_deg=float(args.continuum_theta_deg),
         a0_angstrom=float(args.continuum_a0_angstrom),
         m_eff=float(args.continuum_m_eff),
-        epsilon=float(args.epsilon),
+        interaction_normalization=normalization,
+        epsilon=epsilon,
         gate_distance_nm=float(args.gate_distance_nm),
         interaction_multiplier=float(args.v0),
         moire_length_nm=derived_moire_length,
@@ -220,7 +233,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
     parser.add_argument(
         "--coulomb-kind",
-        choices=["dimensionless_dual_gate", "dimensionless_screened", "dual_gate"],
+        choices=[
+            "dimensionless_dual_gate",
+            "dimensionless_screened",
+            "dual_gate",
+            "dual_gate_omega_c",
+        ],
         default="dimensionless_dual_gate",
     )
     parser.add_argument("--interaction-strength-scale", "--v0", dest="v0", type=float, default=0.2)
@@ -228,7 +246,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--q-mesh", choices=["shell", "full"], default="shell")
     parser.add_argument("--q-shell", type=int, default=1)
     parser.add_argument("--local-field-cutoff", type=int, default=1)
-    parser.add_argument("--epsilon", type=float, default=16.7)
+    parser.add_argument(
+        "--epsilon",
+        type=float,
+        default=16.7,
+        help="Dielectric constant for legacy physical dual_gate only; ignored by dual_gate_omega_c.",
+    )
     parser.add_argument("--gate-distance-nm", type=float, default=30.0)
     parser.add_argument("--smear-length-nm", type=float, default=0.347)
     parser.add_argument("--omit-q0", action="store_true")
@@ -346,7 +369,7 @@ def _params_for_point(
         q_mesh=args.q_mesh,
         q_shell=int(args.q_shell),
         local_field_cutoff=int(args.local_field_cutoff),
-        epsilon=float(args.epsilon),
+        epsilon=(1.0 if args.coulomb_kind == "dual_gate_omega_c" else float(args.epsilon)),
         gate_distance_nm=float(args.gate_distance_nm),
         include_q0=not bool(args.omit_q0),
         smear_length_nm=float(args.smear_length_nm),
@@ -830,12 +853,13 @@ def run_point(args: argparse.Namespace, output_root: Path, point: ACSweepPoint) 
         "active_band": int(params.active_band),
         "n_active_bands_per_valley": int(bundle.active.n_active),
         "coulomb_kind": params.interaction.coulomb_kind,
+        "interaction_normalization": continuum_match.interaction_normalization,
         "q_mesh": params.interaction.q_mesh,
         "v0_over_omega_c": float(params.interaction.v0),
         "interaction_multiplier": float(params.interaction.v0),
         "gate_distance": float(params.interaction.gate_distance),
         "gate_distance_nm": float(params.interaction.gate_distance_nm),
-        "epsilon": float(params.interaction.epsilon),
+        "epsilon": continuum_match.epsilon,
         "q_shell": int(params.interaction.q_shell),
         "local_field_cutoff": int(params.interaction.local_field_cutoff),
         "density_vertex_scheme": params.density_vertex_scheme,

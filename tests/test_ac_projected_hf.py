@@ -553,6 +553,68 @@ def test_physical_dual_gate_weights_use_total_area_and_hf_energy_unit():
     assert np.isclose(vertices.v_over_a[q1, g0], expected_weight)
 
 
+def test_omega_c_normalized_dual_gate_uses_v0_as_characteristic_energy_ratio():
+    base = _ideal_lll_params(n_k=3, n_theta=8)
+    interaction = base.interaction.model_copy(
+        update={
+            "coulomb_kind": "dual_gate_omega_c",
+            "v0": 0.1,
+            "q_mesh": "full",
+            "epsilon": 73.0,
+            "gate_distance_nm": 30.0,
+            "smear_length_nm": 0.347,
+            "include_q0": True,
+        }
+    )
+    params = base.model_copy(
+        update={
+            "interaction": interaction,
+            "moire_length_nm": 5.681350588613268,
+            "energy_unit_mev": 27.625318938039467,
+        }
+    )
+    bundle = build_ac_projected_bundle(params)
+    vertices = bundle.vertices
+    model = bundle.form_factors
+    q0 = vertices.q_shifts.index((0, 0))
+    q1 = vertices.q_shifts.index((1, 0))
+    g0 = vertices.g_channels.index((0, 0))
+
+    assert vertices.v_q is not None
+    assert vertices.q_norm_nm_inv is not None
+    coulomb_prefactor = (
+        interaction.v0 * params.energy_unit_mev * params.moire_length_nm
+    )
+    expected_q0 = 2.0 * np.pi * coulomb_prefactor * interaction.gate_distance_nm
+    assert np.isclose(vertices.v_q[q0, g0], expected_q0)
+
+    q_norm = float(vertices.q_norm_nm_inv[q1, g0])
+    expected_q1 = (
+        2.0
+        * np.pi
+        * coulomb_prefactor
+        * np.tanh(q_norm * interaction.gate_distance_nm)
+        / q_norm
+        * np.exp(-0.5 * (q_norm * interaction.smear_length_nm) ** 2)
+    )
+    assert np.isclose(vertices.v_q[q1, g0], expected_q1)
+
+    model_to_physical = params.moire_length_nm / model.fields.params.a_m
+    cell_area_nm2 = model.fields.unit_cell_area * model_to_physical**2
+    total_area_nm2 = bundle.grid.size * cell_area_nm2
+    expected_weight = expected_q1 / (total_area_nm2 * params.energy_unit_mev)
+    assert np.isclose(vertices.v_over_a[q1, g0], expected_weight)
+
+    changed_epsilon = params.model_copy(
+        update={
+            "interaction": interaction.model_copy(update={"epsilon": 2.0})
+        }
+    )
+    changed_vertices = build_ac_projected_bundle(changed_epsilon).vertices
+    assert np.allclose(changed_vertices.v_q, vertices.v_q)
+    assert np.allclose(changed_vertices.v_over_a, vertices.v_over_a)
+
+
 def test_ac_overlap_provider_has_opposite_cherns_and_tprime_overlaps():
     model = NonIdealACLLModel(FirstShellACParams(b1=0.0, u1=0.0, n_ll=1))
     provider = ACBandOverlapProvider(model)

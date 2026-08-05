@@ -41,13 +41,12 @@ N_LL=${N_LL:-"8"}
 ACTIVE_BAND=${ACTIVE_BAND:-"0"}
 N_K_LIST=${N_K_LIST:-"15,18,21,24"}
 
-COULOMB_KIND=${COULOMB_KIND:-"dual_gate"}
+COULOMB_KIND=${COULOMB_KIND:-"dual_gate_omega_c"}
 V0=${V0:-"0.1"}
 GATE_DISTANCE=${GATE_DISTANCE:-"2.0"}
 Q_MESH=${Q_MESH:-"full"}
 Q_SHELL=${Q_SHELL:-"1"}
 LOCAL_FIELD_CUTOFF=${LOCAL_FIELD_CUTOFF:-"1"}
-EPSILON=${EPSILON:-"4.0"}
 GATE_DISTANCE_NM=${GATE_DISTANCE_NM:-"30.0"}
 SMEAR_LENGTH_NM=${SMEAR_LENGTH_NM:-"0.347"}
 INCLUDE_Q0=${INCLUDE_Q0:-"1"}
@@ -127,7 +126,6 @@ COMMON_ARGS=(
   --q-mesh "$Q_MESH"
   --q-shell "$Q_SHELL"
   --local-field-cutoff "$LOCAL_FIELD_CUTOFF"
-  --epsilon "$EPSILON"
   --gate-distance-nm "$GATE_DISTANCE_NM"
   --smear-length-nm "$SMEAR_LENGTH_NM"
   --exchange-scale "$EXCHANGE_SCALE"

@@ -399,6 +399,65 @@ def _dual_gate_interaction_arrays(
     return q_vectors, q_norm, v_q, v_over_a
 
 
+def _dual_gate_omega_c_interaction_arrays(
+    model: NonIdealACLLModel,
+    grid: MomentumGrid,
+    q_list: tuple[tuple[int, int], ...],
+    g_channels: tuple[tuple[int, int], ...],
+    interaction: ContinuumInteractionParams,
+    *,
+    moire_length_nm: float,
+    energy_unit_mev: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Return dual-gate weights with ``v0 = E_C/(hbar*omega_c)``.
+
+    This AC-specific normalization removes the redundant dielectric amplitude:
+    ``E_C = v0 * energy_unit_mev`` and the Coulomb length-energy prefactor is
+    ``E_C * a_M``. The physical gate and smearing lengths remain in nm.
+    """
+
+    a_m_model = float(model.fields.params.a_m)
+    q_scale = a_m_model / float(moire_length_nm)
+    cell_area_nm2 = model.fields.unit_cell_area * (float(moire_length_nm) / a_m_model) ** 2
+    total_area_nm2 = float(grid.size) * cell_area_nm2
+    coulomb_prefactor_mev_nm = (
+        float(interaction.v0) * float(energy_unit_mev) * float(moire_length_nm)
+    )
+    q_vectors = np.zeros((len(q_list), len(g_channels), 2), dtype=float)
+    q_norm = np.zeros((len(q_list), len(g_channels)), dtype=float)
+    v_q = np.zeros_like(q_norm)
+    v_over_a = np.zeros_like(q_norm)
+    for iq, q in enumerate(q_list):
+        q_cart = _cart_from_coord(model, (q[0] / grid.n1, q[1] / grid.n2))
+        for ig, g in enumerate(g_channels):
+            g_cart = _cart_from_coord(model, g)
+            Q_nm = (q_cart + g_cart) * q_scale
+            norm = float(np.linalg.norm(Q_nm))
+            q_vectors[iq, ig] = Q_nm
+            q_norm[iq, ig] = norm
+            if norm < 1e-12:
+                if interaction.include_q0:
+                    v_q[iq, ig] = (
+                        2.0
+                        * np.pi
+                        * coulomb_prefactor_mev_nm
+                        * float(interaction.gate_distance_nm)
+                    )
+            else:
+                value = (
+                    2.0
+                    * np.pi
+                    * coulomb_prefactor_mev_nm
+                    * np.tanh(norm * float(interaction.gate_distance_nm))
+                    / norm
+                )
+                if interaction.smear_length_nm > 0.0:
+                    value *= np.exp(-0.5 * (norm * float(interaction.smear_length_nm)) ** 2)
+                v_q[iq, ig] = value
+            v_over_a[iq, ig] = v_q[iq, ig] / (total_area_nm2 * float(energy_unit_mev))
+    return q_vectors, q_norm, v_q, v_over_a
+
+
 def _interaction_arrays(
     model: NonIdealACLLModel,
     grid: MomentumGrid,
@@ -411,6 +470,16 @@ def _interaction_arrays(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     if interaction.coulomb_kind == "dual_gate":
         return _dual_gate_interaction_arrays(
+            model,
+            grid,
+            q_list,
+            g_channels,
+            interaction,
+            moire_length_nm=moire_length_nm,
+            energy_unit_mev=energy_unit_mev,
+        )
+    if interaction.coulomb_kind == "dual_gate_omega_c":
+        return _dual_gate_omega_c_interaction_arrays(
             model,
             grid,
             q_list,
@@ -616,8 +685,16 @@ def build_ac_density_vertices(
         v_over_a=v_over_a,
         g_channels=g_channels,
         channel_in_disk=channel_in_disk,
-        q_vectors_nm_inv=q_vectors if controls.coulomb_kind == "dual_gate" else None,
-        q_norm_nm_inv=q_norm if controls.coulomb_kind == "dual_gate" else None,
+        q_vectors_nm_inv=(
+            q_vectors
+            if controls.coulomb_kind in {"dual_gate", "dual_gate_omega_c"}
+            else None
+        ),
+        q_norm_nm_inv=(
+            q_norm
+            if controls.coulomb_kind in {"dual_gate", "dual_gate_omega_c"}
+            else None
+        ),
         v_q=v_q,
     )
 

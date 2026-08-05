@@ -113,6 +113,39 @@ def test_ac_b1_u1_physical_dual_gate_rejects_interaction_above_ll_guard(tmp_path
     assert "interaction is too strong" in result.stderr
 
 
+def test_ac_b1_u1_omega_c_normalized_dual_gate_uses_v0_as_ll_ratio(tmp_path):
+    output_root = tmp_path / "omega_c_normalized"
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--output-root",
+            str(output_root),
+            "--b1",
+            "0.0",
+            "--u1",
+            "0.0",
+            "--coulomb-kind",
+            "dual_gate_omega_c",
+            "--v0",
+            "0.1",
+            "--epsilon",
+            "83.0",
+            "--dry-run",
+        ],
+        check=True,
+    )
+
+    match = json.loads((output_root / "sweep_plan.json").read_text())["continuum_match"]
+    assert match["interaction_normalization"] == "omega_c_ratio"
+    assert match["epsilon"] is None
+    assert np.isclose(match["characteristic_coulomb_to_ll_ratio"], 0.1)
+    assert np.isclose(
+        match["characteristic_coulomb_mev"],
+        0.1 * match["landau_level_spacing_mev"],
+    )
+
+
 def test_ac_b1_u1_sweep_canonicalizes_linspace_roundoff(tmp_path):
     output_root = tmp_path / "sweep"
     subprocess.run(
@@ -331,10 +364,11 @@ def test_ac_b1_u1_sweep_job_maps_four_meshes_and_uses_multicore_physical_dual_ga
     assert 'N_LL=${N_LL:-"8"}' in text
     assert 'ACTIVE_BAND=${ACTIVE_BAND:-"0"}' in text
     assert 'N_K_LIST=${N_K_LIST:-"15,18,21,24"}' in text
-    assert 'COULOMB_KIND=${COULOMB_KIND:-"dual_gate"}' in text
+    assert 'COULOMB_KIND=${COULOMB_KIND:-"dual_gate_omega_c"}' in text
     assert 'Q_MESH=${Q_MESH:-"full"}' in text
     assert 'V0=${V0:-"0.1"}' in text
-    assert 'EPSILON=${EPSILON:-"4.0"}' in text
+    assert "EPSILON=" not in text
+    assert "--epsilon" not in text
     assert 'CONTINUUM_THETA_DEG=${CONTINUUM_THETA_DEG:-"3.5"}' in text
     assert 'CONTINUUM_A0_ANGSTROM=${CONTINUUM_A0_ANGSTROM:-"3.47"}' in text
     assert 'CONTINUUM_M_EFF=${CONTINUUM_M_EFF:-"0.62"}' in text
