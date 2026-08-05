@@ -10,6 +10,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "scan_ac_projected_hf_b1_u1.py"
 JOB = ROOT / "jobs" / "scan_ac_projected_hf_b1_u1_array.sh"
+RUNBOOK = ROOT / "docs" / "AC_CONJUGATE_SWEEP_V0P3.md"
 
 
 def test_ac_b1_u1_sweep_dry_run_writes_selected_plan(tmp_path):
@@ -323,25 +324,26 @@ def test_ac_b1_u1_sweep_tiny_point_runs_overlap_response(tmp_path):
     assert (output_root / "sweep.csv").exists()
 
 
-def test_ac_b1_u1_sweep_job_maps_four_meshes_and_uses_multicore_physical_dual_gate():
+def test_ac_b1_u1_sweep_job_maps_five_meshes_and_uses_multicore_physical_dual_gate():
     text = JOB.read_text()
-    assert "#SBATCH --array=0-483%24" in text
+    assert "#SBATCH --array=0-2204%12" in text
     assert "#SBATCH -c 4" in text
     assert "#SBATCH --mem=24G" in text
     assert "SLURM_ARRAY_TASK_ID" in text
     assert "scripts/scan_ac_projected_hf_b1_u1.py" in text
     assert 'B1_MIN=${B1_MIN:-"-0.1"}' in text
     assert 'B1_MAX=${B1_MAX:-"0.1"}' in text
-    assert 'N_B1=${N_B1:-"11"}' in text
+    assert 'N_B1=${N_B1:-"21"}' in text
     assert 'U1_MIN=${U1_MIN:-"-0.1"}' in text
     assert 'U1_MAX=${U1_MAX:-"0.1"}' in text
-    assert 'N_U1=${N_U1:-"11"}' in text
+    assert 'N_U1=${N_U1:-"21"}' in text
     assert 'N_LL=${N_LL:-"8"}' in text
     assert 'ACTIVE_BAND=${ACTIVE_BAND:-"0"}' in text
-    assert 'N_K_LIST=${N_K_LIST:-"15,18,21,24"}' in text
+    assert 'N_K_LIST=${N_K_LIST:-"18,20,21,22,24"}' in text
     assert 'COULOMB_KIND=${COULOMB_KIND:-"dual_gate_omega_c"}' in text
     assert 'Q_MESH=${Q_MESH:-"full"}' in text
-    assert 'V0=${V0:-"0.1"}' in text
+    assert 'V0=${V0:-"0.3"}' in text
+    assert 'MAX_COULOMB_TO_LL_RATIO=${MAX_COULOMB_TO_LL_RATIO:-"0.31"}' in text
     assert "EPSILON=" not in text
     assert "--epsilon" not in text
     assert 'CONTINUUM_THETA_DEG=${CONTINUUM_THETA_DEG:-"3.5"}' in text
@@ -353,6 +355,23 @@ def test_ac_b1_u1_sweep_job_maps_four_meshes_and_uses_multicore_physical_dual_ga
     assert "MESH_INDEX=$((GLOBAL_TASK_ID / POINTS_PER_MESH))" in text
     assert "POINT_TASK_ID=$((GLOBAL_TASK_ID % POINTS_PER_MESH))" in text
     assert "--no-write-plan" in text
+
+
+def test_ac_b1_u1_v0p3_runbook_matches_point_artifact_contract():
+    text = RUNBOOK.read_text()
+    for name in (
+        "point_summary.json",
+        "point_params.json",
+        "reference_states.npz",
+        "response.npz",
+        "reference_diagnostics.csv",
+        "hf_chern_numbers.csv",
+        "response_K_theta.csv",
+        "path_theta_edges.csv",
+    ):
+        assert f"`{name}`" in text
+    assert "`summary.json`" not in text
+    assert "`summary.csv`" not in text
 
 
 def test_ac_b1_u1_sweep_no_write_plan_leaves_shared_plan_untouched(tmp_path):

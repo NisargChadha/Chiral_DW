@@ -1,8 +1,10 @@
 #!/bin/bash
 #SBATCH -J ac_b1u1_cG
 #SBATCH -p serial_requeue
-# 4 momentum meshes * 11 * 11 (B1,U1) points = 484 array tasks.
-#SBATCH --array=0-483%24
+# 5 momentum meshes * 21 * 21 (B1,U1) points = 2205 array tasks.
+# Keep the default concurrency conservative; see the staged launch commands in
+# docs/AC_CONJUGATE_SWEEP_V0P3.md before submitting the full array.
+#SBATCH --array=0-2204%12
 #SBATCH -t 24:00:00
 #SBATCH -c 4
 #SBATCH --mem=24G
@@ -28,21 +30,21 @@ mkdir -p logs
 
 # Override any value with:
 # sbatch --export=ALL,NAME=value jobs/scan_ac_projected_hf_b1_u1_array.sh
-OUTPUT_ROOT=${OUTPUT_ROOT:-"results/ac_b1_u1_cg_dual_gate_eps4_nll8_grid11_nk15_24"}
+OUTPUT_ROOT=${OUTPUT_ROOT:-"results/ac_b1_u1_cg_dual_gate_omega_v0p3_nll8_grid21_nk18_24"}
 
 B1_MIN=${B1_MIN:-"-0.1"}
 B1_MAX=${B1_MAX:-"0.1"}
-N_B1=${N_B1:-"11"}
+N_B1=${N_B1:-"21"}
 U1_MIN=${U1_MIN:-"-0.1"}
 U1_MAX=${U1_MAX:-"0.1"}
-N_U1=${N_U1:-"11"}
+N_U1=${N_U1:-"21"}
 
 N_LL=${N_LL:-"8"}
 ACTIVE_BAND=${ACTIVE_BAND:-"0"}
-N_K_LIST=${N_K_LIST:-"15,18,21,24"}
+N_K_LIST=${N_K_LIST:-"18,20,21,22,24"}
 
 COULOMB_KIND=${COULOMB_KIND:-"dual_gate_omega_c"}
-V0=${V0:-"0.1"}
+V0=${V0:-"0.3"}
 GATE_DISTANCE=${GATE_DISTANCE:-"2.0"}
 Q_MESH=${Q_MESH:-"full"}
 Q_SHELL=${Q_SHELL:-"1"}
@@ -60,7 +62,10 @@ EXCHANGE_WORKERS=${EXCHANGE_WORKERS:-"${SLURM_CPUS_PER_TASK:-1}"}
 CONTINUUM_THETA_DEG=${CONTINUUM_THETA_DEG:-"3.5"}
 CONTINUUM_A0_ANGSTROM=${CONTINUUM_A0_ANGSTROM:-"3.47"}
 CONTINUUM_M_EFF=${CONTINUUM_M_EFF:-"0.62"}
-MAX_COULOMB_TO_LL_RATIO=${MAX_COULOMB_TO_LL_RATIO:-"0.25"}
+# The requested v0=0.3 intentionally exceeds the earlier 0.25 projection
+# warning threshold.  Keep the guard close to the requested value so an
+# accidental interaction increase still fails before constructing vertices.
+MAX_COULOMB_TO_LL_RATIO=${MAX_COULOMB_TO_LL_RATIO:-"0.31"}
 
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
