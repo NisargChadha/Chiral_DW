@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from chiral_dw.ac.nonideal import NonIdealACLLModel
+from chiral_dw.ac.sewing import ACReciprocalTransport
 from chiral_dw.continuum.models import ContinuumActiveSpace, MomentumGrid, hermitize
 from chiral_dw.response import KThetaResult, compute_cG, rotate_projector_phi
 
@@ -161,6 +162,37 @@ class ACBandOverlapProvider:
             self.k_from_fractional(frac_k),
             self.k_from_fractional(frac_p),
         )
+
+    def sewn_active_overlap_fractional(
+        self,
+        frac_k: tuple[float, float] | np.ndarray,
+        frac_p: tuple[float, float] | np.ndarray,
+    ) -> np.ndarray:
+        """Return the raw overlap expressed in both folded active frames.
+
+        The microscopic LL overlap is evaluated at the requested raw
+        momenta.  Reciprocal sewing matrices then map its two coefficient
+        indices back to the stored fundamental-cell frames.  An active-space
+        frame is required so reciprocal images use exactly the HF band gauge.
+        """
+
+        if self.active is None:
+            raise ValueError("sewn AC overlaps require an active-space band frame")
+        raw_k = np.asarray(frac_k, dtype=float)
+        raw_p = np.asarray(frac_p, dtype=float)
+        transport = ACReciprocalTransport(self.model)
+        folded_k, shift_k = transport.fold_fractional(raw_k)
+        folded_p, shift_p = transport.fold_fractional(raw_p)
+        sewing_k = transport.active_sewing_matrix(
+            self.k_from_fractional(folded_k),
+            shift_k,
+        )
+        sewing_p = transport.active_sewing_matrix(
+            self.k_from_fractional(folded_p),
+            shift_p,
+        )
+        raw_overlap = self.active_overlap_fractional(raw_k, raw_p)
+        return sewing_k @ raw_overlap @ sewing_p.conj().T
 
     def band_cherns(self, n_k: int = 9) -> tuple[float, float]:
         up = self.model.berry_curvature_fukui(

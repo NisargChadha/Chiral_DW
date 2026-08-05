@@ -4,8 +4,11 @@ import numpy as np
 import pytest
 
 from chiral_dw.ac.nonideal import NonIdealACLLModel
+from chiral_dw.ac.projected import build_ac_active_space
+from chiral_dw.ac.response import ACBandOverlapProvider
 from chiral_dw.ac.sewing import ACReciprocalTransport, reciprocal_parity
 from chiral_dw.config import FirstShellACParams
+from chiral_dw.continuum.models import MomentumGrid
 
 
 def _model(n_ll: int = 4) -> NonIdealACLLModel:
@@ -35,6 +38,18 @@ def test_active_sewing_is_unitary_with_conjugate_valley_phases() -> None:
     assert sewing[0, 1] == 0.0
     assert sewing[1, 0] == 0.0
     assert sewing[1, 1] == pytest.approx(np.conj(sewing[0, 0]))
+
+
+def test_fractional_folding_handles_positive_negative_and_exact_boundaries() -> None:
+    transport = ACReciprocalTransport(_model())
+
+    folded, shift = transport.fold_fractional(np.array([1.0, -0.25]))
+    assert np.allclose(folded, [0.0, 0.75])
+    assert shift == (1, -1)
+
+    folded, shift = transport.fold_fractional(np.array([-1e-14, 1.0 + 1e-14]))
+    assert np.allclose(folded, [0.0, 0.0])
+    assert shift == (0, 1)
 
 
 @pytest.mark.parametrize(
@@ -119,3 +134,41 @@ def test_ll_form_factor_is_covariant_when_left_endpoint_is_shifted(n_ll: int) ->
     )
 
     assert np.allclose(raw, expected, atol=2e-14)
+
+
+def test_sewn_active_overlap_is_invariant_under_translated_edge_representations() -> None:
+    model = _model(n_ll=4)
+    grid = MomentumGrid(6)
+    active, _bands = build_ac_active_space(
+        model,
+        grid,
+        active_band=0,
+        diagnostics_n_k=3,
+    )
+    provider = ACBandOverlapProvider(model, active=active)
+
+    for j in range(grid.n_k):
+        start = np.array([0.0, j / grid.n_k])
+        stop = np.array([0.0, (j + 1) / grid.n_k])
+        baseline = provider.sewn_active_overlap_fractional(start, stop)
+        translated = provider.sewn_active_overlap_fractional(
+            start + np.array([1.0, 0.0]),
+            stop + np.array([1.0, 0.0]),
+        )
+        assert np.allclose(translated, baseline, atol=2e-14)
+
+    for i in range(grid.n_k):
+        start = np.array([i / grid.n_k, 0.0])
+        stop = np.array([(i + 1) / grid.n_k, 0.0])
+        baseline = provider.sewn_active_overlap_fractional(start, stop)
+        translated = provider.sewn_active_overlap_fractional(
+            start + np.array([0.0, 1.0]),
+            stop + np.array([0.0, 1.0]),
+        )
+        assert np.allclose(translated, baseline, atol=2e-14)
+
+
+def test_sewn_active_overlap_requires_the_stored_active_frame() -> None:
+    provider = ACBandOverlapProvider(_model())
+    with pytest.raises(ValueError, match="active-space band frame"):
+        provider.sewn_active_overlap_fractional((0.0, 0.0), (0.1, 0.0))

@@ -35,6 +35,24 @@ class ACReciprocalTransport:
 
     model: NonIdealACLLModel
 
+    def fold_fractional(
+        self,
+        fractional: np.ndarray,
+        *,
+        atol: float = 1e-12,
+    ) -> tuple[np.ndarray, ReciprocalShift]:
+        """Fold fractional momentum into ``[0,1)^2`` and return its shift."""
+
+        raw = np.asarray(fractional, dtype=float)
+        if raw.shape != (2,):
+            raise ValueError("fractional momentum must have shape (2,)")
+        nearest = np.rint(raw)
+        snapped = np.where(np.abs(raw - nearest) <= float(atol), nearest, raw)
+        shift_array = np.floor(snapped).astype(int)
+        folded = snapped - shift_array
+        folded = np.where(np.abs(folded) <= float(atol), 0.0, folded)
+        return folded.astype(float), (int(shift_array[0]), int(shift_array[1]))
+
     def reciprocal_vector(self, shift: ReciprocalShift) -> np.ndarray:
         """Return the Cartesian reciprocal vector for an integer shift."""
 
