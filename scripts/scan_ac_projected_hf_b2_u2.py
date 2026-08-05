@@ -23,7 +23,8 @@ if str(SRC) not in sys.path:
 from chiral_dw.ac.projected import build_ac_projected_bundle  # noqa: E402
 from chiral_dw.ac.response import (  # noqa: E402
     ACBandOverlapProvider,
-    ac_projector_chern,
+    ACProjectorChernDiagnostics,
+    ac_projector_chern_diagnostics,
     ac_reference_cherns_are_valid,
     k_theta_from_ac_projectors,
 )
@@ -558,11 +559,16 @@ def run_point(args: argparse.Namespace, output_root: Path, point: ACSweepPoint) 
         active_band=params.active_band,
         active=bundle.active,
     )
-    cherns = {
-        "vp_plus": ac_projector_chern(provider, bundle.grid, refs.vp_plus.P),
-        "vp_minus": ac_projector_chern(provider, bundle.grid, refs.vp_minus.P),
-        "ivc": ac_projector_chern(provider, bundle.grid, refs.ivc.P),
+    chern_diagnostics: dict[str, ACProjectorChernDiagnostics] = {
+        "vp_plus": ac_projector_chern_diagnostics(
+            provider, bundle.grid, refs.vp_plus.P
+        ),
+        "vp_minus": ac_projector_chern_diagnostics(
+            provider, bundle.grid, refs.vp_minus.P
+        ),
+        "ivc": ac_projector_chern_diagnostics(provider, bundle.grid, refs.ivc.P),
     }
+    cherns = {name: diagnostics.chern for name, diagnostics in chern_diagnostics.items()}
     reference_rows = _reference_result_rows(point, params, bundle, refs, cherns)
     _write_csv(point_dir / "reference_diagnostics.csv", reference_rows)
     _write_csv(
@@ -573,17 +579,37 @@ def run_point(args: argparse.Namespace, output_root: Path, point: ACSweepPoint) 
                 "reference": row["reference"],
                 "chern": row["ac_overlap_chern"],
                 "converged": row["converged"],
+                **chern_diagnostics[
+                    {"VP+": "vp_plus", "VP-": "vp_minus", "IVC": "ivc"}[
+                        row["reference"]
+                    ]
+                ].model_dump(),
             }
             for row in reference_rows
         ],
     )
 
     all_converged = bool(refs.vp_plus.converged and refs.vp_minus.converged and refs.ivc.converged)
-    reference_chern_valid = ac_reference_cherns_are_valid(cherns)
+    reference_chern_symmetry_valid = ac_reference_cherns_are_valid(cherns)
+    reference_chern_numerically_resolved = all(
+        diagnostics.numerically_resolved for diagnostics in chern_diagnostics.values()
+    )
+    reference_chern_valid = bool(
+        reference_chern_symmetry_valid and reference_chern_numerically_resolved
+    )
+    reference_topology_status = (
+        "valid"
+        if reference_chern_valid
+        else (
+            "numerically_unresolved"
+            if not reference_chern_numerically_resolved
+            else "symmetry_mismatch"
+        )
+    )
     response_status = "ok"
     projectors = None
     path_diagnostics = None
-    if reference_chern_valid and (all_converged or args.allow_nonconverged_response):
+    if all_converged or args.allow_nonconverged_response:
         theta_edges = np.linspace(params.response.theta_min, params.response.theta_max, params.response.n_theta + 1)
         phi_nodes = np.arange(params.response.n_phi, dtype=float) * params.response.phi_step
         projectors, path_diagnostics = symmetric_convex_path(refs, theta_edges)
@@ -596,11 +622,6 @@ def run_point(args: argparse.Namespace, output_root: Path, point: ACSweepPoint) 
         )
         response = k_theta_from_ac_projectors(provider, projector_grid, theta_edges, phi_nodes)
         path_rows = _path_rows(point, bundle, projectors, path_diagnostics)
-        response_rows = _response_rows(point, response)
-    elif not reference_chern_valid:
-        response_status = "skipped_invalid_reference_chern"
-        response = _nan_response(params)
-        path_rows = []
         response_rows = _response_rows(point, response)
     else:
         response_status = "skipped_nonconverged_hf"
@@ -662,12 +683,11 @@ def run_point(args: argparse.Namespace, output_root: Path, point: ACSweepPoint) 
     elapsed = time.perf_counter() - start
     row = {
         **point.as_row(),
-        "status": (
-            "invalid_reference_chern"
-            if not reference_chern_valid
-            else ("ok" if all_converged else "nonconverged_hf")
-        ),
+        "status": "ok" if all_converged else "nonconverged_hf",
         "response_status": response_status,
+        "reference_topology_status": reference_topology_status,
+        "reference_chern_symmetry_valid": reference_chern_symmetry_valid,
+        "reference_chern_numerically_resolved": reference_chern_numerically_resolved,
         "reference_chern_valid": reference_chern_valid,
         "elapsed_seconds": float(elapsed),
         "n_k": int(params.grid.n_k),

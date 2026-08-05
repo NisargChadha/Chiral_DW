@@ -18,7 +18,9 @@ from chiral_dw.ac.projected import (
 )
 from chiral_dw.ac.response import (
     ACBandOverlapProvider,
+    ACProjectorChernDiagnostics,
     ac_projector_chern,
+    ac_projector_chern_diagnostics,
     ac_reference_cherns_are_valid,
     k_theta_from_ac_projectors,
 )
@@ -41,6 +43,7 @@ __all__ = [
     "ACProjectedBandStructure",
     "ACReciprocalTransport",
     "ACBandOverlapProvider",
+    "ACProjectorChernDiagnostics",
     "BandSolution",
     "ChiSolution",
     "EnergyBreakdown",
@@ -58,6 +61,7 @@ __all__ = [
     "build_ac_density_vertices",
     "build_ac_projected_bundle",
     "ac_projector_chern",
+    "ac_projector_chern_diagnostics",
     "ac_reference_cherns_are_valid",
     "first_shell_magnetic_coefficients",
     "first_shell_potential_coefficients",

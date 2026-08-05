@@ -157,6 +157,27 @@ def test_sewn_active_overlap_is_invariant_under_translated_edge_representations(
         )
         assert np.allclose(translated, baseline, atol=2e-14)
 
+
+def test_sewn_active_overlap_has_trivial_tprime_in_the_folded_coefficient_frame() -> None:
+    model = _model(n_ll=4)
+    grid = MomentumGrid(6)
+    active, _bands = build_ac_active_space(
+        model,
+        grid,
+        active_band=0,
+        diagnostics_n_k=3,
+    )
+    provider = ACBandOverlapProvider(model, active=active)
+    swap = np.array([[0.0, 1.0], [1.0, 0.0]], dtype=complex)
+
+    for coord_a, coord_b in [((1, 2), (2, 2)), ((5, 1), (0, 1)), ((4, 5), (4, 0))]:
+        frac_a = np.asarray(coord_a, dtype=float) / grid.n_k
+        frac_b = np.asarray(coord_b, dtype=float) / grid.n_k
+        overlap = provider.sewn_active_overlap_fractional(frac_a, frac_b)
+        partner_overlap = provider.sewn_active_overlap_fractional(-frac_a, -frac_b)
+        expected = swap @ partner_overlap.conj() @ swap
+        assert np.allclose(overlap, expected, atol=2e-14)
+
     for i in range(grid.n_k):
         start = np.array([i / grid.n_k, 0.0])
         stop = np.array([(i + 1) / grid.n_k, 0.0])

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import numpy as np
+from pydantic import BaseModel, ConfigDict, Field
 
 from chiral_dw.ac.nonideal import NonIdealACLLModel
 from chiral_dw.ac.sewing import ACReciprocalTransport
@@ -180,19 +181,35 @@ class ACBandOverlapProvider:
             raise ValueError("sewn AC overlaps require an active-space band frame")
         raw_k = np.asarray(frac_k, dtype=float)
         raw_p = np.asarray(frac_p, dtype=float)
+        up = self._sewn_up_overlap_fractional(raw_k, raw_p)
+        down = np.conj(self._sewn_up_overlap_fractional(-raw_k, -raw_p))
+        return np.diag([up, down]).astype(complex)
+
+    def _sewn_up_overlap_fractional(
+        self,
+        raw_k: np.ndarray,
+        raw_p: np.ndarray,
+    ) -> complex:
+        """Return the up-valley overlap in its folded active-band frame."""
+
         transport = ACReciprocalTransport(self.model)
         folded_k, shift_k = transport.fold_fractional(raw_k)
         folded_p, shift_p = transport.fold_fractional(raw_p)
-        sewing_k = transport.active_sewing_matrix(
+        sewing_k = transport.valley_phase(
             self.k_from_fractional(folded_k),
             shift_k,
+            valley=1,
         )
-        sewing_p = transport.active_sewing_matrix(
+        sewing_p = transport.valley_phase(
             self.k_from_fractional(folded_p),
             shift_p,
+            valley=1,
         )
-        raw_overlap = self.active_overlap_fractional(raw_k, raw_p)
-        return sewing_k @ raw_overlap @ sewing_p.conj().T
+        raw_overlap = self.up_overlap(
+            self.k_from_fractional(raw_k),
+            self.k_from_fractional(raw_p),
+        )
+        return complex(sewing_k * raw_overlap * np.conj(sewing_p))
 
     def band_cherns(self, n_k: int = 9) -> tuple[float, float]:
         up = self.model.berry_curvature_fukui(
@@ -219,11 +236,130 @@ def _spinor_link(
     coord_b: tuple[int, int],
     n_k: int,
 ) -> complex:
-    overlap = provider.active_overlap_fractional(
+    overlap = provider.sewn_active_overlap_fractional(
         _coord_fractional(coord_a, n_k),
         _coord_fractional(coord_b, n_k),
     )
-    return _safe_unit(za.conj() @ overlap @ zb)
+    return complex(za.conj() @ overlap @ zb)
+
+
+class ACProjectorChernDiagnostics(BaseModel):
+    """Gauge-covariant lattice-Chern and link-admissibility diagnostics."""
+
+    model_config = ConfigDict(frozen=True)
+
+    chern: float
+    integer_residual: float = Field(ge=0.0)
+    min_link_magnitude: float = Field(ge=0.0)
+    small_link_count: int = Field(ge=0)
+    link_tolerance: float = Field(gt=0.0)
+    max_abs_plaquette_phase: float = Field(ge=0.0)
+    min_branch_margin: float = Field(ge=0.0)
+    translated_edge_closure_residual: float = Field(ge=0.0)
+    numerically_resolved: bool
+
+
+def ac_projector_chern_diagnostics(
+    provider: ACBandOverlapProvider,
+    grid: MomentumGrid,
+    P: np.ndarray,
+    *,
+    link_tolerance: float = 1e-8,
+) -> ACProjectorChernDiagnostics:
+    """Return a shared-link Chern result on the sewn magnetic-Bloch torus."""
+
+    tolerance = float(link_tolerance)
+    if tolerance <= 0.0:
+        raise ValueError("link_tolerance must be positive")
+    arr = hermitize(np.asarray(P, dtype=complex))
+    if arr.shape == (grid.n_k, grid.n_k, 2, 2):
+        arr = arr.reshape(grid.size, 2, 2)
+    if arr.shape != (grid.size, 2, 2):
+        raise ValueError("P must have shape (grid.size,2,2) or (n_k,n_k,2,2)")
+    spinors = np.asarray([_occupied_spinor(arr[ik]) for ik in range(grid.size)])
+    n = grid.n_k
+    links_x = np.empty((n, n), dtype=complex)
+    links_y = np.empty((n, n), dtype=complex)
+    magnitudes = np.empty((n, n, 2), dtype=float)
+    for i in range(n):
+        for j in range(n):
+            a = (i, j)
+            za = spinors[grid.index_of(a)]
+            bx = (i + 1, j)
+            by = (i, j + 1)
+            raw_x = _spinor_link(
+                provider,
+                za,
+                spinors[grid.index_of(bx)],
+                a,
+                bx,
+                n,
+            )
+            raw_y = _spinor_link(
+                provider,
+                za,
+                spinors[grid.index_of(by)],
+                a,
+                by,
+                n,
+            )
+            magnitudes[i, j] = abs(raw_x), abs(raw_y)
+            links_x[i, j] = _safe_unit(raw_x)
+            links_y[i, j] = _safe_unit(raw_y)
+
+    phases = np.empty((n, n), dtype=float)
+    for i in range(n):
+        for j in range(n):
+            product = (
+                links_x[i, j]
+                * links_y[(i + 1) % n, j]
+                * np.conj(links_x[i, (j + 1) % n])
+                * np.conj(links_y[i, j])
+            )
+            phases[i, j] = float(np.angle(product))
+    chern = float(np.sum(phases) / (2.0 * np.pi))
+
+    closure = 0.0
+    for j in range(n):
+        start = np.array([0.0, j / n])
+        stop = np.array([0.0, (j + 1) / n])
+        baseline = provider.sewn_active_overlap_fractional(start, stop)
+        translated = provider.sewn_active_overlap_fractional(
+            start + np.array([1.0, 0.0]),
+            stop + np.array([1.0, 0.0]),
+        )
+        closure = max(closure, float(np.max(np.abs(translated - baseline))))
+    for i in range(n):
+        start = np.array([i / n, 0.0])
+        stop = np.array([(i + 1) / n, 0.0])
+        baseline = provider.sewn_active_overlap_fractional(start, stop)
+        translated = provider.sewn_active_overlap_fractional(
+            start + np.array([0.0, 1.0]),
+            stop + np.array([0.0, 1.0]),
+        )
+        closure = max(closure, float(np.max(np.abs(translated - baseline))))
+
+    min_link = float(np.min(magnitudes))
+    small_count = int(np.count_nonzero(magnitudes < tolerance))
+    max_phase = float(np.max(np.abs(phases)))
+    branch_margin = float(max(0.0, np.pi - max_phase))
+    integer_residual = float(abs(chern - np.rint(chern)))
+    resolved = bool(
+        small_count == 0
+        and integer_residual < 1e-10
+        and closure < 1e-10
+    )
+    return ACProjectorChernDiagnostics(
+        chern=chern,
+        integer_residual=integer_residual,
+        min_link_magnitude=min_link,
+        small_link_count=small_count,
+        link_tolerance=tolerance,
+        max_abs_plaquette_phase=max_phase,
+        min_branch_margin=branch_margin,
+        translated_edge_closure_residual=closure,
+        numerically_resolved=resolved,
+    )
 
 
 def ac_projector_chern(
@@ -231,34 +367,9 @@ def ac_projector_chern(
     grid: MomentumGrid,
     P: np.ndarray,
 ) -> float:
-    """Return the occupied-projector Chern number using AC orbital overlaps."""
+    """Return the occupied-projector Chern number on the sewn AC torus."""
 
-    arr = hermitize(np.asarray(P, dtype=complex))
-    if arr.shape == (grid.n_k, grid.n_k, 2, 2):
-        arr = arr.reshape(grid.size, 2, 2)
-    if arr.shape != (grid.size, 2, 2):
-        raise ValueError("P must have shape (grid.size,2,2) or (n_k,n_k,2,2)")
-    spinors = np.asarray([_occupied_spinor(arr[ik]) for ik in range(grid.size)])
-    total = 0.0
-    n = grid.n_k
-    for i in range(n):
-        for j in range(n):
-            a = (i, j)
-            b = (i + 1, j)
-            c = (i + 1, j + 1)
-            d = (i, j + 1)
-            za = spinors[grid.index_of(a)]
-            zb = spinors[grid.index_of(b)]
-            zc = spinors[grid.index_of(c)]
-            zd = spinors[grid.index_of(d)]
-            product = (
-                _spinor_link(provider, za, zb, a, b, n)
-                * _spinor_link(provider, zb, zc, b, c, n)
-                * _spinor_link(provider, zc, zd, c, d, n)
-                * _spinor_link(provider, zd, za, d, a, n)
-            )
-            total += float(np.angle(product))
-    return float(total / (2.0 * np.pi))
+    return ac_projector_chern_diagnostics(provider, grid, P).chern
 
 
 def ac_reference_cherns_are_valid(
@@ -426,7 +537,9 @@ def k_theta_from_ac_projectors(
 
 __all__ = [
     "ACBandOverlapProvider",
+    "ACProjectorChernDiagnostics",
     "ac_projector_chern",
+    "ac_projector_chern_diagnostics",
     "ac_reference_cherns_are_valid",
     "k_theta_from_ac_projectors",
 ]

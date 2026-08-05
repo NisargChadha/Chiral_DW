@@ -241,15 +241,19 @@ def test_ac_b2_u2_sweep_tiny_point_runs_overlap_response(tmp_path):
     assert summary["params"]["interaction"]["vertex_workers"] == 2
     assert summary["params"]["interaction"]["exchange_workers"] == 2
     assert row["hf_all_converged"] is True
-    assert row["reference_chern_valid"] is True
+    assert row["reference_chern_valid"] is False
+    assert row["reference_chern_numerically_resolved"] is False
+    assert row["reference_topology_status"] == "numerically_unresolved"
     assert row["response_status"] == "ok"
     assert abs(row["cG"]) > 1e-3
     assert abs(row["chern_vp_plus"] - 1.0) < 5e-3
     assert abs(row["chern_vp_minus"] + 1.0) < 5e-3
-    assert abs(row["chern_ivc"]) < 5e-3
     assert (point_dir / "response.npz").exists()
     assert (point_dir / "reference_states.npz").exists()
-    assert len(list(csv.DictReader((point_dir / "hf_chern_numbers.csv").open()))) == 3
+    chern_rows = list(csv.DictReader((point_dir / "hf_chern_numbers.csv").open()))
+    assert len(chern_rows) == 3
+    assert {item["numerically_resolved"] for item in chern_rows} == {"False", "True"}
+    assert all("min_link_magnitude" in item for item in chern_rows)
     assert (output_root / "sweep.csv").exists()
 
 

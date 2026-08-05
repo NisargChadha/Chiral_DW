@@ -14,6 +14,7 @@ from chiral_dw.ac.projected import (
 from chiral_dw.ac.response import (
     ACBandOverlapProvider,
     ac_projector_chern,
+    ac_projector_chern_diagnostics,
     ac_reference_cherns_are_valid,
     k_theta_from_ac_projectors,
 )
@@ -685,6 +686,15 @@ def test_ideal_lll_hf_reference_cherns_use_ac_overlaps():
     assert np.isclose(ac_projector_chern(provider, bundle.grid, refs.vp_plus.P), 1.0, atol=5e-3)
     assert np.isclose(ac_projector_chern(provider, bundle.grid, refs.vp_minus.P), -1.0, atol=5e-3)
     assert abs(ac_projector_chern(provider, bundle.grid, refs.ivc.P)) < 5e-3
+
+    vp_diagnostics = ac_projector_chern_diagnostics(
+        provider,
+        bundle.grid,
+        refs.vp_plus.P,
+    )
+    assert vp_diagnostics.numerically_resolved
+    assert vp_diagnostics.integer_residual < 1e-12
+    assert vp_diagnostics.translated_edge_closure_residual < 2e-14
 
 
 def test_c3_backend_composes_averaged_self_energy_and_cached_energy():
